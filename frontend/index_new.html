@@ -1,0 +1,1595 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1.0" />
+    <title>VidyAI — AI Education for Every Indian Classroom</title>
+    <link
+        href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=Outfit:wght@300;400;500;600;700;800&display=swap"
+        rel="stylesheet" />
+    <style>
+        *,
+        *::before,
+        *::after {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0
+        }
+
+        :root {
+            --saffron: #E8761A;
+            --saffron2: #F59E0B;
+            --saffron-light: #FEF3C7;
+            --indigo: #312E81;
+            --indigo2: #4338CA;
+            --indigo3: #EEF2FF;
+            --cream: #FDFAF5;
+            --paper: #F7F3EB;
+            --warm: #E8E0D0;
+            --text: #1C1917;
+            --muted: #78716C;
+            --muted2: #A8A29E;
+            --green: #047857;
+            --red: #B91C1C;
+            --serif: 'DM Serif Display', serif;
+            --sans: 'Outfit', sans-serif;
+            --r: 16px;
+            --shadow: 0 4px 24px rgba(0, 0, 0, .08);
+            --shadow2: 0 12px 48px rgba(0, 0, 0, .12)
+        }
+
+        html {
+            scroll-behavior: smooth
+        }
+
+        body {
+            font-family: var(--sans);
+            background: var(--cream);
+            color: var(--text);
+            overflow-x: hidden
+        }
+
+        /* ── NOISE TEXTURE overlay ── */
+        body::before {
+            content: '';
+            position: fixed;
+            inset: 0;
+            opacity: .025;
+            pointer-events: none;
+            z-index: 0;
+            background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E")
+        }
+
+        /* ── NAV ── */
+        nav {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            z-index: 100;
+            padding: 0 40px;
+            height: 70px;
+            display: flex;
+            align-items: center;
+            gap: 32px;
+            background: rgba(253, 250, 245, .92);
+            backdrop-filter: blur(16px);
+            border-bottom: 1px solid rgba(232, 224, 208, .6)
+        }
+
+        .nav-logo {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            text-decoration: none
+        }
+
+        .nav-logo-icon {
+            width: 40px;
+            height: 40px;
+            background: linear-gradient(135deg, var(--saffron), var(--saffron2));
+            border-radius: 12px;
+            display: grid;
+            place-items: center;
+            font-size: 20px;
+            box-shadow: 0 4px 12px rgba(232, 118, 26, .3);
+            flex-shrink: 0
+        }
+
+        .nav-logo-name {
+            font-family: var(--serif);
+            font-size: 22px;
+            color: var(--indigo)
+        }
+
+        .nav-tagline {
+            font-size: 11px;
+            color: var(--muted);
+            font-weight: 500;
+            letter-spacing: .3px;
+            margin-top: -2px
+        }
+
+        .nav-links {
+            display: flex;
+            gap: 28px;
+            margin-left: auto
+        }
+
+        .nav-link {
+            font-size: 14px;
+            font-weight: 500;
+            color: var(--muted);
+            text-decoration: none;
+            transition: .2s
+        }
+
+        .nav-link:hover {
+            color: var(--saffron)
+        }
+
+        .nav-ctas {
+            display: flex;
+            gap: 10px;
+            margin-left: 12px
+        }
+
+        .btn-outline {
+            padding: 9px 20px;
+            border: 1.5px solid var(--warm);
+            border-radius: 10px;
+            background: transparent;
+            font-family: var(--sans);
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--text);
+            cursor: pointer;
+            transition: .2s
+        }
+
+        .btn-outline:hover {
+            border-color: var(--saffron);
+            color: var(--saffron)
+        }
+
+        .btn-saffron {
+            padding: 9px 22px;
+            background: linear-gradient(135deg, var(--saffron), var(--saffron2));
+            border: none;
+            border-radius: 10px;
+            font-family: var(--sans);
+            font-size: 13px;
+            font-weight: 700;
+            color: #fff;
+            cursor: pointer;
+            transition: .2s;
+            box-shadow: 0 4px 12px rgba(232, 118, 26, .3)
+        }
+
+        .btn-saffron:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 6px 18px rgba(232, 118, 26, .4)
+        }
+
+        /* ── HERO ── */
+        .hero {
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            position: relative;
+            overflow: hidden;
+            padding: 100px 40px 60px
+        }
+
+        .hero-bg {
+            position: absolute;
+            inset: 0;
+            z-index: 0
+        }
+
+        /* Mandala decorative element */
+        .hero-mandala {
+            position: absolute;
+            right: -180px;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 700px;
+            height: 700px;
+            opacity: .06;
+            background: conic-gradient(from 0deg, var(--saffron), var(--indigo), var(--saffron), var(--indigo), var(--saffron), var(--indigo), var(--saffron), var(--indigo), var(--saffron));
+            border-radius: 50%;
+            animation: spin 60s linear infinite
+        }
+
+        @keyframes spin {
+            to {
+                transform: translateY(-50%) rotate(360deg)
+            }
+        }
+
+        .hero-mandala2 {
+            position: absolute;
+            left: -120px;
+            bottom: -100px;
+            width: 500px;
+            height: 500px;
+            opacity: .04;
+            background: conic-gradient(from 0deg, var(--saffron2), var(--indigo2), var(--saffron2), var(--indigo2), var(--saffron2));
+            border-radius: 50%;
+            animation: spin 40s linear infinite reverse
+        }
+
+        .hero-grid {
+            position: absolute;
+            inset: 0;
+            background-image: linear-gradient(rgba(232, 224, 208, .4) 1px, transparent 1px), linear-gradient(90deg, rgba(232, 224, 208, .4) 1px, transparent 1px);
+            background-size: 56px 56px
+        }
+
+        .hero-inner {
+            position: relative;
+            z-index: 1;
+            max-width: 700px
+        }
+
+        .hero-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            background: linear-gradient(135deg, var(--saffron-light), #ede9fe);
+            border: 1px solid rgba(232, 118, 26, .3);
+            border-radius: 50px;
+            padding: 7px 18px;
+            font-size: 12px;
+            font-weight: 700;
+            color: var(--saffron);
+            margin-bottom: 32px;
+            letter-spacing: .4px;
+            text-transform: uppercase
+        }
+
+        .pulse-dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: var(--saffron);
+            animation: pd 2s infinite
+        }
+
+        @keyframes pd {
+
+            0%,
+            100% {
+                opacity: 1
+            }
+
+            50% {
+                opacity: .3
+            }
+        }
+
+        h1 {
+            font-family: var(--serif);
+            font-size: clamp(44px, 6vw, 80px);
+            line-height: 1.05;
+            color: var(--indigo);
+            margin-bottom: 24px
+        }
+
+        h1 em {
+            font-style: italic;
+            background: linear-gradient(135deg, var(--saffron), var(--saffron2));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text
+        }
+
+        .hero-sub {
+            font-size: 18px;
+            color: var(--muted);
+            line-height: 1.75;
+            margin-bottom: 40px;
+            font-weight: 400;
+            max-width: 560px
+        }
+
+        .hero-ctas {
+            display: flex;
+            gap: 14px;
+            flex-wrap: wrap;
+            margin-bottom: 60px
+        }
+
+        .btn-hero-primary {
+            padding: 16px 36px;
+            background: linear-gradient(135deg, var(--saffron), var(--saffron2));
+            border: none;
+            border-radius: 14px;
+            font-family: var(--sans);
+            font-size: 15px;
+            font-weight: 700;
+            color: #fff;
+            cursor: pointer;
+            transition: .25s;
+            box-shadow: 0 8px 24px rgba(232, 118, 26, .35);
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            text-decoration: none
+        }
+
+        .btn-hero-primary:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 12px 32px rgba(232, 118, 26, .45)
+        }
+
+        .btn-hero-sec {
+            padding: 16px 36px;
+            background: rgba(255, 255, 255, .8);
+            border: 1.5px solid var(--warm);
+            border-radius: 14px;
+            font-family: var(--sans);
+            font-size: 15px;
+            font-weight: 600;
+            color: var(--text);
+            cursor: pointer;
+            transition: .25s;
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            text-decoration: none;
+            backdrop-filter: blur(8px)
+        }
+
+        .btn-hero-sec:hover {
+            border-color: var(--indigo2);
+            color: var(--indigo);
+            transform: translateY(-1px)
+        }
+
+        .hero-stats {
+            display: flex;
+            gap: 48px;
+            flex-wrap: wrap
+        }
+
+        .hstat {
+            text-align: left
+        }
+
+        .hstat-num {
+            font-family: var(--serif);
+            font-size: 38px;
+            color: var(--indigo);
+            line-height: 1
+        }
+
+        .hstat-label {
+            font-size: 13px;
+            color: var(--muted);
+            margin-top: 4px
+        }
+
+        /* ── FEATURE STRIP ── */
+        .strip {
+            background: linear-gradient(135deg, var(--indigo), var(--indigo2));
+            padding: 18px 40px;
+            display: flex;
+            gap: 40px;
+            justify-content: center;
+            flex-wrap: wrap
+        }
+
+        .strip-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            color: rgba(255, 255, 255, .85);
+            font-size: 13px;
+            font-weight: 500
+        }
+
+        .strip-icon {
+            font-size: 16px
+        }
+
+        /* ── SECTIONS ── */
+        .section {
+            padding: 96px 40px
+        }
+
+        .section-inner {
+            max-width: 1200px;
+            margin: 0 auto
+        }
+
+        .section-label {
+            display: inline-block;
+            background: var(--saffron-light);
+            border: 1px solid rgba(232, 118, 26, .3);
+            border-radius: 50px;
+            padding: 5px 16px;
+            font-size: 11px;
+            font-weight: 700;
+            color: var(--saffron);
+            letter-spacing: .6px;
+            text-transform: uppercase;
+            margin-bottom: 16px
+        }
+
+        h2 {
+            font-family: var(--serif);
+            font-size: clamp(32px, 4vw, 52px);
+            color: var(--indigo);
+            margin-bottom: 16px;
+            line-height: 1.15
+        }
+
+        .section-sub {
+            font-size: 17px;
+            color: var(--muted);
+            line-height: 1.7;
+            max-width: 560px
+        }
+
+        /* ── WHO IS IT FOR ── */
+        .roles-section {
+            background: var(--paper)
+        }
+
+        .roles-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 24px;
+            margin-top: 56px
+        }
+
+        .role-card {
+            background: #fff;
+            border-radius: 24px;
+            padding: 40px 32px;
+            transition: .3s;
+            cursor: pointer;
+            border: 2px solid transparent;
+            position: relative;
+            overflow: hidden
+        }
+
+        .role-card::after {
+            content: '';
+            position: absolute;
+            bottom: -40px;
+            right: -40px;
+            width: 120px;
+            height: 120px;
+            border-radius: 50%;
+            opacity: .08;
+            transition: .3s
+        }
+
+        .role-card.school::after {
+            background: var(--indigo)
+        }
+
+        .role-card.teacher::after {
+            background: var(--green)
+        }
+
+        .role-card.student::after {
+            background: var(--saffron)
+        }
+
+        .role-card:hover {
+            transform: translateY(-8px);
+            box-shadow: var(--shadow2)
+        }
+
+        .role-card.school:hover {
+            border-color: var(--indigo2)
+        }
+
+        .role-card.teacher:hover {
+            border-color: var(--green)
+        }
+
+        .role-card.student:hover {
+            border-color: var(--saffron)
+        }
+
+        .role-emoji {
+            font-size: 48px;
+            margin-bottom: 20px;
+            display: block
+        }
+
+        .role-name {
+            font-family: var(--serif);
+            font-size: 26px;
+            color: var(--indigo);
+            margin-bottom: 12px
+        }
+
+        .role-desc {
+            font-size: 14px;
+            color: var(--muted);
+            line-height: 1.7;
+            margin-bottom: 24px
+        }
+
+        .role-features {
+            list-style: none;
+            margin-bottom: 32px
+        }
+
+        .role-features li {
+            font-size: 13px;
+            color: var(--text);
+            padding: 5px 0;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-weight: 500
+        }
+
+        .role-features li::before {
+            content: '✓';
+            font-weight: 800
+        }
+
+        .role-card.school .role-features li::before {
+            color: var(--indigo2)
+        }
+
+        .role-card.teacher .role-features li::before {
+            color: var(--green)
+        }
+
+        .role-card.student .role-features li::before {
+            color: var(--saffron)
+        }
+
+        .btn-role {
+            width: 100%;
+            padding: 12px;
+            border-radius: 12px;
+            border: none;
+            font-family: var(--sans);
+            font-size: 14px;
+            font-weight: 700;
+            cursor: pointer;
+            transition: .2s
+        }
+
+        .role-card.school .btn-role {
+            background: var(--indigo3);
+            color: var(--indigo2)
+        }
+
+        .role-card.teacher .btn-role {
+            background: #d1fae5;
+            color: var(--green)
+        }
+
+        .role-card.student .btn-role {
+            background: var(--saffron-light);
+            color: var(--saffron)
+        }
+
+        .btn-role:hover {
+            filter: brightness(.95);
+            transform: translateY(-1px)
+        }
+
+        /* ── TOOLS SHOWCASE ── */
+        .tools-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 20px;
+            margin-top: 56px
+        }
+
+        .tool-card {
+            background: var(--paper);
+            border-radius: 20px;
+            padding: 32px;
+            transition: .25s;
+            border: 1px solid var(--warm)
+        }
+
+        .tool-card:hover {
+            background: #fff;
+            box-shadow: var(--shadow);
+            transform: translateY(-4px)
+        }
+
+        .tool-icon-wrap {
+            width: 56px;
+            height: 56px;
+            border-radius: 16px;
+            display: grid;
+            place-items: center;
+            font-size: 26px;
+            margin-bottom: 18px
+        }
+
+        .tool-name {
+            font-family: var(--serif);
+            font-size: 20px;
+            color: var(--indigo);
+            margin-bottom: 8px
+        }
+
+        .tool-desc {
+            font-size: 13px;
+            color: var(--muted);
+            line-height: 1.7
+        }
+
+        /* ── HOW IT WORKS ── */
+        .how-section {
+            background: var(--indigo);
+            position: relative;
+            overflow: hidden
+        }
+
+        .how-section::before {
+            content: '';
+            position: absolute;
+            top: -200px;
+            right: -200px;
+            width: 600px;
+            height: 600px;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, .03);
+            pointer-events: none
+        }
+
+        .how-section h2,
+        .how-section .section-label {
+            color: #fff
+        }
+
+        .how-section .section-label {
+            background: rgba(255, 255, 255, .1);
+            border-color: rgba(255, 255, 255, .2);
+            color: rgba(255, 255, 255, .9)
+        }
+
+        .how-section .section-sub {
+            color: rgba(255, 255, 255, .65)
+        }
+
+        .steps-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 2px;
+            margin-top: 56px;
+            position: relative
+        }
+
+        .step {
+            background: rgba(255, 255, 255, .06);
+            border-radius: 20px;
+            padding: 32px 24px;
+            text-align: center;
+            border: 1px solid rgba(255, 255, 255, .08);
+            transition: .3s
+        }
+
+        .step:hover {
+            background: rgba(255, 255, 255, .1)
+        }
+
+        .step-num {
+            width: 56px;
+            height: 56px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, var(--saffron), var(--saffron2));
+            font-family: var(--serif);
+            font-size: 24px;
+            color: #fff;
+            display: grid;
+            place-items: center;
+            margin: 0 auto 18px;
+            box-shadow: 0 6px 20px rgba(232, 118, 26, .4)
+        }
+
+        .step-title {
+            font-family: var(--serif);
+            font-size: 18px;
+            color: #fff;
+            margin-bottom: 10px
+        }
+
+        .step-desc {
+            font-size: 13px;
+            color: rgba(255, 255, 255, .55);
+            line-height: 1.65
+        }
+
+        /* ── BOARDS ── */
+        .boards-section {
+            background: var(--paper)
+        }
+
+        .boards-wrap {
+            display: flex;
+            gap: 12px;
+            flex-wrap: wrap;
+            margin-top: 40px
+        }
+
+        .board-pill {
+            padding: 11px 24px;
+            border-radius: 50px;
+            background: #fff;
+            border: 1.5px solid var(--warm);
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--text);
+            transition: .2s
+        }
+
+        .board-pill:hover {
+            border-color: var(--saffron);
+            color: var(--saffron);
+            background: var(--saffron-light)
+        }
+
+        /* ── TESTIMONIALS ── */
+        .testi-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 20px;
+            margin-top: 56px
+        }
+
+        .testi-card {
+            background: var(--paper);
+            border-radius: 20px;
+            padding: 32px;
+            border: 1px solid var(--warm)
+        }
+
+        .stars {
+            color: var(--saffron2);
+            font-size: 14px;
+            margin-bottom: 14px
+        }
+
+        .testi-quote {
+            font-size: 14px;
+            color: var(--text);
+            line-height: 1.75;
+            margin-bottom: 20px;
+            font-style: italic
+        }
+
+        .testi-author {
+            display: flex;
+            align-items: center;
+            gap: 12px
+        }
+
+        .testi-av {
+            width: 44px;
+            height: 44px;
+            border-radius: 50%;
+            display: grid;
+            place-items: center;
+            font-size: 22px;
+            background: var(--warm);
+            flex-shrink: 0
+        }
+
+        .testi-name {
+            font-size: 14px;
+            font-weight: 700;
+            color: var(--indigo)
+        }
+
+        .testi-role {
+            font-size: 12px;
+            color: var(--muted)
+        }
+
+        /* ── FOOTER ── */
+        footer {
+            background: var(--text);
+            color: rgba(255, 255, 255, .55);
+            padding: 64px 40px 32px
+        }
+
+        .footer-inner {
+            max-width: 1200px;
+            margin: 0 auto
+        }
+
+        .footer-top {
+            display: grid;
+            grid-template-columns: 2fr 1fr 1fr 1fr;
+            gap: 48px;
+            margin-bottom: 48px
+        }
+
+        .footer-col h4 {
+            font-size: 12px;
+            font-weight: 700;
+            color: #fff;
+            margin-bottom: 16px;
+            text-transform: uppercase;
+            letter-spacing: .8px
+        }
+
+        .footer-col ul {
+            list-style: none
+        }
+
+        .footer-col ul li {
+            margin-bottom: 10px
+        }
+
+        .footer-col ul li a {
+            font-size: 13px;
+            color: rgba(255, 255, 255, .45);
+            text-decoration: none;
+            transition: .2s
+        }
+
+        .footer-col ul li a:hover {
+            color: #fff
+        }
+
+        .footer-bottom {
+            border-top: 1px solid rgba(255, 255, 255, .08);
+            padding-top: 24px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center
+        }
+
+        .footer-bottom p {
+            font-size: 12px
+        }
+
+        /* ── MODAL ── */
+        .overlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(28, 25, 23, .65);
+            backdrop-filter: blur(8px);
+            z-index: 200;
+            align-items: center;
+            justify-content: center;
+            padding: 20px
+        }
+
+        .overlay.open {
+            display: flex
+        }
+
+        .modal {
+            background: #fff;
+            border-radius: 24px;
+            width: 100%;
+            max-width: 460px;
+            overflow: hidden;
+            box-shadow: 0 24px 80px rgba(0, 0, 0, .25);
+            animation: mIn .3s ease
+        }
+
+        @keyframes mIn {
+            from {
+                opacity: 0;
+                transform: translateY(20px) scale(.96)
+            }
+
+            to {
+                opacity: 1;
+                transform: none
+            }
+        }
+
+        .modal-top {
+            padding: 32px 36px 0;
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start
+        }
+
+        .modal-title {
+            font-family: var(--serif);
+            font-size: 26px;
+            color: var(--indigo)
+        }
+
+        .modal-sub {
+            font-size: 13px;
+            color: var(--muted);
+            margin-top: 4px
+        }
+
+        .modal-close {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            border: none;
+            background: var(--paper);
+            cursor: pointer;
+            font-size: 16px;
+            color: var(--muted);
+            transition: .2s
+        }
+
+        .modal-close:hover {
+            background: var(--warm);
+            color: var(--text)
+        }
+
+        .modal-body {
+            padding: 24px 36px 36px
+        }
+
+        .role-tabs {
+            display: flex;
+            gap: 4px;
+            background: var(--paper);
+            border-radius: 12px;
+            padding: 4px;
+            margin-bottom: 24px
+        }
+
+        .rtab {
+            flex: 1;
+            padding: 9px 4px;
+            text-align: center;
+            border-radius: 9px;
+            font-size: 12px;
+            font-weight: 700;
+            cursor: pointer;
+            border: none;
+            background: transparent;
+            color: var(--muted);
+            transition: .2s;
+            font-family: var(--sans)
+        }
+
+        .rtab.active {
+            background: #fff;
+            color: var(--text);
+            box-shadow: 0 1px 4px rgba(0, 0, 0, .1)
+        }
+
+        .fg {
+            margin-bottom: 14px
+        }
+
+        .fg label {
+            display: block;
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: .5px;
+            text-transform: uppercase;
+            color: var(--muted);
+            margin-bottom: 5px
+        }
+
+        .fi {
+            width: 100%;
+            padding: 11px 14px;
+            border: 1.5px solid var(--warm);
+            border-radius: 10px;
+            font-family: var(--sans);
+            font-size: 14px;
+            color: var(--text);
+            outline: none;
+            transition: .2s;
+            background: #fff
+        }
+
+        .fi:focus {
+            border-color: var(--saffron);
+            box-shadow: 0 0 0 3px rgba(232, 118, 26, .12)
+        }
+
+        .fi.sel {
+            appearance: none;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%23A8A29E' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
+            background-repeat: no-repeat;
+            background-position: right 12px center;
+            padding-right: 30px
+        }
+
+        .frow {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px
+        }
+
+        .btn-submit {
+            width: 100%;
+            padding: 13px;
+            border: none;
+            border-radius: 12px;
+            font-family: var(--sans);
+            font-size: 14px;
+            font-weight: 700;
+            cursor: pointer;
+            transition: .25s;
+            margin-top: 4px
+        }
+
+        .btn-submit.saffron {
+            background: linear-gradient(135deg, var(--saffron), var(--saffron2));
+            color: #fff;
+            box-shadow: 0 6px 20px rgba(232, 118, 26, .3)
+        }
+
+        .btn-submit.indigo {
+            background: linear-gradient(135deg, var(--indigo), var(--indigo2));
+            color: #fff
+        }
+
+        .btn-submit.green {
+            background: linear-gradient(135deg, var(--green), #10b981);
+            color: #fff
+        }
+
+        .btn-submit:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 8px 24px rgba(0, 0, 0, .2)
+        }
+
+        .btn-submit:disabled {
+            opacity: .5;
+            cursor: not-allowed;
+            transform: none
+        }
+
+        .switch-link {
+            text-align: center;
+            margin-top: 16px;
+            font-size: 13px;
+            color: var(--muted)
+        }
+
+        .switch-link a {
+            color: var(--saffron);
+            font-weight: 700;
+            cursor: pointer
+        }
+
+        .modal-alert {
+            padding: 10px 14px;
+            border-radius: 9px;
+            font-size: 12px;
+            font-weight: 500;
+            margin-bottom: 12px
+        }
+
+        .modal-alert.err {
+            background: #fef2f2;
+            border: 1px solid #fecaca;
+            color: var(--red)
+        }
+
+        .modal-alert.ok {
+            background: #d1fae5;
+            border: 1px solid #a7f3d0;
+            color: var(--green)
+        }
+
+        .spin {
+            width: 14px;
+            height: 14px;
+            border: 2px solid rgba(255, 255, 255, .3);
+            border-top-color: #fff;
+            border-radius: 50%;
+            animation: sp .7s linear infinite;
+            display: inline-block;
+            vertical-align: middle;
+            margin-right: 6px
+        }
+
+        @keyframes sp {
+            to {
+                transform: rotate(360deg)
+            }
+        }
+
+        /* ── Animations ── */
+        .fade-in {
+            opacity: 0;
+            transform: translateY(24px);
+            transition: .7s ease
+        }
+
+        .fade-in.visible {
+            opacity: 1;
+            transform: none
+        }
+
+        @media(max-width:900px) {
+
+            .roles-grid,
+            .tools-grid,
+            .testi-grid {
+                grid-template-columns: 1fr
+            }
+
+            .steps-grid {
+                grid-template-columns: 1fr 1fr
+            }
+
+            .footer-top {
+                grid-template-columns: 1fr 1fr
+            }
+
+            nav {
+                padding: 0 20px
+            }
+
+            .nav-links {
+                display: none
+            }
+
+            .hero {
+                padding: 100px 20px 60px
+            }
+
+            .section {
+                padding: 64px 20px
+            }
+        }
+    </style>
+</head>
+
+<body>
+
+    <nav>
+        <a class="nav-logo" href="/">
+            <div class="nav-logo-icon">🎓</div>
+            <div>
+                <div class="nav-logo-name">VidyAI</div>
+                <div class="nav-tagline">AI Education Platform</div>
+            </div>
+        </a>
+        <div class="nav-links">
+            <a class="nav-link" href="#features">Features</a>
+            <a class="nav-link" href="#how">How It Works</a>
+            <a class="nav-link" href="#boards">Boards</a>
+            <a class="nav-link" href="#pricing">Pricing</a>
+        </div>
+        <div class="nav-ctas">
+            <button class="btn-outline" onclick="openModal('login')">Sign In</button>
+            <button class="btn-saffron" onclick="openModal('register')">Get Started Free →</button>
+        </div>
+    </nav>
+
+    <!-- HERO -->
+    <section class="hero">
+        <div class="hero-bg">
+            <div class="hero-grid"></div>
+            <div class="hero-mandala"></div>
+            <div class="hero-mandala2"></div>
+        </div>
+        <div class="hero-inner">
+            <div class="hero-badge fade-in"><span class="pulse-dot"></span>Trusted by 500+ Schools across India</div>
+            <h1 class="fade-in" style="animation-delay:.1s">AI-Powered Learning for<br>Every <em>Indian Classroom</em>
+            </h1>
+            <p class="hero-sub fade-in" style="animation-delay:.2s">From CBSE to state boards — automatically load
+                government textbooks, generate summaries, flashcards, question papers, and evaluate answer sheets with
+                AI. Built for schools, teachers and students.</p>
+            <div class="hero-ctas fade-in" style="animation-delay:.3s">
+                <button class="btn-hero-primary" onclick="openModal('register')">🚀 Start Free Trial</button>
+                <button class="btn-hero-sec" onclick="openModal('login')">Sign In →</button>
+            </div>
+            <div class="hero-stats fade-in" style="animation-delay:.4s">
+                <div class="hstat">
+                    <div class="hstat-num">50,000+</div>
+                    <div class="hstat-label">Students</div>
+                </div>
+                <div class="hstat">
+                    <div class="hstat-num">2,000+</div>
+                    <div class="hstat-label">Teachers</div>
+                </div>
+                <div class="hstat">
+                    <div class="hstat-num">500+</div>
+                    <div class="hstat-label">Schools</div>
+                </div>
+                <div class="hstat">
+                    <div class="hstat-num">12</div>
+                    <div class="hstat-label">Boards Supported</div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- STRIP -->
+    <div class="strip">
+        <div class="strip-item"><span class="strip-icon">📚</span>NCERT Textbooks Auto-Loaded</div>
+        <div class="strip-item"><span class="strip-icon">🤖</span>GPT-4 Powered AI</div>
+        <div class="strip-item"><span class="strip-icon">📊</span>AI Evaluation & Grading</div>
+        <div class="strip-item"><span class="strip-icon">📧</span>Parent Email Reports</div>
+        <div class="strip-item"><span class="strip-icon">🖨️</span>Printable Question Papers</div>
+    </div>
+
+    <!-- WHO IS IT FOR -->
+    <section class="section roles-section" id="roles">
+        <div class="section-inner">
+            <div class="section-label">Who is it for?</div>
+            <h2>Built for Every Role<br>in Indian Education</h2>
+            <p class="section-sub">Whether you're a school administrator, classroom teacher, or eager student — VidyAI
+                has tools tailored for you.</p>
+            <div class="roles-grid">
+                <div class="role-card school fade-in">
+                    <span class="role-emoji">🏫</span>
+                    <div class="role-name">School / College</div>
+                    <p class="role-desc">Manage your institution, configure boards and classes, monitor teacher and
+                        student performance from a single dashboard.</p>
+                    <ul class="role-features">
+                        <li>Multi-board & multi-class setup</li>
+                        <li>Teacher and student account management</li>
+                        <li>Institution-wide performance analytics</li>
+                        <li>Parent communication system</li>
+                        <li>Bulk evaluation reports</li>
+                    </ul>
+                    <button class="btn-role" onclick="openModalWithRole('register','school')">Register School →</button>
+                </div>
+                <div class="role-card teacher fade-in" style="animation-delay:.1s">
+                    <span class="role-emoji">👩‍🏫</span>
+                    <div class="role-name">Teacher</div>
+                    <p class="role-desc">Create lesson plans, generate question papers, evaluate bulk answer sheets, and
+                        share detailed reports with parents automatically.</p>
+                    <ul class="role-features">
+                        <li>Auto-load government textbooks</li>
+                        <li>AI chapter summaries & flashcards</li>
+                        <li>Printable question papers with answer key</li>
+                        <li>Bulk answer sheet AI evaluation</li>
+                        <li>Email reports to parents</li>
+                    </ul>
+                    <button class="btn-role" onclick="openModalWithRole('register','teacher')">Join as Teacher
+                        →</button>
+                </div>
+                <div class="role-card student fade-in" style="animation-delay:.2s">
+                    <span class="role-emoji">🎒</span>
+                    <div class="role-name">Student</div>
+                    <p class="role-desc">Study smarter — get AI summaries, practise with flashcards, take quizzes, and
+                        chat with your personal AI tutor any time.</p>
+                    <ul class="role-features">
+                        <li>Chapter-wise AI summaries</li>
+                        <li>Interactive flashcards (flip mode)</li>
+                        <li>Practice questions with scoring</li>
+                        <li>AI study chat tutor</li>
+                        <li>Progress tracking & predictions</li>
+                    </ul>
+                    <button class="btn-role" onclick="openModalWithRole('register','student')">Join as Student
+                        →</button>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- TOOLS -->
+    <section class="section" id="features">
+        <div class="section-inner">
+            <div class="section-label">AI Tools</div>
+            <h2>Six Powerful Tools,<br>One Platform</h2>
+            <p class="section-sub">Every tool works directly with your curriculum — just select your board, class, and
+                subject.</p>
+            <div class="tools-grid">
+                <div class="tool-card fade-in">
+                    <div class="tool-icon-wrap" style="background:var(--indigo3)">📝</div>
+                    <div class="tool-name">Summarise</div>
+                    <p class="tool-desc">Every chapter distilled into 5 key points with real-world Indian examples.
+                        Clear, simple, and exam-ready.</p>
+                </div>
+                <div class="tool-card fade-in" style="animation-delay:.05s">
+                    <div class="tool-icon-wrap" style="background:var(--saffron-light)">🃏</div>
+                    <div class="tool-name">Flashcards</div>
+                    <p class="tool-desc">10 Q&A flashcards per chapter covering every important concept. Flip to reveal
+                        answers. Perfect for last-minute revision.</p>
+                </div>
+                <div class="tool-card fade-in" style="animation-delay:.1s">
+                    <div class="tool-icon-wrap" style="background:#d1fae5">❓</div>
+                    <div class="tool-name">Generate Questions</div>
+                    <p class="tool-desc">Choose how many objective and subjective questions. Generate printable question
+                        papers with student name, roll number, and school details.</p>
+                </div>
+                <div class="tool-card fade-in" style="animation-delay:.15s">
+                    <div class="tool-icon-wrap" style="background:#fce7f3">✅</div>
+                    <div class="tool-name">Generate Answers</div>
+                    <p class="tool-desc">Full model answer key with explanations. Teacher-only access ensures integrity.
+                        Print for reference or distribution.</p>
+                </div>
+                <div class="tool-card fade-in" style="animation-delay:.2s">
+                    <div class="tool-icon-wrap" style="background:#fee2e2">📊</div>
+                    <div class="tool-name">Evaluate</div>
+                    <p class="tool-desc">Upload single or bulk answer sheets. AI evaluates, scores, identifies weak
+                        areas, and generates a full report per student.</p>
+                </div>
+                <div class="tool-card fade-in" style="animation-delay:.25s">
+                    <div class="tool-icon-wrap" style="background:#ede9fe">💬</div>
+                    <div class="tool-name">AI Chat Tutor</div>
+                    <p class="tool-desc">Students ask anything about their textbook. The AI explains clearly with Indian
+                        context examples, 24/7.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- HOW IT WORKS -->
+    <section class="section how-section" id="how">
+        <div class="section-inner">
+            <div class="section-label">How It Works</div>
+            <h2>Ready in 4 Steps</h2>
+            <p class="section-sub">No setup required. Just pick your board and start learning.</p>
+            <div class="steps-grid">
+                <div class="step fade-in">
+                    <div class="step-num">1</div>
+                    <div class="step-title">Select Board & Class</div>
+                    <p class="step-desc">Choose from CBSE, ICSE or any state board. Pick your class from 1 to 12.</p>
+                </div>
+                <div class="step fade-in" style="animation-delay:.1s">
+                    <div class="step-num">2</div>
+                    <div class="step-title">Pick a Subject</div>
+                    <p class="step-desc">Subjects auto-populate for your board and class. Select one and load the
+                        textbook.</p>
+                </div>
+                <div class="step fade-in" style="animation-delay:.2s">
+                    <div class="step-num">3</div>
+                    <div class="step-title">Choose Chapters</div>
+                    <p class="step-desc">Pick one, multiple, or all chapters from the government textbook.</p>
+                </div>
+                <div class="step fade-in" style="animation-delay:.3s">
+                    <div class="step-num">4</div>
+                    <div class="step-title">Use AI Tools</div>
+                    <p class="step-desc">Summarise, Flashcards, Questions, Evaluate, or Chat — all powered by AI.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- BOARDS -->
+    <section class="section boards-section" id="boards">
+        <div class="section-inner">
+            <div class="section-label">Curriculum Boards</div>
+            <h2>Works with All Major<br>Indian Boards</h2>
+            <p class="section-sub">Government textbooks loaded from official sources — always accurate, always current.
+            </p>
+            <div class="boards-wrap">
+                <div class="board-pill">CBSE</div>
+                <div class="board-pill">ICSE / ISC</div>
+                <div class="board-pill">Maharashtra Board</div>
+                <div class="board-pill">Tamil Nadu Board</div>
+                <div class="board-pill">Karnataka Board</div>
+                <div class="board-pill">Kerala Board</div>
+                <div class="board-pill">UP Board</div>
+                <div class="board-pill">Gujarat Board</div>
+                <div class="board-pill">Rajasthan Board</div>
+                <div class="board-pill">West Bengal Board</div>
+                <div class="board-pill">Telangana Board</div>
+                <div class="board-pill">NIOS</div>
+            </div>
+        </div>
+    </section>
+
+    <!-- TESTIMONIALS -->
+    <section class="section" id="testimonials">
+        <div class="section-inner">
+            <div class="section-label">Testimonials</div>
+            <h2>Loved by Teachers<br>and Students</h2>
+            <div class="testi-grid">
+                <div class="testi-card fade-in">
+                    <div class="stars">★★★★★</div>
+                    <p class="testi-quote">"VidyAI has completely transformed how I prepare for class. I generate a full
+                        question paper for any chapter in under 2 minutes. It used to take me an entire evening."</p>
+                    <div class="testi-author">
+                        <div class="testi-av">👩‍🏫</div>
+                        <div>
+                            <div class="testi-name">Priya Sharma</div>
+                            <div class="testi-role">Science Teacher, Delhi Public School</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="testi-card fade-in" style="animation-delay:.1s">
+                    <div class="stars">★★★★★</div>
+                    <p class="testi-quote">"Our Class 10 board exam results improved by 23% after we started using
+                        VidyAI's summaries and flashcards. Students actually enjoy studying now."</p>
+                    <div class="testi-author">
+                        <div class="testi-av">🏫</div>
+                        <div>
+                            <div class="testi-name">Rajesh Kumar</div>
+                            <div class="testi-role">Principal, St. Xavier's School, Mumbai</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="testi-card fade-in" style="animation-delay:.2s">
+                    <div class="stars">★★★★★</div>
+                    <p class="testi-quote">"I used to spend hours studying and still feel confused. Now I chat with the
+                        AI tutor and it explains everything so simply — like a friend explaining, not a textbook."</p>
+                    <div class="testi-author">
+                        <div class="testi-av">🎒</div>
+                        <div>
+                            <div class="testi-name">Ananya Iyer</div>
+                            <div class="testi-role">Class 10 Student, Chennai</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <footer>
+        <div class="footer-inner">
+            <div class="footer-top">
+                <div class="footer-col">
+                    <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px">
+                        <div
+                            style="width:36px;height:36px;background:linear-gradient(135deg,var(--saffron),var(--saffron2));border-radius:10px;display:grid;place-items:center;font-size:16px">
+                            🎓</div>
+                        <span style="font-family:var(--serif);font-size:20px;color:#fff">VidyAI</span>
+                    </div>
+                    <p style="font-size:13px;line-height:1.7">AI-powered education for Indian schools and colleges.
+                        Making quality education accessible to every student.</p>
+                </div>
+                <div class="footer-col">
+                    <h4>Platform</h4>
+                    <ul>
+                        <li><a href="#">For Schools</a></li>
+                        <li><a href="#">For Teachers</a></li>
+                        <li><a href="#">For Students</a></li>
+                        <li><a href="#">Pricing</a></li>
+                    </ul>
+                </div>
+                <div class="footer-col">
+                    <h4>Features</h4>
+                    <ul>
+                        <li><a href="#">AI Summaries</a></li>
+                        <li><a href="#">Flashcards</a></li>
+                        <li><a href="#">Question Papers</a></li>
+                        <li><a href="#">Evaluation</a></li>
+                    </ul>
+                </div>
+                <div class="footer-col">
+                    <h4>Support</h4>
+                    <ul>
+                        <li><a href="#">Help Center</a></li>
+                        <li><a href="#">Contact Us</a></li>
+                        <li><a href="#">Privacy Policy</a></li>
+                        <li><a href="#">Terms of Use</a></li>
+                    </ul>
+                </div>
+            </div>
+            <div class="footer-bottom">
+                <p>© 2025 VidyAI. Made with ❤️ for Indian Education.</p>
+                <p>support@vidyai.in</p>
+            </div>
+        </div>
+    </footer>
+
+    <!-- MODAL -->
+    <div class="overlay" id="overlay" onclick="if(event.target===this)closeModal()">
+        <div class="modal">
+            <div class="modal-top">
+                <div>
+                    <div class="modal-title" id="m-title">Welcome Back</div>
+                    <div class="modal-sub" id="m-sub">Sign in to VidyAI</div>
+                </div>
+                <button class="modal-close" onclick="closeModal()">✕</button>
+            </div>
+            <div class="modal-body">
+                <div id="m-alert"></div>
+                <div class="role-tabs" id="role-tabs">
+                    <button class="rtab active" onclick="setRole('school',this)">🏫 School</button>
+                    <button class="rtab" onclick="setRole('teacher',this)">👩‍🏫 Teacher</button>
+                    <button class="rtab" onclick="setRole('student',this)">🎒 Student</button>
+                </div>
+
+                <div id="f-login">
+                    <div class="fg"><label>Email</label><input class="fi" id="l-email" type="email"
+                            placeholder="you@school.edu.in" /></div>
+                    <div class="fg"><label>Password</label><input class="fi" id="l-pw" type="password"
+                            placeholder="••••••••" onkeydown="if(event.key==='Enter')doLogin()" /></div>
+                    <button class="btn-submit saffron" id="l-btn" onclick="doLogin()">Sign In →</button>
+                    <div class="switch-link">No account? <a onclick="switchForm('register')">Create one free →</a></div>
+                </div>
+
+                <div id="f-register" style="display:none">
+                    <div class="frow">
+                        <div class="fg"><label>First Name</label><input class="fi" id="r-fn" placeholder="Ravi" /></div>
+                        <div class="fg"><label>Last Name</label><input class="fi" id="r-ln" placeholder="Kumar" /></div>
+                    </div>
+                    <div class="fg" id="r-inst-wrap"><label>Institution Name</label><input class="fi" id="r-inst"
+                            placeholder="ABC School" /></div>
+                    <div class="fg" id="r-roll-wrap" style="display:none"><label>Roll Number (optional)</label><input
+                            class="fi" id="r-roll" placeholder="101" /></div>
+                    <div class="fg"><label>Email</label><input class="fi" id="r-email" type="email"
+                            placeholder="you@school.edu.in" /></div>
+                    <div class="fg"><label>Password</label><input class="fi" id="r-pw" type="password"
+                            placeholder="Min 6 characters" /></div>
+                    <button class="btn-submit saffron" id="r-btn" onclick="doRegister()">Create Account →</button>
+                    <div class="switch-link">Already registered? <a onclick="switchForm('login')">Sign in →</a></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API = 'http://localhost:5000/api';
+        let curRole = 'school', curForm = 'login';
+
+        // Scroll animations
+        const obs = new IntersectionObserver(entries => { entries.forEach(e => { if (e.isIntersecting) { e.target.classList.add('visible') } }) }, { threshold: .1 });
+        document.querySelectorAll('.fade-in').forEach(el => obs.observe(el));
+
+        function openModal(form) { document.getElementById('overlay').classList.add('open'); switchForm(form) }
+        function openModalWithRole(form, role) { openModal(form); const idx = { school: 0, teacher: 1, student: 2 }[role]; setRole(role, document.querySelectorAll('.rtab')[idx]) }
+        function closeModal() { document.getElementById('overlay').classList.remove('open'); document.getElementById('m-alert').innerHTML = '' }
+        function showAlert(msg, type = 'err') { document.getElementById('m-alert').innerHTML = `<div class="modal-alert ${type}">${msg}</div>` }
+
+        function setRole(role, el) {
+            curRole = role;
+            document.querySelectorAll('.rtab').forEach(t => t.classList.remove('active'));
+            if (el) el.classList.add('active');
+            const colors = { school: 'indigo', teacher: 'green', student: 'saffron' };
+            ['l-btn', 'r-btn'].forEach(id => { const b = document.getElementById(id); if (b) b.className = `btn-submit ${colors[role]}` });
+            document.getElementById('r-inst-wrap').style.display = role === 'school' ? 'none' : 'block';
+            document.getElementById('r-roll-wrap').style.display = role === 'student' ? 'block' : 'none';
+        }
+
+        function switchForm(form) {
+            curForm = form;
+            document.getElementById('f-login').style.display = form === 'login' ? 'block' : 'none';
+            document.getElementById('f-register').style.display = form === 'register' ? 'block' : 'none';
+            document.getElementById('m-title').textContent = form === 'login' ? 'Welcome Back' : 'Create Account';
+            document.getElementById('m-sub').textContent = form === 'login' ? 'Sign in to VidyAI' : 'Join VidyAI — free to start';
+            document.getElementById('m-alert').innerHTML = '';
+        }
+
+        function busy(id, b, label) { const btn = document.getElementById(id); btn.disabled = b; btn.innerHTML = b ? `<span class="spin"></span>Please wait…` : label }
+
+        async function doLogin() {
+            const email = document.getElementById('l-email').value.trim(), pw = document.getElementById('l-pw').value;
+            if (!email || !pw) { showAlert('Please enter email and password'); return }
+            busy('l-btn', true);
+            try {
+                const res = await fetch(`${API}/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password: pw }) });
+                const data = await res.json();
+                if (!res.ok) { showAlert(data.error || 'Login failed'); busy('l-btn', false, 'Sign In →'); return }
+                localStorage.setItem('vidyai_token', data.token);
+                localStorage.setItem('vidyai_user', JSON.stringify(data.user));
+                window.location.href = '/dashboard';
+            } catch (e) { showAlert('Cannot reach server. Is the app running?'); busy('l-btn', false, 'Sign In →') }
+        }
+
+        async function doRegister() {
+            const fn = document.getElementById('r-fn').value.trim(), ln = document.getElementById('r-ln').value.trim();
+            const inst = document.getElementById('r-inst').value.trim(), roll = document.getElementById('r-roll').value.trim();
+            const email = document.getElementById('r-email').value.trim(), pw = document.getElementById('r-pw').value;
+            if (!fn || !email || !pw) { showAlert('Please fill in all fields'); return }
+            if (pw.length < 6) { showAlert('Password must be at least 6 characters'); return }
+            busy('r-btn', true);
+            try {
+                const res = await fetch(`${API}/auth/register`, {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name: `${fn} ${ln}`.trim(), email, password: pw, role: curRole, institution: inst, roll_number: roll })
+                });
+                const data = await res.json();
+                if (!res.ok) { showAlert(data.error || 'Registration failed'); busy('r-btn', false, 'Create Account →'); return }
+                localStorage.setItem('vidyai_token', data.token);
+                localStorage.setItem('vidyai_user', JSON.stringify(data.user));
+                window.location.href = '/dashboard';
+            } catch (e) { showAlert('Cannot reach server.'); busy('r-btn', false, 'Create Account →') }
+        }
+
+        try {
+            const u = JSON.parse(localStorage.getItem('vidyai_user') || 'null');
+            if (u?.role) window.location.href = '/dashboard';
+        } catch (e) { localStorage.clear() }
+    </script>
+</body>
+
+</html>
