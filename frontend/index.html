@@ -5596,8 +5596,19 @@
       // Video and question generation — delegate to existing functions
       if (action === 'video') { startVideoMode(topic); return; }
       if (action === 'generate_questions') {
-        activeSyllabus = ukActiveSyllabus;  // temporarily set for QG panel
+        activeSyllabus = ukActiveSyllabus;  
+        // Reset and Sync QG Panel
+        document.getElementById('qg-preview').style.display = 'none';
+        document.getElementById('qg-config').style.display = 'block';
+        document.getElementById('qg-topic').value = '';
+        document.getElementById('qg-step1').classList.add('active');
+        document.getElementById('qg-step2').classList.remove('active');
+        document.getElementById('qg-step3').classList.remove('active');
+        
         showPanel('panel-qgen');
+        // renderSyllabiLists() is called inside showPanel, so the value will exist
+        document.getElementById('qg-syllabus-select').value = activeSyllabus.id;
+        loadSyllabusChapters(activeSyllabus.id);
         return;
       }
 
@@ -5731,6 +5742,22 @@
       document.getElementById('page-title').textContent = newTitle;
 
       if (id === 'panel-eval') refreshExamsList();
+      
+      // Auto-Sync QGen if hidden or sidebar clicked
+      if (id === 'panel-qgen') {
+          renderSyllabiLists();
+          if (activeSyllabus) {
+              const qgSel = document.getElementById('qg-syllabus-select');
+              if (qgSel) {
+                  qgSel.value = activeSyllabus.id;
+                  // If no chapters loaded yet, load them
+                  if (!document.getElementById('qg-chapters').children.length) {
+                      loadSyllabusChapters(activeSyllabus.id);
+                  }
+              }
+          }
+      }
+
       if (window.innerWidth <= 768) {
         document.querySelector('.sidebar').classList.remove('open');
         document.getElementById('sb-overlay').classList.remove('show');
@@ -5900,9 +5927,17 @@
 
     function renderSyllabiLists() {
       const sel = document.getElementById('qg-syllabus-select');
+      let options = syllabi.map(s => `<option value="${s.id}" ${activeSyllabus?.id === s.id ? 'selected' : ''}>${s.name}</option>`);
       
-      sel.innerHTML = '<option value="">— Select Knowledge Source —</option>' +
-        syllabi.map(s => `<option value="${s.id}" ${activeSyllabus?.id === s.id ? 'selected' : ''}>${s.name}</option>`).join('');
+      // Inject curriculum hub syllabus if active and not already in list
+      if (activeSyllabus && !syllabi.find(s => s.id === activeSyllabus.id)) {
+        options.unshift(`<option value="${activeSyllabus.id}" selected>${activeSyllabus.name} (Curriculum Hub)</option>`);
+      }
+      if (ukActiveSyllabus && !syllabi.find(s => s.id === ukActiveSyllabus.id)) {
+        options.unshift(`<option value="${ukActiveSyllabus.id}" selected>${ukActiveSyllabus.name} (UK Hub)</option>`);
+      }
+
+      sel.innerHTML = '<option value="">— Select Knowledge Source —</option>' + options.join('');
 
       const chatList = document.getElementById('chat-syllabi-list');
       chatList.innerHTML = syllabi.map(s => `
@@ -6005,23 +6040,18 @@
 
     function populateSyllabusSelect() {
       const sel = document.getElementById('edit-bank-syllabus');
+      if (!sel) return;
       let options = syllabi.map(s => `<option value="${s.id}" ${editingBank.syllabus_id === s.id ? 'selected' : ''}>${s.name}</option>`);
       
       // Inject curriculum hub syllabus if active and not already in list
       if (activeSyllabus && !syllabi.find(s => s.id === activeSyllabus.id)) {
-        options.unshift(`<option value="${activeSyllabus.id}" selected>${activeSyllabus.name} (Curriculum Hub)</option>`);
-        editingBank.syllabus_id = activeSyllabus.id;
-        editingBank.syllabus_name = activeSyllabus.name;
+        options.unshift(`<option value="${activeSyllabus.id}" ${editingBank.syllabus_id === activeSyllabus.id ? 'selected' : ''}>${activeSyllabus.name} (Curriculum Hub)</option>`);
       }
       if (ukActiveSyllabus && !syllabi.find(s => s.id === ukActiveSyllabus.id)) {
-        options.unshift(`<option value="${ukActiveSyllabus.id}" selected>${ukActiveSyllabus.name} (UK Hub)</option>`);
-        if (!editingBank.syllabus_id) {
-          editingBank.syllabus_id = ukActiveSyllabus.id;
-          editingBank.syllabus_name = ukActiveSyllabus.name;
-        }
+        options.unshift(`<option value="${ukActiveSyllabus.id}" ${editingBank.syllabus_id === ukActiveSyllabus.id ? 'selected' : ''}>${ukActiveSyllabus.name} (UK Hub)</option>`);
       }
 
-      sel.innerHTML = '<option value="">— Select Subject —</option>' + options.join('');
+      sel.innerHTML = '<option value="">— Select Knowledge Source —</option>' + options.join('');
     }
 
     function updateBankMeta() {
