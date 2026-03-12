@@ -5169,18 +5169,15 @@
         const res = await fetch(API_BASE + '/curriculum/metadata', { headers: { 'Authorization': `Bearer ${token}` } });
         const data = await res.json();
         
-        if (data.error) {
-          showToast(`Curriculum Hub Error: ${data.error}`, 'error');
-          if (data.error === 'Unauthorized') {
-             showToast('Session might be lost. Check your MongoDB configuration if on Vercel.', 'error');
-          }
-          return;
+        if (data.status && !data.status.mongodb_connected) {
+           showToast('⚠️ MongoDB DISCONNECTED! Persistence is limited to local fallback (ephemeral on Vercel). Check your IP whitelist.', 'warning');
         }
         
-        window.currMetadata = data;
+        // metadata is now nested under data.metadata
+        window.currMetadata = data.metadata || data; 
 
         const stateSel = document.getElementById('curr-state');
-        const states = Object.keys(data);
+        const states = Object.keys(window.currMetadata);
         if (states.length === 0) {
            stateSel.innerHTML = '<option value="">— No States Available —</option>';
         } else {

@@ -122,6 +122,22 @@ def _load_json(path, default=None):
 
 # ── MongoDB Initialization ────────────────────────────────────────────────
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
+
+# Robustly quote credentials in MONGO_URI
+if MONGO_URI and "://" in MONGO_URI and "@" in MONGO_URI:
+    try:
+        from urllib.parse import quote_plus
+        prefix, rest = MONGO_URI.split("://")
+        creds, cluster = rest.split("@")
+        if ":" in creds:
+            user, pw = creds.split(":")
+            MONGO_URI = f"{prefix}://{quote_plus(user)}:{quote_plus(pw)}@{cluster}"
+    except Exception as e:
+        print(f"[INIT] URI Quoting skip: {e}")
+
+MONGO_OK = False
+mongo_db = None
+
 try:
     import certifi
     ca = certifi.where()
@@ -132,12 +148,13 @@ try:
         connectTimeoutMS=10000,
         tlsCAFile=ca
     )
-    mongo_db = mongo_client["edumind"]
     # Check connection
     mongo_client.server_info()
+    mongo_db = mongo_client["edumind"]
     MONGO_OK = True
     print("[INIT] MongoDB Connected Successfully.")
 except Exception as e:
+    print(f"[INIT] MongoDB Connection Failed: {e}")
     MONGO_OK = False
     print(f"[WARN] MongoDB not available (using JSON fallback): {e}")
 
@@ -878,7 +895,14 @@ def chat():
 @app.get("/api/curriculum/metadata")
 @auth()
 def get_curriculum_metadata():
-    return jsonify(CURRICULUM_DATA)
+    # Return curriculum data AND sync status for diagnostic purposes
+    return jsonify({
+        "metadata": CURRICULUM_DATA,
+        "status": {
+            "mongodb_connected": MONGO_OK,
+            "persistence": "cloud" if MONGO_OK else "local_fallback"
+        }
+    })
 
 
 @app.post("/api/curriculum/load")
