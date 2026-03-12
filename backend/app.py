@@ -521,12 +521,23 @@ def auth(roles=None):
                     uid = session["user_id"]
                     TOKENS[tok] = uid # Cache back to memory
             
-            if not uid: return jsonify({"error":"Unauthorized"}), 401
+            if not uid:
+                print(f"[AUTH DEBUG] Token rejected: {tok[:6]}... (Reason: Token not found in memory or MongoDB)")
+                return jsonify({"error":"Unauthorized"}), 401
+            
             db  = db_load()
             u   = next((x for x in db["users"] if x["id"]==uid), None)
-            if not u:              return jsonify({"error":"User not found"}), 401
-            if u.get("status")=="suspended": return jsonify({"error":"Suspended"}), 403
-            if roles and u["role"] not in roles: return jsonify({"error":"Forbidden"}), 403
+            if not u:
+                print(f"[AUTH DEBUG] Token valid but user {uid} not in DB!")
+                return jsonify({"error":"User not found"}), 401
+            
+            if u.get("status")=="suspended": 
+                return jsonify({"error":"Suspended"}), 403
+            
+            if roles and u["role"] not in roles: 
+                print(f"[AUTH DEBUG] User {uid} (role: {u['role']}) forbidden for roles {roles}")
+                return jsonify({"error":"Forbidden"}), 403
+            
             request.user = u
             return fn(*a, **kw)
         return wrap

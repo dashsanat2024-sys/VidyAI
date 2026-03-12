@@ -5164,12 +5164,29 @@
       try {
         const res = await fetch(API_BASE + '/curriculum/metadata', { headers: { 'Authorization': `Bearer ${token}` } });
         const data = await res.json();
+        
+        if (data.error) {
+          showToast(`Curriculum Hub Error: ${data.error}`, 'error');
+          if (data.error === 'Unauthorized') {
+             showToast('Session might be lost. Check your MongoDB configuration if on Vercel.', 'error');
+          }
+          return;
+        }
+        
         window.currMetadata = data;
 
         const stateSel = document.getElementById('curr-state');
-        stateSel.innerHTML = '<option value="">— Select State —</option>' + Object.keys(data).map(s => `<option value="${s}">${s}</option>`).join('');
+        const states = Object.keys(data);
+        if (states.length === 0) {
+           stateSel.innerHTML = '<option value="">— No States Available —</option>';
+        } else {
+           stateSel.innerHTML = '<option value="">— Select State —</option>' + states.map(s => `<option value="${s}">${s}</option>`).join('');
+        }
         updateBoardOptions();
-      } catch (e) { }
+      } catch (e) { 
+        console.error("Curriculum Hub Init Error:", e);
+        showToast('Could not load curriculum data. Check server status.', 'error');
+      }
     }
 
     function updateBoardOptions() {
