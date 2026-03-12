@@ -765,7 +765,10 @@ def video_explanation():
     script = _llm_json(prompt)
     
     if not isinstance(script, list):
-        return jsonify({"error": "Failed to generate video script"}), 500
+        err_msg = script.get("error", "Unknown model error") if isinstance(script, dict) else "Model did not return a list"
+        if isinstance(script, str) and script.startswith("ERROR:"):
+            err_msg = script
+        return jsonify({"error": f"Failed to generate video script - {err_msg}"}), 500
 
     return jsonify({"script": script})
 
@@ -787,11 +790,9 @@ def explain_topic():
             docs = retriever.invoke(topic)
             context_str = "\n".join([d.page_content for d in docs])
         except Exception as ve:
-            print(f"[Explanation Context Fallback] {ve}")
             context_str = "No specific material found; use general expert knowledge."
             
-        # Use community chat model for stability in this environment
-        from langchain_community.chat_models import ChatOpenAI
+        # Global ChatOpenAI is already imported at top from langchain_openai
         from langchain_core.messages import HumanMessage, SystemMessage
         
         llm = ChatOpenAI(model_name=os.getenv("OPENAI_MODEL", "gpt-4o-mini"), temperature=0.7, openai_api_key=OPENAI_API_KEY)
@@ -824,7 +825,7 @@ def explain_topic():
         try:
             parsed = _json.loads(raw)
             explanation_data = {
-                "explanation": parsed.get("plain_explanation", ""),
+                "explanation": parsed.get("plain_explanation", "") or parsed.get("explanation", ""),
                 "examples": parsed.get("examples", ""),
                 "key_takeaways": parsed.get("key_takeaways", ""),
                 "summary": parsed.get("summary", ""),
@@ -833,10 +834,14 @@ def explain_topic():
             # Fallback: treat entire response as plain explanation
             explanation_data = {"explanation": raw, "examples": "", "key_takeaways": "", "summary": ""}
         
+        if raw.startswith("ERROR:"):
+            return jsonify({"error": f"AI Error: {raw}"}), 500
+            
         return jsonify(explanation_data)
     except Exception as e:
-        print(f"[Explanation error] {e}")
-        return jsonify({"error": "Failed to generate explanation"}), 500
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": f"Failed to generate explanation: {str(e)}"}), 500
 
 @app.post("/api/chat")
 @auth()
@@ -869,7 +874,7 @@ def chat():
         # Non-Syllabus General chat functionality 
         try:
             from langchain_core.messages import HumanMessage, SystemMessage
-            llm = ChatOpenAI(model_name=os.getenv("OPENAI_MODEL", "gpt-4o-mini"), temperature=0.7, openai_api_key=OPENAI_API_KEY)
+            # ChatOpenAI already imported at top
             sys_msg = SystemMessage(content=f"You are a helpful AI study assistant for the VidyAI Education platform. The user is a {u.get('role', 'student')}. Assist them professionally and educationally.")
             res = llm.invoke([sys_msg, HumanMessage(content=question)])
             return jsonify({
@@ -1451,6 +1456,8 @@ def _llm_text(prompt, temperature=0.7):
 def _llm_json(prompt, temperature=0.2):
     """Refined JSON LLM helper."""
     raw = _llm_text(prompt, temperature)
+    if raw.startswith("ERROR:"):
+        return {"error": raw}
     try:
         clean = re.sub(r"```(?:json)?|```", "", raw).strip()
         try: return json.loads(clean)
