@@ -3382,7 +3382,11 @@
 
       if (!sid) { showToast('Select a syllabus first', 'error'); return; }
 
-      const activeSyl = syllabi.find(s => s.id === sid);
+      let activeSyl = syllabi.find(s => s.id === sid);
+      if (!activeSyl && activeSyllabus && activeSyllabus.id === sid) activeSyl = activeSyllabus;
+      if (!activeSyl && ukActiveSyllabus && ukActiveSyllabus.id === sid) activeSyl = ukActiveSyllabus;
+
+      if (!activeSyl) { showToast('Select a valid syllabus source', 'error'); return; }
       let subject = '';
       if (activeSyl && activeSyl.name) {
         const parts = activeSyl.name.split('-');
@@ -5323,7 +5327,8 @@
         return;
       }
       if (action === 'generate_questions') {
-        activeSyllabus = syllabi.find(s => s.id === activeSyllabus.id);
+        const matchingSyllabus = syllabi.find(s => s.id === activeSyllabus.id);
+        if (matchingSyllabus) activeSyllabus = matchingSyllabus; // Only update if found in user uploads
         
         // --- Reset QG State ---
         document.getElementById('qg-preview').style.display = 'none';
@@ -5613,7 +5618,7 @@
           bodyData = { syllabus_id: ukActiveSyllabus.id, topic, subject: ukActiveSyllabus.subj };
         } else if (action === 'summarise') {
           endpoint = '/summarise';
-          bodyData = { syllabus_id: ukActiveSyllabus.id, question: `Summarise the UK National Curriculum topic: ${topic} for ${ukActiveSyllabus.year}` };
+          bodyData = { syllabus_id: ukActiveSyllabus.id, topic: topic, subject: ukActiveSyllabus.subj };
         } else if (action === 'flashcards') {
           endpoint = '/flashcards';
           bodyData = { syllabus_id: ukActiveSyllabus.id, topic };
@@ -5877,8 +5882,13 @@
     }
 
     function setActiveSyllabus(id) {
-      activeSyllabus = syllabi.find(s => s.id === id);
-      if (activeSyllabus) {
+      const found = syllabi.find(s => s.id === id);
+      if (found) activeSyllabus = found;
+      // If not in uploads, check if it's the already active curriculum book
+      else if (activeSyllabus && activeSyllabus.id === id) { /* keep it */ }
+      else if (ukActiveSyllabus && ukActiveSyllabus.id === id) { activeSyllabus = ukActiveSyllabus; }
+      
+      if (activeSyllabus && activeSyllabus.id === id) {
         document.getElementById('active-syl-pill').style.display = 'flex';
         document.getElementById('active-syl-name').textContent = activeSyllabus.name;
         document.getElementById('st-active').textContent = activeSyllabus.name;
@@ -5995,14 +6005,32 @@
 
     function populateSyllabusSelect() {
       const sel = document.getElementById('edit-bank-syllabus');
-      sel.innerHTML = '<option value="">— Select Subject —</option>' +
-        syllabi.map(s => `<option value="${s.id}" ${editingBank.syllabus_id === s.id ? 'selected' : ''}>${s.name}</option>`).join('');
+      let options = syllabi.map(s => `<option value="${s.id}" ${editingBank.syllabus_id === s.id ? 'selected' : ''}>${s.name}</option>`);
+      
+      // Inject curriculum hub syllabus if active and not already in list
+      if (activeSyllabus && !syllabi.find(s => s.id === activeSyllabus.id)) {
+        options.unshift(`<option value="${activeSyllabus.id}" selected>${activeSyllabus.name} (Curriculum Hub)</option>`);
+        editingBank.syllabus_id = activeSyllabus.id;
+        editingBank.syllabus_name = activeSyllabus.name;
+      }
+      if (ukActiveSyllabus && !syllabi.find(s => s.id === ukActiveSyllabus.id)) {
+        options.unshift(`<option value="${ukActiveSyllabus.id}" selected>${ukActiveSyllabus.name} (UK Hub)</option>`);
+        if (!editingBank.syllabus_id) {
+          editingBank.syllabus_id = ukActiveSyllabus.id;
+          editingBank.syllabus_name = ukActiveSyllabus.name;
+        }
+      }
+
+      sel.innerHTML = '<option value="">— Select Subject —</option>' + options.join('');
     }
 
     function updateBankMeta() {
       const sel = document.getElementById('edit-bank-syllabus');
       const sid = sel.value;
-      const s = syllabi.find(x => x.id === sid);
+      let s = syllabi.find(x => x.id === sid);
+      if (!s && activeSyllabus && activeSyllabus.id === sid) s = activeSyllabus;
+      if (!s && ukActiveSyllabus && ukActiveSyllabus.id === sid) s = ukActiveSyllabus;
+
       if (s) {
         editingBank.syllabus_id = s.id;
         editingBank.syllabus_name = s.name;
@@ -6056,11 +6084,16 @@
         showToast('AI is thinking...', 'success');
       }
 
-      const activeSyl = syllabi.find(s => s.id === sid);
+      let activeSyl = syllabi.find(s => s.id === sid);
+      if (!activeSyl && activeSyllabus && activeSyllabus.id === sid) activeSyl = activeSyllabus;
+      if (!activeSyl && ukActiveSyllabus && ukActiveSyllabus.id === sid) activeSyl = ukActiveSyllabus;
+      
       let subject = '';
       if (activeSyl && activeSyl.name) {
-        const parts = activeSyl.name.split('-');
+        // Try split by '—' or '-'
+        const parts = activeSyl.name.split(/[—\-]/);
         if (parts.length > 1) subject = parts[parts.length - 1].trim();
+        else subject = activeSyl.name;
       }
 
       const objCount = parseInt(document.getElementById('qg-obj-count-qm').value) || 0;

@@ -13,3 +13,4 @@ tiktoken>=0.7.0
 pymongo[srv]>=4.6.0
 dnspython>=2.6.0
 certifi>=2024.2.2
+reportlab>=4.0.0
