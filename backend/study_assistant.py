@@ -21,14 +21,19 @@ SUPPORTED_EXTENSIONS = {".pdf", ".txt", ".md", ".mp3", ".mp4", ".wav", ".m4a", "
 # ── Lazy LangChain imports (graceful fallback) ─────────────────────────────
 try:
     from langchain_openai import ChatOpenAI, OpenAIEmbeddings
-    from langchain_community.vectorstores import Chroma
-    from langchain_community.document_loaders import PyPDFLoader, TextLoader
     from langchain_text_splitters import RecursiveCharacterTextSplitter
     from langchain.schema import Document
     LANGCHAIN_OK = True
 except ImportError:
     LANGCHAIN_OK = False
     Document = None  # type: ignore
+
+# Lightweight Vector Store fallback for Vercel/Lambda
+try:
+    from langchain_core.vectorstores import InMemoryVectorStore
+    HAS_MEMORY_VS = True
+except ImportError:
+    HAS_MEMORY_VS = False
 
 # ConversationalRetrievalChain and related are in langchain_classic (langchain >= 1.x)
 try:
@@ -84,12 +89,23 @@ STUDY_MODES = {
 
 # ── File Loaders ──────────────────────────────────────────────────────────
 def load_pdf(file_path: str) -> List:
-    loader = PyPDFLoader(file_path)
-    return loader.load()
+    try:
+        from langchain_community.document_loaders import PyPDFLoader
+        loader = PyPDFLoader(file_path)
+        return loader.load()
+    except ImportError:
+        # Fallback to pure pypdf
+        import pypdf
+        reader = pypdf.PdfReader(file_path)
+        docs = []
+        for i, page in enumerate(reader.pages):
+            docs.append(Document(page_content=page.extract_text(), metadata={"source": file_path, "page": i}))
+        return docs
 
 def load_text(file_path: str) -> List:
-    loader = TextLoader(file_path, encoding="utf-8")
-    return loader.load()
+    with open(file_path, "r", encoding="utf-8") as f:
+        text = f.read()
+    return [Document(page_content=text, metadata={"source": file_path})]
 
 def load_audio_video(file_path: str) -> List:
     """Transcribe audio/video using OpenAI Whisper and return as Document list."""
@@ -133,12 +149,18 @@ def build_knowledge_base(file_paths: List[str], persist_dir: str) -> Any:
     )
     chunks = splitter.split_documents(all_docs)
     embeddings = OpenAIEmbeddings(api_key=OPENAI_API_KEY)
-    vs = Chroma.from_documents(chunks, embeddings, persist_directory=persist_dir)
-    return vs
+    
+    if HAS_MEMORY_VS:
+        vs = InMemoryVectorStore.from_documents(chunks, embeddings)
+        return vs
+    else:
+        # Final fallback: just return the chunks and we'll do manual search later
+        return chunks
 
 def load_knowledge_base(persist_dir: str, collection_name: str = "langchain") -> Any:
-    embeddings = OpenAIEmbeddings(api_key=OPENAI_API_KEY)
-    return Chroma(persist_directory=persist_dir, embedding_function=embeddings, collection_name=collection_name)
+    # On Vercel, we always re-build since persistence is ephemeral
+    # Returning None forces a rebuild in app.py
+    return None
 
 # ── QA Chain ──────────────────────────────────────────────────────────────
 def build_qa_chain(vectorstore) -> Any:

@@ -1,33 +1,13 @@
-# EduMind — Python dependencies
-# Install:  pip install -r requirements.txt
-
-# ── Core web framework ─────────────────────────────────────────────────────
+# EduMind — Lean Vercel Dependencies
+# This file is used for Vercel deployment to stay under 500MB
 flask>=3.0.0
 flask-cors>=4.0.0
 werkzeug>=3.0.0
-gunicorn>=21.0.0          # production WSGI server
-
-# ── AI & LLM stack ─────────────────────────────────────────────────────────
 openai>=1.30.0
 langchain>=0.2.0
 langchain-openai>=0.1.0
-langchain-community>=0.2.0
 langchain-text-splitters>=0.2.0
-
-# ── Vector database ────────────────────────────────────────────────────────
-chromadb>=0.5.0
-
-# ── Document processing ────────────────────────────────────────────────────
 pypdf>=4.0.0
-unstructured>=0.14.0      # optional: advanced file parsing
-python-magic>=0.4.27      # optional: MIME type detection
-
-# ── Audio/video transcription ──────────────────────────────────────────────
-# Uncomment if using audio upload features:
-# openai-whisper>=20231117
-# ffmpeg-python>=0.2.0
-
-# ── Utilities ──────────────────────────────────────────────────────────────
 python-dotenv>=1.0.0
 tiktoken>=0.7.0
 pymongo[srv]>=4.6.0

@@ -20,17 +20,15 @@ from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
 
-# ── LangChain (mirrors testEdu exactly) ───────────────────────────────────
+# ── LangChain (mirrors testEdu exactly, but adapted for Vercel) ───────────
 try:
-    from langchain_community.chat_models import ChatOpenAI
-    from langchain_community.embeddings import OpenAIEmbeddings
-    from langchain_community.vectorstores import Chroma
-    from langchain_community.document_loaders import PyPDFLoader, TextLoader
+    from langchain_openai import ChatOpenAI, OpenAIEmbeddings
     from langchain_classic.chains import ConversationalRetrievalChain
     from langchain_classic.memory import ConversationBufferMemory
     from langchain_core.documents import Document
     from langchain_core.prompts import PromptTemplate
     from langchain_text_splitters import RecursiveCharacterTextSplitter
+    from langchain_core.vectorstores import InMemoryVectorStore
     LANGCHAIN_OK = True
 except ImportError as _e:
     LANGCHAIN_OK = False
@@ -2044,23 +2042,25 @@ def _get_emb():
 
 def _normalize(text): return re.sub(r"\s+"," ",str(text or "").strip().lower())
 
-def _load_vs(syllabus_id):
-    import chromadb
-    chroma_client = chromadb.PersistentClient(path=str(DB_DIR/syllabus_id))
-    return Chroma(
-        client=chroma_client,
-        embedding_function=_get_emb(),
-        collection_name=_collection_name(syllabus_id)
-    )
+def _load_vs(did):
+    # On Vercel, we can't persist. We check the global 'qa_chains' or re-index.
+    # For now, we return the InMemoryVectorStore if it exists in a cache
+    # (Note: app.py should ideally maintain a cache of VS objects)
+    return None # Forces re-indexing if needed
 
 def _index_doc(path, did, ext):
-    """Load a file, embed it into a per-doc ChromaDB, extract chapters."""
+    """Load a file, embed it into a per-doc InMemory VS, extract chapters."""
     try:
         ext_lower = ext.lower()
         if ext_lower == "pdf":
-            docs = PyPDFLoader(str(path)).load()
+            import pypdf
+            reader = pypdf.PdfReader(str(path))
+            docs = []
+            for i, page in enumerate(reader.pages):
+                docs.append(Document(page_content=page.extract_text(), metadata={"source":str(path), "page": i}))
         elif ext_lower in {"txt","md"}:
-            docs = TextLoader(str(path), encoding="utf-8").load()
+            with open(path, "r", encoding="utf-8") as f:
+                docs = [Document(page_content=f.read(), metadata={"source":str(path)})]
         elif ext_lower in {"mp3","mp4","wav","m4a","ogg"}:
             client = _oai.OpenAI(api_key=OPENAI_API_KEY)
             with open(path,"rb") as f:
@@ -2071,15 +2071,12 @@ def _index_doc(path, did, ext):
 
         splitter = RecursiveCharacterTextSplitter(chunk_size=1000,chunk_overlap=150,separators=["\n\n","\n","."," "])
         chunks = splitter.split_documents(docs)
-        # ChromaDB 1.5+ uses PersistentClient — no .persist() call needed
-        import chromadb
-        chroma_client = chromadb.PersistentClient(path=str(DB_DIR/did))
+        
         emb_fn = _get_emb()
-        Chroma.from_documents(
-            chunks, emb_fn,
-            client=chroma_client,
-            collection_name=_collection_name(did)
-        )
+        vs = InMemoryVectorStore.from_documents(chunks, emb_fn)
+        # Store in global cache for the session
+        qa_chains[did] = vs
+        
         chapters = _extract_chapters(docs)
         return len(chunks), chapters
     except Exception as e:
