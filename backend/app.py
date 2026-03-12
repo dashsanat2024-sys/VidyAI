@@ -23,12 +23,20 @@ from werkzeug.utils import secure_filename
 # ── LangChain (mirrors testEdu exactly, but adapted for Vercel) ───────────
 try:
     from langchain_openai import ChatOpenAI, OpenAIEmbeddings
-    from langchain_classic.chains import ConversationalRetrievalChain
-    from langchain_classic.memory import ConversationBufferMemory
     from langchain_core.documents import Document
     from langchain_core.prompts import PromptTemplate
     from langchain_text_splitters import RecursiveCharacterTextSplitter
     from langchain_core.vectorstores import InMemoryVectorStore
+    
+    # Try classic chains first, then fall back to standard langchain
+    try:
+        from langchain.chains import ConversationalRetrievalChain
+        from langchain.memory import ConversationBufferMemory
+    except ImportError:
+        # Some versions/environments might have them in langchain_classic
+        from langchain_classic.chains import ConversationalRetrievalChain
+        from langchain_classic.memory import ConversationBufferMemory
+
     LANGCHAIN_OK = True
 except ImportError as _e:
     LANGCHAIN_OK = False
@@ -115,7 +123,15 @@ def _load_json(path, default=None):
 # ── MongoDB Initialization ────────────────────────────────────────────────
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
 try:
-    mongo_client = pymongo.MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000, connectTimeoutMS=10000)
+    import certifi
+    ca = certifi.where()
+    # Use certifi for SSL certificates to avoid TLSV1_ALERT_INTERNAL_ERROR on Vercel
+    mongo_client = pymongo.MongoClient(
+        MONGO_URI, 
+        serverSelectionTimeoutMS=5000, 
+        connectTimeoutMS=10000,
+        tlsCAFile=ca
+    )
     mongo_db = mongo_client["edumind"]
     # Check connection
     mongo_client.server_info()
