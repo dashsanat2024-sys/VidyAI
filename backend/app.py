@@ -115,11 +115,12 @@ def _load_json(path, default=None):
 # ── MongoDB Initialization ────────────────────────────────────────────────
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
 try:
-    mongo_client = pymongo.MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000)
+    mongo_client = pymongo.MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000, connectTimeoutMS=10000)
     mongo_db = mongo_client["edumind"]
     # Check connection
     mongo_client.server_info()
     MONGO_OK = True
+    print("[INIT] MongoDB Connected Successfully.")
 except Exception as e:
     MONGO_OK = False
     print(f"[WARN] MongoDB not available (using JSON fallback): {e}")
@@ -481,26 +482,38 @@ def _default_db():
 
 # ── DB Layer Adaptation ───────────────────────────────────────────────────
 def db_load():
+    # 1. Try MongoDB FIRST - it's our source of truth in production
     if MONGO_OK:
         data = _mongo_load(M_PLATFORM, key="main_db")
-        if data: return data
+        if data: 
+            return data
     
-    # Fallback to JSON + Migrate
+    # 2. Fallback to JSON + Migrate IF it exists locally (dev mode)
     if DATA_F.exists():
         try: 
             d = json.loads(DATA_F.read_text())
-            if MONGO_OK: _mongo_save(M_PLATFORM, d, key="main_db")
+            if MONGO_OK: 
+                print("[MIGRATE] JSON -> MongoDB sync on startup")
+                _mongo_save(M_PLATFORM, d, key="main_db")
             return d
         except: pass
     
+    # 3. Last resort: Default empty DB
+    print("[WARN] Using empty default database state")
     d = _default_db()
     if MONGO_OK: _mongo_save(M_PLATFORM, d, key="main_db")
-    elif not DATA_F.exists(): db_save(d)
     return d
 
 def db_save(d):
-    if MONGO_OK: _mongo_save(M_PLATFORM, d, key="main_db")
-    DATA_F.write_text(json.dumps(d, indent=2, default=str)) # Dual write for safety
+    if MONGO_OK: 
+        _mongo_save(M_PLATFORM, d, key="main_db")
+    
+    # Only write to local JSON if NOT on Vercel (read-only filesystem)
+    if not IS_VERCEL:
+        try:
+            DATA_F.write_text(json.dumps(d, indent=2, default=str)) 
+        except Exception as e:
+            print(f"[DB] Local JSON write failed: {e}")
 
 def db_log(db, uid, action, detail):
     db["activity"].insert(0, {"id":uuid.uuid4().hex[:6],"user_id":uid,"action":action,"detail":detail,"ts":_now()})
