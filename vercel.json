@@ -4,6 +4,10 @@
     {
       "src": "backend/app.py",
       "use": "@vercel/python"
+    },
+    {
+      "src": "frontend/**",
+      "use": "@vercel/static"
     }
   ],
   "rewrites": [
@@ -12,19 +16,8 @@
       "destination": "backend/app.py"
     },
     {
-      "source": "/",
-      "destination": "frontend/index.html"
-    },
-    {
-      "source": "/(manifest.json|sw.js)",
-      "destination": "frontend/$1"
-    },
-    {
       "source": "/(.*)",
       "destination": "frontend/$1"
     }
-  ],
-  "env": {
-    "PYTHON_VERSION": "3.9"
-  }
+  ]
 }

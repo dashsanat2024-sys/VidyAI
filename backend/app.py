@@ -46,9 +46,19 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 
 # ── Paths ──────────────────────────────────────────────────────────────────
 BASE       = Path(__file__).parent.parent
-DATA_F     = BASE / "data" / "platform_data.json"
-UPL_DIR    = BASE / "uploads"
-DB_DIR     = BASE / "study_db"
+IS_VERCEL  = os.environ.get("VERCEL") == "1"
+
+if IS_VERCEL:
+    # Vercel filesystem is read-only except for /tmp
+    TMP_ROOT  = Path("/tmp")
+    DATA_F    = TMP_ROOT / "platform_data.json"
+    UPL_DIR   = TMP_ROOT / "uploads"
+    DB_DIR    = TMP_ROOT / "study_db"
+else:
+    DATA_F    = BASE / "data" / "platform_data.json"
+    UPL_DIR   = BASE / "uploads"
+    DB_DIR    = BASE / "study_db"
+
 EXAMS_DIR  = DB_DIR / "exams"
 EVAL_DIR   = DB_DIR / "evaluations"
 BULK_DIR   = DB_DIR / "bulk_evaluations"
