@@ -3412,7 +3412,7 @@
           })
         });
         const data = await res.json();
-        if (!res.ok) throw new Error(data.error || 'Generation failed');
+        if (!res.ok) throw new Error(data.error || 'Question generation failed. Check your OpenAI API key and credits.');
 
         genQuestions = data.questions;
         displayQuestions(data);
@@ -5171,6 +5171,9 @@
         
         if (data.status && !data.status.mongodb_connected) {
            showToast('⚠️ MongoDB DISCONNECTED! Persistence is limited to local fallback (ephemeral on Vercel). Check your IP whitelist.', 'warning');
+        }
+        if (data.status && !data.status.openai_api_configured) {
+           showToast('⚠️ OpenAI API Key Missing! AI features (Listen, Summarize, Questions) will not work. Add it to Vercel Environment Variables.', 'error');
         }
         
         // metadata is now nested under data.metadata

@@ -900,6 +900,7 @@ def get_curriculum_metadata():
         "metadata": CURRICULUM_DATA,
         "status": {
             "mongodb_connected": MONGO_OK,
+            "openai_api_configured": bool(OPENAI_API_KEY),
             "persistence": "cloud" if MONGO_OK else "local_fallback"
         }
     })
@@ -1435,12 +1436,17 @@ def _llm_text(prompt, temperature=0.7):
         return "LLM integration not configured. Please add OPENAI_API_KEY."
     from openai import OpenAI
     client = OpenAI(api_key=OPENAI_API_KEY)
-    res = client.chat.completions.create(
-        model="gpt-4o",
-        messages=[{"role": "user", "content": prompt}],
-        temperature=temperature
-    )
-    return res.choices[0].message.content
+    try:
+        res = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=temperature,
+            max_tokens=2000
+        )
+        return res.choices[0].message.content
+    except Exception as e:
+        print(f"[OpenAI Error] {e}")
+        return f"ERROR: {str(e)}"
 
 def _llm_json(prompt, temperature=0.2):
     """Refined JSON LLM helper."""
@@ -1526,8 +1532,15 @@ def generate_questions():
         )
         
         questions = _llm_json(prompt, temperature=0.2)
+        
+        # If wrapped in "questions" key, extract it
+        if isinstance(questions, dict) and "questions" in questions:
+            questions = questions["questions"]
+            
         if not isinstance(questions, list):
             err_msg = questions.get("error", "Unknown model error") if isinstance(questions, dict) else "Model did not return a list"
+            if isinstance(questions, str) and questions.startswith("ERROR:"):
+                err_msg = questions
             return jsonify({"error": f"Question generation failed — {err_msg}"}), 500
     except Exception as e:
         import traceback
@@ -2097,7 +2110,7 @@ def spa(path):
 def _collection_name(sid): return f"syllabus_{sid.replace('-','_')}"
 
 def _get_llm():
-    return ChatOpenAI(model_name=os.getenv("OPENAI_MODEL","gpt-4o"), temperature=0.3, openai_api_key=OPENAI_API_KEY)
+    return ChatOpenAI(model_name=os.getenv("OPENAI_MODEL","gpt-4o-mini"), temperature=0.3, openai_api_key=OPENAI_API_KEY)
 
 def _get_emb():
     return OpenAIEmbeddings(openai_api_key=OPENAI_API_KEY)
@@ -2209,7 +2222,7 @@ def _vision_extract(image_path: str):
               'Return JSON object only: {"answers":{"1":"...","2":"..."}}. '
               'If unreadable, omit the question number.')
     resp = client.chat.completions.create(
-        model="gpt-4o",temperature=0,
+        model="gpt-4o-mini",temperature=0,
         response_format={"type":"json_object"},
         messages=[{"role":"user","content":[
             {"type":"text","text":prompt},
