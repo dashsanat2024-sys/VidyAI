@@ -1841,21 +1841,6 @@ def evaluate_practice():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-@app.post("/api/curriculum/practice/email-report")
-@auth()
-def email_practice_report():
-    data = request.json or {}
-    email = data.get("email")
-    results = data.get("results", [])
-    if not email: return jsonify({"error": "Email is required"}), 400
-    
-    # Mocking the Email Sent functionality
-    print(f"\n[EMAIL MOCK] 📩 Sending Practice Report to: {email}")
-    print(f"[EMAIL MOCK] Subject: Your AI Practice Results")
-    print(f"[EMAIL MOCK] Summary: {len(results)} questions analyzed.")
-    
-    return jsonify({"success": True, "message": f"Report simulated sending to {email}"})
-
 # Legacy alias — /api/questions/generate used by the synapseAI frontend
 @app.post("/api/questions/generate")
 @auth()
