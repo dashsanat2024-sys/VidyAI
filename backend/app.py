@@ -447,6 +447,42 @@ Context:
 JSON array only:
 """
 
+MIXED_PRACTICE_GEN_PROMPT = """
+You are a high-quality academic practice generator.
+Generate exactly {count} distinct practice questions ONLY from the provided context.
+Output EXACTLY valid JSON (no markdown).
+
+Each item should have:
+"question": (string),
+"answer": (string),
+"type": ("objective" | "subjective"),
+"options": (object with A,B,C,D if objective, else null)
+
+Context:
+{context}
+
+Topic: {topic}
+
+JSON array only:
+"""
+
+PRACTICE_EVALUATION_PROMPT = """
+You are an expert academic tutor. 
+Evaluate the student's answer based on the model answer and context.
+
+Return EXACTLY valid JSON with:
+"score": (number from 0 to 10),
+"feedback": (short explanation of the score),
+"improvements": (specific suggestions for a better answer),
+"is_correct": (boolean)
+
+Question: {question}
+Model Answer: {model_answer}
+Student Answer: {student_answer}
+
+JSON only:
+"""
+
 # ══════════════════════════════════════════════════════════════════════════
 #  CURRICULUM METADATA (Indian Schooling)
 # ══════════════════════════════════════════════════════════════════════════
@@ -1601,6 +1637,63 @@ def generate_questions():
         "objective_count": objective_count, "subjective_count": subjective_count,
         "syllabus_id": syllabus_id, "syllabus_name": syllabi_registry[syllabus_id]["name"]
     })
+
+# ══════════════════════════════════════════════════════════════════════════
+#  PRACTICE MODE ENDPOINTS
+# ══════════════════════════════════════════════════════════════════════════
+
+@app.post("/api/curriculum/practice/generate")
+@auth()
+def generate_practice():
+    data    = request.json or {}
+    sid     = data.get("syllabus_id", "").strip()
+    topic   = data.get("topic", "the material")
+    count   = int(data.get("count", 3))
+
+    if not sid or sid not in syllabi_registry:
+        return jsonify({"error": "Select a valid syllabus first"}), 400
+
+    try:
+        vs        = _load_vs(sid)
+        retriever = vs.as_retriever(search_kwargs={"k": 5})
+        docs      = retriever.invoke(topic)
+        ctx       = "\n\n".join(d.page_content for d in docs)
+        
+        prompt = MIXED_PRACTICE_GEN_PROMPT.format(
+            count=count,
+            context=ctx,
+            topic=topic
+        )
+        
+        raw  = _get_llm().invoke(prompt).content
+        data = _clean_json(raw)
+        return jsonify(data)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.post("/api/curriculum/practice/evaluate")
+@auth()
+def evaluate_practice():
+    data      = request.json or {}
+    question  = data.get("question", "")
+    model_ans = data.get("model_answer", "")
+    stud_ans  = data.get("student_answer", "")
+
+    if not question or not stud_ans:
+        return jsonify({"error": "Missing question or answer"}), 400
+
+    try:
+        prompt = PRACTICE_EVALUATION_PROMPT.format(
+            question=question,
+            model_answer=model_ans,
+            student_answer=stud_ans
+        )
+        
+        raw  = _get_llm().invoke(prompt).content
+        res  = _clean_json(raw)
+        return jsonify(res)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 # Legacy alias — /api/questions/generate used by the synapseAI frontend
 @app.post("/api/questions/generate")
