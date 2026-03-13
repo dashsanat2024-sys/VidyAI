@@ -2594,7 +2594,6 @@
                <button class="btn-outline" style="width:100%; font-size:12px; padding:8px; background:#fff; margin-bottom:8px;" onclick="clearDoubts()">🤔 Doubt Clearing Helper</button>
                <button class="btn-outline" style="width:100%; font-size:12px; padding:8px; background:#fff;" onclick="showTutorSupport()">🙋 Ask a Human Tutor</button>
             </div>
-          </div>
           <div style="padding:16px; margin-top:auto;">
             <div style="border:2px dashed #cbd5e1; border-radius:12px; padding:20px; text-align:center; cursor:pointer;"
               onclick="document.getElementById('file-upl').click()">
@@ -2603,7 +2602,6 @@
               <input type="file" id="file-upl" hidden onchange="handleFileUpload(this)">
             </div>
           </div>
-        </div>
         <div class="chat-main">
           <div class="chat-messages" id="chat-messages">
             <div class="msg bot">
@@ -5379,6 +5377,7 @@
         document.getElementById('curriculum-bookshelf').style.display = 'block';
         window.currentBookPDF = data.pdf_url; 
 
+        const list = document.getElementById('chapter-list');
         list.innerHTML = data.chapters.map(chap => {
           const safeChap = chap.replace(/'/g, "\\'");
           return `
@@ -5454,21 +5453,7 @@
         return;
       }
       if (action === 'generate_questions' || action === 'practice') {
-        const matchingSyllabus = syllabi.find(s => s.id === activeSyllabus.id);
-        if (matchingSyllabus) activeSyllabus = matchingSyllabus;
-        
-        showPanel('panel-practice');
-        document.getElementById('practice-config-view').style.display = 'block';
-        document.getElementById('practice-session-view').style.display = 'none';
-        document.getElementById('practice-report-view').style.display = 'none';
-        
-        // Sync Syllabus Selection
-        const sel = document.getElementById('practice-syllabus-select');
-        sel.innerHTML = syllabi.map(s => `<option value="${s.id}">${s.name}</option>`).join('');
-        sel.value = activeSyllabus.id;
-        
-        document.getElementById('practice-topic').value = topic || '';
-        document.getElementById('practice-main-title').textContent = `Practice: ${activeSyllabus.name}`;
+        openPracticeConfig(activeSyllabus.id, topic);
         return;
       }
       if (action === 'video') { startVideoMode(topic); return; }
@@ -5705,6 +5690,7 @@
 
       document.getElementById('uk-book-title').textContent = `${subj} — ${year} (${region})`;
       document.getElementById('uk-curriculum-bookshelf').style.display = 'block';
+      refreshData();
       ukRenderChapters(chapters);
 
       btn.textContent = 'Load UK Curriculum Book →'; btn.disabled = false;
