@@ -815,9 +815,12 @@ def video_explanation():
 
     try:
         vs = _load_vs(syllabus_id)
-        retriever = vs.as_retriever(search_kwargs={"k": 5})
-        docs = retriever.invoke(topic)
-        context = "\n\n".join(d.page_content for d in docs)
+        if vs:
+            retriever = vs.as_retriever(search_kwargs={"k": 5})
+            docs = retriever.invoke(topic)
+            context = "\n\n".join(d.page_content for d in docs)
+        else:
+            context = f"Educational overview of {topic}"
     except Exception as e:
         print(f"[Video VS Fallback] {e}")
         context = "Use your knowledge as a teacher to explain this topic generally."
@@ -1422,9 +1425,11 @@ def summarise_chapter():
 
     try:
         vs = _load_vs(sid)
-        retriever = vs.as_retriever(search_kwargs={"k": 5})
-        docs = retriever.invoke(topic)
-        context = "\n\n".join(d.page_content for d in docs)
+        context = ""
+        if vs:
+            retriever = vs.as_retriever(search_kwargs={"k": 5})
+            docs = retriever.invoke(topic)
+            context = "\n\n".join(d.page_content for d in docs)
         
         # If no context (mock), use a generic LLM call or fall back
         if is_regional:
@@ -1459,9 +1464,11 @@ def generate_flashcards():
 
     try:
         vs = _load_vs(sid)
-        retriever = vs.as_retriever(search_kwargs={"k": 8})
-        docs = retriever.invoke(topic)
-        context = "\n\n".join(d.page_content for d in docs)
+        context = ""
+        if vs:
+            retriever = vs.as_retriever(search_kwargs={"k": 8})
+            docs = retriever.invoke(topic)
+            context = "\n\n".join(d.page_content for d in docs)
         
         if is_regional:
             prompt = REGIONAL_FLASHCARDS_PROMPT.format(language=subject.title(), context=context if context else f"Flashcards for {topic}")
@@ -1682,10 +1689,15 @@ def generate_practice():
         return jsonify({"error": "Select a valid syllabus first"}), 400
 
     try:
-        vs        = _load_vs(sid)
-        retriever = vs.as_retriever(search_kwargs={"k": 5})
-        docs      = retriever.invoke(topic)
-        ctx       = "\n\n".join(d.page_content for d in docs)
+        vs  = _load_vs(sid)
+        ctx = ""
+        if vs:
+            retriever = vs.as_retriever(search_kwargs={"k": 5})
+            docs      = retriever.invoke(topic)
+            ctx       = "\n\n".join(d.page_content for d in docs)
+        else:
+            # Fallback for virtual syllabi or missing VS
+            ctx = f"This is for the {syllabi_registry[sid]['name']} syllabus on the topic of {topic}."
         
         prompt = MIXED_PRACTICE_GEN_PROMPT.format(
             count=count,
@@ -1754,10 +1766,12 @@ def gen_qs_legacy():
     topic_str    = f"{topic} — chapters: {', '.join(chapters)}" if chapters else topic
 
     try:
-        vs        = _load_vs(syllabus_id)
-        retriever = vs.as_retriever(search_kwargs={"k":8})
-        docs      = retriever.invoke(topic_str)
-        context   = "\n\n".join(d.page_content for d in docs)
+        vs = _load_vs(syllabus_id)
+        context = ""
+        if vs:
+            retriever = vs.as_retriever(search_kwargs={"k":8})
+            docs = retriever.invoke(topic_str)
+            context = "\n\n".join(d.page_content for d in docs)
         prompt    = MIXED_QUESTION_GEN_PROMPT.format(
             total_count=total, objective_count=obj_count, subjective_count=subj_count,
             easy_count=easy_count, medium_count=medium_count, hard_count=hard_count,
@@ -2248,10 +2262,17 @@ def _get_emb():
 def _normalize(text): return re.sub(r"\s+"," ",str(text or "").strip().lower())
 
 def _load_vs(did):
-    # On Vercel, we can't persist. We check the global 'qa_chains' or re-index.
-    # For now, we return the InMemoryVectorStore if it exists in a cache
-    # (Note: app.py should ideally maintain a cache of VS objects)
-    return None # Forces re-indexing if needed
+    """Retrieve vector store from cache, or re-index if possible."""
+    if did in qa_chains: return qa_chains[did]
+    
+    # Try re-indexing if it's a real document with a path
+    db = db_load()
+    doc = next((d for d in db.get("documents",[]) if d["id"]==did), None)
+    if doc and doc.get("path") and Path(doc["path"]).exists():
+        chunks, chapters = _index_doc(Path(doc["path"]), did, doc["ext"])
+        return qa_chains.get(did)
+        
+    return None
 
 def _index_doc(path, did, ext):
     """Load a file, embed it into a per-doc InMemory VS, extract chapters."""
@@ -2301,20 +2322,34 @@ def _extract_chapters(docs):
     return []
 
 def _get_chain(syllabus_id):
-    if syllabus_id not in qa_chains:
-        vs = _load_vs(syllabus_id)
-        retriever = vs.as_retriever(search_type="mmr",search_kwargs={"k":5})
-        if syllabus_id not in memories:
-            memories[syllabus_id] = ConversationBufferMemory(
-                memory_key="chat_history",return_messages=True,output_key="answer"
-            )
-        kwargs = {}
-        if STUDY_PROMPT: kwargs["combine_docs_chain_kwargs"] = {"prompt":STUDY_PROMPT}
-        qa_chains[syllabus_id] = ConversationalRetrievalChain.from_llm(
-            llm=_get_llm(), retriever=retriever,
-            memory=memories[syllabus_id], return_source_documents=True,
-            verbose=False, **kwargs
+    if syllabus_id in qa_chains:
+        return qa_chains[syllabus_id]
+        
+    vs = _load_vs(syllabus_id)
+    if not vs:
+        # Resilience for virtual hubs: Use a simple AI chain if no VS exists
+        class VirtualChain:
+            def __init__(self, sid): self.sid = sid
+            def __call__(self, inputs):
+                q = inputs.get("question", "")
+                name = syllabi_registry.get(self.sid, {}).get("name", "Syllabus")
+                prompt = f"You are an AI tutor for {name}. Answer: {q}\n\nProvide a helpful, educational response based on your knowledge of the curriculum."
+                return {"answer": _llm_text(prompt), "source_documents": []}
+        return VirtualChain(syllabus_id)
+
+    # Standard document-based retrieval chain
+    retriever = vs.as_retriever(search_type="mmr",search_kwargs={"k":5})
+    if syllabus_id not in memories:
+        memories[syllabus_id] = ConversationBufferMemory(
+            memory_key="chat_history",return_messages=True,output_key="answer"
         )
+    kwargs = {}
+    if STUDY_PROMPT: kwargs["combine_docs_chain_kwargs"] = {"prompt":STUDY_PROMPT}
+    qa_chains[syllabus_id] = ConversationalRetrievalChain.from_llm(
+        llm=_get_llm(), retriever=retriever,
+        memory=memories[syllabus_id], return_source_documents=True,
+        verbose=False, **kwargs
+    )
     return qa_chains[syllabus_id]
 
 def _extract_answers(path: str):
