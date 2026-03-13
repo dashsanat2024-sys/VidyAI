@@ -6,7 +6,9 @@ vision-based answer extraction, bulk evaluation, audit/consistency.
 Run:  python backend/app.py
 API:  http://localhost:5000/api/...
 """
-import os, json, re, uuid, hashlib, random, base64, shutil
+import os, json, re, uuid, hashlib, random, base64, shutil, smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 from datetime import datetime
 from pathlib import Path
 from functools import wraps
@@ -165,6 +167,7 @@ M_EXAMS    = "exams"
 M_EVALS    = "evaluations"
 M_BULK     = "bulk_evals"
 M_SESSIONS = "sessions"
+M_PRACTICE_HISTORY = "practice_history"
 
 def _mongo_save(col_name, data, key="registry_data"):
     if not MONGO_OK: return
@@ -218,6 +221,43 @@ def _boot_load():
     if bulk_evaluations_registry is None:
         bulk_evaluations_registry = _load_json(BULK_REG_F, {})
         if bulk_evaluations_registry: _mongo_save(M_BULK, bulk_evaluations_registry)
+
+def send_email_report(to_email, subject, results):
+    """Sends a practice report via SMTP."""
+    host = os.getenv("SMTP_HOST")
+    port = int(os.getenv("SMTP_PORT", 587))
+    user = os.getenv("SMTP_USER")
+    passwd = os.getenv("SMTP_PASS")
+    sender = os.getenv("SMTP_FROM", user)
+
+    if not all([host, user, passwd]):
+        print("[SMTP] Missing credentials. Skipping real email.")
+        return False
+
+    try:
+        msg = MIMEMultipart()
+        msg['From'] = sender
+        msg['To'] = to_email
+        msg['Subject'] = subject
+
+        html = f"<h2>Your AI Practice Results</h2><p>Here is a summary of your session:</p><ul>"
+        for r in results:
+            eval_data = r.get("evaluation", {})
+            score = eval_data.get("score", 0)
+            feedback = eval_data.get("feedback", "N/A")
+            html += f"<li><b>Q: {r.get('question')}</b><br/>Score: {score}/10<br/>Feedback: {feedback}</li>"
+        html += "</ul><p>Keep up the great work!<br/>- VidyAI Team</p>"
+
+        msg.attach(MIMEText(html, 'html'))
+
+        with smtplib.SMTP(host, port) as server:
+            server.starttls()
+            server.login(user, passwd)
+            server.send_message(msg)
+        return True
+    except Exception as e:
+        print(f"[SMTP] Error: {e}")
+        return False
 
 # ══════════════════════════════════════════════════════════════════════════
 #  PROMPTS  (exact testEdu prompts)
@@ -449,6 +489,11 @@ Return ONLY the JSON array:
 PRACTICE_EVALUATION_PROMPT = """
 You are an expert academic tutor. 
 Evaluate the student's answer based on the model answer and context.
+
+IMPORTANT:
+- For objective questions, compare the student's answer text directly with the model answer. 
+- If the student's answer matches the model answer (even with minor case or whitespace differences), score it 10.
+- For subjective questions, be constructive and detailed in your feedback.
 
 Return EXACTLY valid JSON with:
 "score": (number from 0 to 10),
@@ -1745,7 +1790,7 @@ def generate_questions():
 @auth()
 def generate_practice():
     try:
-        print(f"[DEBUG] generate_practice hit with method: {request.method}")
+        user_id = request.user["id"]
         data    = request.json or {}
         sid     = data.get("syllabus_id", "").strip()
         topic   = data.get("topic", "the material")
@@ -1755,8 +1800,15 @@ def generate_practice():
         total   = obj_count + subj_count
 
         if not sid or sid not in syllabi_registry:
-            print(f"[DEBUG] syllabus {sid} not in registry")
             return jsonify({"error": "Select a valid syllabus first"}), 400
+
+        # Unique Questions Logic: Fetch history
+        previous_questions = []
+        if MONGO_OK:
+            hist = mongo_db[M_PRACTICE_HISTORY].find_one({"user_id": user_id, "syllabus_id": sid, "topic": topic})
+            if hist:
+                previous_questions = hist.get("asked_questions", [])
+
         vs  = _load_vs(sid)
         ctx = ""
         if vs:
@@ -1764,9 +1816,14 @@ def generate_practice():
             docs      = retriever.invoke(topic)
             ctx       = "\n\n".join(d.page_content for d in docs)
         else:
-            # Fallback for virtual syllabi or missing VS
             ctx = f"This is for the {syllabi_registry[sid]['name']} syllabus on the topic of {topic}."
         
+        exclusion_str = ""
+        if previous_questions:
+            # Limit exclusion list to avoid blowing up context
+            recent_prev = previous_questions[-20:]
+            exclusion_str = "\nCRITICAL: DO NOT repeat any of these previously asked questions:\n" + "\n".join([f"- {q}" for q in recent_prev])
+
         prompt = MIXED_PRACTICE_GEN_PROMPT.format(
             total_count=total, 
             objective_count=obj_count, 
@@ -1775,7 +1832,10 @@ def generate_practice():
             context=ctx,
             topic=topic
         )
-        raw_data = _llm_json(prompt, temperature=0.2)
+        if exclusion_str:
+            prompt += exclusion_str
+
+        raw_data = _llm_json(prompt, temperature=0.7) # Slightly higher temp for more variety
         
         # Robustly handle wrapped JSON (e.g. {"questions": [...]})
         if isinstance(raw_data, dict) and "questions" in raw_data:
@@ -1815,6 +1875,26 @@ def generate_practice():
         if not valid_qs:
             return jsonify({"error": "AI generated empty or malformed questions. Please try again."}), 500
 
+        # Strict type filtering if the user requested only one type
+        if obj_count > 0 and subj_count == 0:
+            valid_qs = [q for q in valid_qs if q["type"] == "objective"]
+        elif subj_count > 0 and obj_count == 0:
+            valid_qs = [q for q in valid_qs if q["type"] == "subjective"]
+        
+        # If filtering emptied the list, return what we have but log it
+        if not valid_qs:
+            valid_qs = data # fallback to unfiltered if filter was too aggressive
+
+        # Unique Questions Logic: Save to history
+        if MONGO_OK and valid_qs:
+            new_q_texts = [q["question"] for q in valid_qs if "question" in q]
+            if new_q_texts:
+                mongo_db[M_PRACTICE_HISTORY].update_one(
+                    {"user_id": user_id, "syllabus_id": sid, "topic": topic},
+                    {"$push": {"asked_questions": {"$each": new_q_texts}}},
+                    upsert=True
+                )
+
         return jsonify(valid_qs)
     except Exception as e:
         import traceback
@@ -1849,12 +1929,15 @@ def email_practice_report():
     results = data.get("results", [])
     if not email: return jsonify({"error": "Email is required"}), 400
     
-    # Mocking the Email Sent functionality
-    print(f"\n[EMAIL MOCK] 📩 Sending Practice Report to: {email}")
-    print(f"[EMAIL MOCK] Subject: Your AI Practice Results")
-    print(f"[EMAIL MOCK] Summary: {len(results)} questions analyzed.")
+    success = send_email_report(email, "Your AI Practice Results", results)
     
-    return jsonify({"success": True, "message": f"Report simulated sending to {email}"})
+    if success:
+        return jsonify({"success": True, "message": f"Report sent to {email}"})
+    else:
+        return jsonify({
+            "success": False, 
+            "message": f"SMTP failed. Please check .env configuration for outgoing mail."
+        }), 500
 
 # Legacy alias — /api/questions/generate used by the synapseAI frontend
 @app.post("/api/questions/generate")

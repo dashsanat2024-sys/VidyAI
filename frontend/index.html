@@ -2478,22 +2478,24 @@
           </div>
 
           <div class="card" style="padding:24px; margin-bottom:24px; background:var(--paper); border:1px solid var(--warm);">
-            <div style="display:grid; grid-template-columns: 1.5fr 1fr; gap:20px; align-items:flex-end;">
+            <div style="display:grid; grid-template-columns: 2fr 1fr 0.8fr; gap:16px; align-items:flex-end;">
               <div class="fg" style="margin-bottom:0;">
-                <label style="font-size:12px; font-weight:700; color:var(--indigo); margin-bottom:8px;">Active Syllabus / Material</label>
+                <label style="font-size:12px; font-weight:700; color:var(--indigo); margin-bottom:8px;">1. Active Syllabus / Material</label>
                 <select class="fi" id="ip-syllabus-select">
                   <option value="">— Select Knowledge Source —</option>
                 </select>
               </div>
-              <div id="ip-stats" style="display:flex; gap:16px;">
-                <div class="card" style="flex:1; padding:12px; text-align:center; background:#fff;">
-                  <div style="font-size:10px; color:var(--muted); text-transform:uppercase;">Questions</div>
-                  <div style="font-size:20px; font-weight:800; color:var(--indigo);">10</div>
-                </div>
-                <div class="card" style="flex:1; padding:12px; text-align:center; background:#fff;">
-                  <div style="font-size:10px; color:var(--muted); text-transform:uppercase;">Pass Mark</div>
-                  <div style="font-size:20px; font-weight:800; color:var(--green);">40%</div>
-                </div>
+              <div class="fg" style="margin-bottom:0;">
+                <label style="font-size:12px; font-weight:700; color:var(--indigo); margin-bottom:8px;">2. Question Type</label>
+                <select class="fi" id="ip-type">
+                  <option value="both">Mixed (Obj + Subj)</option>
+                  <option value="objective">Objective Only</option>
+                  <option value="subjective">Subjective Only</option>
+                </select>
+              </div>
+              <div class="fg" style="margin-bottom:0;">
+                <label style="font-size:12px; font-weight:700; color:var(--indigo); margin-bottom:8px;">3. Number</label>
+                <input type="number" class="fi" id="ip-count" value="10" min="1" max="20" />
               </div>
             </div>
           </div>
@@ -6179,14 +6181,31 @@
       document.getElementById('ip-report-container').style.display = 'none';
       document.getElementById('btn-ip-generate').style.display = 'none';
 
+      const typeSelect = document.getElementById('ip-type').value;
+      const totalCount = parseInt(document.getElementById('ip-count').value) || 10;
+      
+      let objCount = 5;
+      let subjCount = 5;
+      
+      if (typeSelect === 'objective') {
+        objCount = totalCount;
+        subjCount = 0;
+      } else if (typeSelect === 'subjective') {
+        objCount = 0;
+        subjCount = totalCount;
+      } else {
+        objCount = Math.floor(totalCount / 2);
+        subjCount = totalCount - objCount;
+      }
+
       try {
         const res = await fetch(API_BASE + '/curriculum/practice/generate', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
           body: JSON.stringify({ 
             syllabus_id: sid, 
-            objective_count: 5, 
-            subjective_count: 5,
+            objective_count: objCount, 
+            subjective_count: subjCount,
             topic: 'Comprehensive knowledge check' 
           })
         });
@@ -6256,7 +6275,12 @@
         let studAns = '';
         if (q.type === 'objective') {
           const sel = document.querySelector(`input[name="ip-q${i}"]:checked`);
-          studAns = sel ? sel.value : '';
+          if (sel) {
+            // Send the full value of the option, not just the key (A, B, C, D)
+            studAns = q.options[sel.value] || sel.value;
+          } else {
+            studAns = '';
+          }
         } else {
           studAns = document.getElementById(`ip-q${i}-ans`).value.trim();
         }
@@ -6326,9 +6350,14 @@
     }
 
     async function emailIPReport() {
-      const email = prompt("Enter the email address to send the report to:", me.email || "");
-      if (!email) return;
+      const emailInp = document.getElementById('ip-report-email');
+      const email = emailInp ? emailInp.value.trim() : "";
+      
+      if (!email || !email.includes('@')) {
+        return showToast('Please enter a valid email address', 'warning');
+      }
 
+      busy('btn-ip-email-send', true, 'Sending...');
       try {
         const res = await fetch(API_BASE + '/curriculum/practice/email-report', {
           method: 'POST',
@@ -6336,10 +6365,15 @@
           body: JSON.stringify({ email, results: ipResults })
         });
         const data = await res.json();
-        if (data.success) showToast('Report emailed successfully!', 'success');
-        else throw new Error(data.error || 'Failed to email report');
+        if (data.success) {
+          showToast(data.message || 'Report emailed successfully!', 'success');
+        } else {
+          throw new Error(data.error || 'Failed to email report');
+        }
       } catch (e) {
         showToast(e.message, 'error');
+      } finally {
+        busy('btn-ip-email-send', false, '📧 Send Report');
       }
     }
 
@@ -6381,12 +6415,16 @@
                `).join('')}
              </div>
           </div>
-          <div style="display:flex; justify-content:space-between; align-items:center; gap:16px;">
-            <div style="display:flex; gap:12px;">
-              <button class="btn-outline" style="border-color:var(--indigo); color:var(--indigo);" onclick="printIPReport()">🖨️ Print Report</button>
-              <button class="btn-outline" style="border-color:var(--indigo); color:var(--indigo);" onclick="emailIPReport()">📧 Email Report</button>
+          <div style="display:grid; grid-template-columns: 1fr auto; gap:16px; align-items:flex-end; padding:24px; background:#f8fafc; border-radius:12px; border:1px solid #e2e8f0; margin-bottom:32px;">
+            <div class="fg" style="margin-bottom:0; text-align:left;">
+              <label style="font-size:12px; font-weight:700; color:var(--indigo); margin-bottom:8px;">Email Results</label>
+              <input type="email" class="fi" id="ip-report-email" placeholder="Enter your email" value="${(me && me.email) ? me.email : ''}" style="background:white;">
             </div>
-            <button class="btn-saffron" onclick="initInteractivePractice()" style="padding:16px 40px; font-weight:700;">Generate Next Set</button>
+            <button id="btn-ip-email-send" class="btn-indigo" onclick="emailIPReport()" style="padding:12px 24px; font-weight:700;">📧 Send Report</button>
+          </div>
+          <div style="display:flex; justify-content:space-between; align-items:center;">
+             <button class="btn-outline" style="border-color:var(--indigo); color:var(--indigo);" onclick="printIPReport()">🖨️ Print Detailed Report</button>
+             <button class="btn-saffron" onclick="initInteractivePractice()" style="padding:16px 40px; font-weight:700;">Generate Next Set →</button>
           </div>
         </div>
       `;
