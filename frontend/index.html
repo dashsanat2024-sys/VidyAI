@@ -2466,6 +2466,58 @@
         </div>
       </div>
 
+      <!-- Interactive Question Practice Panel -->
+      <div class="panel" id="panel-interactive-practice">
+        <div class="w-limit" style="max-width:900px;">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:24px;">
+            <div>
+              <h3 style="color:var(--indigo); margin-bottom:4px; font-family:var(--serif);">Question Practice</h3>
+              <p style="color:var(--muted); font-size:14px;">Select a syllabus and generate 10 interactive questions to test your knowledge.</p>
+            </div>
+            <button class="btn-saffron" id="btn-ip-generate" onclick="generateIPQuestions()" style="padding:12px 24px; font-weight:700;">Generate Questions →</button>
+          </div>
+
+          <div class="card" style="padding:24px; margin-bottom:24px; background:var(--paper); border:1px solid var(--warm);">
+            <div style="display:grid; grid-template-columns: 1.5fr 1fr; gap:20px; align-items:flex-end;">
+              <div class="fg" style="margin-bottom:0;">
+                <label style="font-size:12px; font-weight:700; color:var(--indigo); margin-bottom:8px;">Active Syllabus / Material</label>
+                <select class="fi" id="ip-syllabus-select" onchange="syncIPSyllabus()">
+                  <option value="">— Select Knowledge Source —</option>
+                </select>
+              </div>
+              <div id="ip-stats" style="display:flex; gap:16px;">
+                <div class="card" style="flex:1; padding:12px; text-align:center; background:#fff;">
+                  <div style="font-size:10px; color:var(--muted); text-transform:uppercase;">Questions</div>
+                  <div style="font-size:20px; font-weight:800; color:var(--indigo);">10</div>
+                </div>
+                <div class="card" style="flex:1; padding:12px; text-align:center; background:#fff;">
+                  <div style="font-size:10px; color:var(--muted); text-transform:uppercase;">Pass Mark</div>
+                  <div style="font-size:20px; font-weight:800; color:var(--green);">40%</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div id="ip-loading" style="display:none; text-align:center; padding:60px;">
+            <span class="spinner" style="width:40px; height:40px; color:var(--indigo);"></span>
+            <p style="margin-top:20px; color:var(--muted); font-weight:600;">AI is preparing your interactive practice set...</p>
+          </div>
+
+          <div id="ip-quiz-container" style="display:none;">
+            <div id="ip-questions-list" style="display:flex; flex-direction:column; gap:20px; margin-bottom:32px;">
+              <!-- Questions injected here -->
+            </div>
+            <div style="text-align:center; padding-top:20px; border-top:1px solid #eee;">
+              <button class="btn-submit saffron" style="padding:16px 60px; font-size:18px; font-weight:800;" onclick="evaluateEntireIPSession()">Submit for AI Evaluation →</button>
+            </div>
+          </div>
+
+          <div id="ip-report-container" style="display:none;">
+            <!-- Performance report injected here -->
+          </div>
+        </div>
+      </div>
+
       <!-- Indian Curriculum Hub Panel -->
       <div class="panel" id="panel-curriculum">
         <div class="w-limit">
@@ -2516,6 +2568,17 @@
 
           <div id="chapter-list">
             <!-- Chapters injected here -->
+          </div>
+        </div>
+      </div>
+
+      <div class="panel" id="panel-analytics">
+        <div class="w-limit">
+          <h3>Advanced Analytics</h3>
+          <p style="color:var(--muted); margin-bottom:24px;">Detailed performance insights and learning gap analysis across all courses.</p>
+          <div class="card" style="padding:60px; text-align:center; color:var(--muted);">
+            <div style="font-size:40px; margin-bottom:16px;">📈</div>
+            <p>Analytics dashboard is being populated with your latest data. Please check back in a moment.</p>
           </div>
         </div>
       </div>
@@ -2989,6 +3052,7 @@
       <!-- Cards -->
     </div>
   </div>
+  
 
   </main>
   </div>
@@ -5401,6 +5465,7 @@
         // Background refresh without blocking UI
         refreshData();
         populateChatSources();
+        if (typeof syncIPSyllabus === 'function') syncIPSyllabus();
       } catch (e) { 
         showToast(e.message, 'error'); 
         btn.disabled = false; btn.innerHTML = 'Load State/NCERT Book →';
@@ -5498,6 +5563,14 @@
           headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
           body: JSON.stringify({ syllabus_id: activeSyllabus.id, topic, subject })
         });
+
+        const contentType = res.headers.get("content-type");
+        if (!contentType || !contentType.includes("application/json")) {
+           const text = await res.text();
+           console.error("Non-JSON response:", text);
+           throw new Error(`Server returned HTML instead of JSON. Snippet: "${text.substring(0, 100)}..."`);
+        }
+
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || 'Server processing error');
 
@@ -5776,6 +5849,14 @@
           headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${tkn}` },
           body: JSON.stringify(bodyData)
         });
+
+        const contentType = res.headers.get("content-type");
+        if (!contentType || !contentType.includes("application/json")) {
+           const text = await res.text();
+           console.error("Non-JSON response (UK):", text);
+           throw new Error(`Server returned HTML instead of JSON. Snippet: "${text.substring(0, 100)}..."`);
+        }
+
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || 'Server error');
 
@@ -5858,11 +5939,12 @@
       window.speechSynthesis.cancel();
     }
 
-    const panels = ['panel-dashboard', 'panel-curriculum', 'panel-uk-curriculum', 'panel-chat', 'panel-qgen', 'panel-eval', 'panel-qmaster', 'panel-institute', 'panel-analytics', 'panel-syllabus', 'panel-practice'];
+    const panels = ['panel-dashboard', 'panel-curriculum', 'panel-uk-curriculum', 'panel-chat', 'panel-qgen', 'panel-eval', 'panel-qmaster', 'panel-institute', 'panel-analytics', 'panel-syllabus', 'panel-practice', 'panel-interactive-practice'];
     function showPanel(id) {
       if (id === 'panel-curriculum' && !window.currMetadata) initCurriculumHub();
       if (id === 'panel-qmaster') refreshBanks();
       if (id === 'panel-dashboard') updateDashUI();
+      if (id === 'panel-interactive-practice') initInteractivePractice();
 
       panels.forEach(p => {
         const el = document.getElementById(p);
@@ -5966,7 +6048,8 @@
             { id: 'panel-dashboard', icon: '⊞', label: 'Dashboard' },
             { id: 'panel-curriculum', icon: '🏛️', label: 'Curriculum Hub' },
             { id: 'panel-uk-curriculum', icon: '🇬🇧', label: 'UK Curriculum' },
-            { id: 'panel-chat', icon: '💬', label: 'AI Study Chat' }
+            { id: 'panel-chat', icon: '💬', label: 'AI Study Chat' },
+            { id: 'panel-interactive-practice', icon: '🎯', label: 'Question Practice' }
           ]
         });
       } else if (role === 'teacher' || role === 'tutor') {
@@ -5977,7 +6060,8 @@
             { id: 'panel-curriculum', icon: '🏛️', label: 'Curriculum Hub' },
             { id: 'panel-uk-curriculum', icon: '🇬🇧', label: 'UK Curriculum' },
             { id: 'panel-chat', icon: '💬', label: 'AI Study Chat' },
-            { id: 'panel-qmaster', icon: '🖋️', label: 'Question Master' }
+            { id: 'panel-qmaster', icon: '🖋️', label: 'Question Master' },
+            { id: 'panel-interactive-practice', icon: '🎯', label: 'Question Practice' }
           ]
         }, {
           label: 'Assessment',
@@ -6048,6 +6132,203 @@
         console.error("Refresh Data Error:", e);
       }
     }
+    // ── INTERACTIVE PRACTICE logic ──
+    let ipQuestions = [];
+    let ipResults = [];
+
+    function initInteractivePractice() {
+      console.log("Initializing Interactive Practice Panel");
+      syncIPSyllabus();
+      const ids = ['ip-quiz-container', 'ip-report-container', 'ip-loading'];
+      ids.forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.style.display = 'none';
+      });
+      const btn = document.getElementById('btn-ip-generate');
+      if (btn) btn.style.display = 'block';
+    }
+
+    function syncIPSyllabus() {
+      const sel = document.getElementById('ip-syllabus-select');
+      if (!sel) return;
+      
+      let options = syllabi.map(s => `<option value="${s.id}" ${activeSyllabus?.id === s.id ? 'selected' : ''}>${s.name}</option>`);
+      
+      // Inject curriculum hub syllabus if active and not already in list
+      if (activeSyllabus && !syllabi.find(s => s.id === activeSyllabus.id)) {
+        options.unshift(`<option value="${activeSyllabus.id}" ${activeSyllabus?.id === activeSyllabus.id ? 'selected' : ''}>${activeSyllabus.name} (Active)</option>`);
+      }
+      if (ukActiveSyllabus && !syllabi.find(s => s.id === ukActiveSyllabus.id)) {
+        options.unshift(`<option value="${ukActiveSyllabus.id}" ${activeSyllabus?.id === ukActiveSyllabus.id ? 'selected' : ''}>${ukActiveSyllabus.name} (UK)</option>`);
+      }
+
+      sel.innerHTML = '<option value="">— Select Knowledge Source —</option>' + options.join('');
+    }
+
+    async function generateIPQuestions() {
+      const sid = document.getElementById('ip-syllabus-select').value;
+      if (!sid) return showToast('Please select a syllabus first', 'warning');
+
+      document.getElementById('ip-loading').style.display = 'block';
+      document.getElementById('ip-quiz-container').style.display = 'none';
+      document.getElementById('ip-report-container').style.display = 'none';
+      document.getElementById('btn-ip-generate').style.display = 'none';
+
+      try {
+        const res = await fetch(API_BASE + '/curriculum/practice/generate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+          body: JSON.stringify({ 
+            syllabus_id: sid, 
+            objective_count: 5, 
+            subjective_count: 5,
+            topic: 'Comprehensive knowledge check' 
+          })
+        });
+
+        const contentType = res.headers.get("content-type");
+        if (!contentType || !contentType.includes("application/json")) {
+           const text = await res.text();
+           console.error("Non-JSON response:", text);
+           throw new Error(`Server returned HTML instead of JSON. Snippet: "${text.substring(0, 100)}..."`);
+        }
+
+        const data = await res.json();
+        if (data.error) throw new Error(data.error);
+
+        ipQuestions = data;
+        renderIPQuestions();
+        document.getElementById('ip-loading').style.display = 'none';
+        document.getElementById('ip-quiz-container').style.display = 'block';
+      } catch (e) {
+        showToast(e.message, 'error');
+        document.getElementById('ip-loading').style.display = 'none';
+        document.getElementById('btn-ip-generate').style.display = 'block';
+      }
+    }
+
+    function renderIPQuestions() {
+      const list = document.getElementById('ip-questions-list');
+      list.innerHTML = ipQuestions.map((q, i) => `
+        <div class="card" style="padding:24px; border-left:4px solid var(--indigo);">
+          <div style="font-weight:700; margin-bottom:12px; display:flex; gap:12px;">
+            <span style="background:var(--indigo); color:white; width:24px; height:24px; display:flex; align-items:center; justify-content:center; border-radius:50%; font-size:12px;">${i+1}</span>
+            <span style="flex:1;">${q.question}</span>
+          </div>
+          ${q.type === 'objective' ? `
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+              ${Object.entries(q.options || {}).map(([k, v]) => `
+                <label class="btn-outline" style="display:flex; align-items:center; gap:12px; padding:12px; text-align:left; cursor:pointer;" id="label-q${i}-${k}">
+                  <input type="radio" name="ip-q${i}" value="${k}" style="accent-color:var(--indigo);" onchange="highlightIPOption(${i}, '${k}')">
+                  <span><strong>${k})</strong> ${v}</span>
+                </label>
+              `).join('')}
+            </div>
+          ` : `
+            <textarea class="fi" id="ip-q${i}-ans" placeholder="Type your answer here..." style="min-height:100px;"></textarea>
+          `}
+        </div>
+      `).join('');
+    }
+
+    function highlightIPOption(qIdx, opt) {
+      // Small UI polish
+      ['A','B','C','D'].forEach(k => {
+        const el = document.getElementById(`label-q${qIdx}-${k}`);
+        if (el) el.style.background = (k === opt) ? 'var(--indigo4)' : 'white';
+        if (el) el.style.borderColor = (k === opt) ? 'var(--indigo)' : 'var(--warm)';
+      });
+    }
+
+    async function evaluateEntireIPSession() {
+      const results = [];
+      const btn = event.target;
+      btn.disabled = true;
+      btn.innerHTML = '<span class="spinner" style="width:20px; height:20px;"></span> Evaluating...';
+
+      for(let i=0; i<ipQuestions.length; i++) {
+        const q = ipQuestions[i];
+        let studAns = '';
+        if (q.type === 'objective') {
+          const sel = document.querySelector(`input[name="ip-q${i}"]:checked`);
+          studAns = sel ? sel.value : '';
+        } else {
+          studAns = document.getElementById(`ip-q${i}-ans`).value.trim();
+        }
+
+        if (!studAns) {
+          showToast(`Please answer question ${i+1}`, 'warning');
+          btn.disabled = false;
+          btn.innerHTML = 'Submit for AI Evaluation →';
+          return;
+        }
+
+        try {
+          const res = await fetch(API_BASE + '/curriculum/practice/evaluate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+            body: JSON.stringify({
+              question: q.question,
+              model_answer: q.answer,
+              student_answer: studAns
+            })
+          });
+          const evalRes = await res.json();
+          results.push({ ...q, student_answer: studAns, evaluation: evalRes });
+        } catch(e) {
+          results.push({ ...q, student_answer: studAns, evaluation: { score: 0, feedback: 'Evaluation failed', is_correct: false } });
+        }
+      }
+
+      renderIPReport(results);
+      btn.disabled = false;
+      btn.innerHTML = 'Submit for AI Evaluation →';
+    }
+
+    function renderIPReport(results) {
+      const totalPossible = results.length * 10;
+      const totalAwarded = results.reduce((sum, r) => sum + (r.evaluation.score || 0), 0);
+      const percentage = Math.round((totalAwarded / totalPossible) * 100);
+      const pass = percentage >= 40;
+      const grade = percentage >= 90 ? 'A+' : percentage >= 80 ? 'A' : percentage >= 70 ? 'B' : percentage >= 60 ? 'C' : percentage >= 50 ? 'D' : 'F';
+
+      document.getElementById('ip-quiz-container').style.display = 'none';
+      const container = document.getElementById('ip-report-container');
+      container.style.display = 'block';
+
+      container.innerHTML = `
+        <div class="card glass" style="padding:40px; text-align:center; border:2px solid ${pass ? 'var(--green)' : 'var(--red)'};">
+          <div style="font-size:48px; margin-bottom:16px;">${pass ? '🎉' : '📚'}</div>
+          <h2 style="font-family:var(--serif); margin-bottom:8px;">${pass ? 'You Passed!' : 'Need More Practice'}</h2>
+          <div style="font-size:64px; font-weight:900; color:${pass ? 'var(--green)' : 'var(--red)'}; margin:20px 0;">${grade}</div>
+          <div style="display:flex; justify-content:center; gap:24px; margin-bottom:32px;">
+            <div class="stat-card" style="min-width:120px;">
+              <div class="stat-label">Score</div>
+              <div class="stat-val">${percentage}%</div>
+            </div>
+            <div class="stat-card" style="min-width:120px;">
+              <div class="stat-label">Marks</div>
+              <div class="stat-val">${totalAwarded}/${totalPossible}</div>
+            </div>
+          </div>
+          <div style="text-align:left; background:white; padding:24px; border-radius:12px; margin-bottom:32px; border:1px solid #e2e8f0;">
+             <h4 style="margin-bottom:16px;">AI Detailed Feedback</h4>
+             <div style="display:flex; flex-direction:column; gap:16px;">
+               ${results.map((r, i) => `
+                 <div style="padding-bottom:12px; border-bottom:1px solid #f1f5f9;">
+                    <div style="font-weight:700; font-size:13px; margin-bottom:4px;">Q${i+1}: ${r.question}</div>
+                    <div style="font-size:12px; color:${r.evaluation.is_correct ? 'var(--green)' : 'var(--red)'}; font-weight:700;">Score: ${r.evaluation.score}/10 — ${r.evaluation.feedback}</div>
+                    ${r.evaluation.improvements ? `<div style="font-size:12px; color:var(--muted); font-style:italic; margin-top:4px;">💡 Tipp: ${r.evaluation.improvements}</div>` : ''}
+                 </div>
+               `).join('')}
+             </div>
+          </div>
+          <button class="btn-saffron" onclick="initInteractivePractice()" style="padding:16px 40px; font-weight:700;">Generate Next Set</button>
+        </div>
+      `;
+      showToast(pass ? 'Congratulations! You passed.' : 'Keep studying, you can do it!', pass ? 'success' : 'info');
+    }
+
 
     function setActiveSyllabus(id) {
       const found = syllabi.find(s => s.id === id);
@@ -6079,6 +6360,9 @@
       }
 
       sel.innerHTML = '<option value="">— Select Knowledge Source —</option>' + options.join('');
+      
+      const ipSel = document.getElementById('ip-syllabus-select');
+      if (ipSel) ipSel.innerHTML = '<option value="">— Select Knowledge Source —</option>' + options.join('');
 
 
       const mgrList = document.getElementById('syllabus-manager-list');

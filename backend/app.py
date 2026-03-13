@@ -410,7 +410,12 @@ JSON array only:
 
 MIXED_PRACTICE_GEN_PROMPT = """
 You are a high-quality academic practice generator.
-Generate exactly {count} distinct practice questions based on the provided context and topic.
+Generate exactly {total_count} distinct practice questions based on the provided context and topic.
+
+Rules:
+- objective_count: {objective_count}
+- subjective_count: {subjective_count}
+- difficulty: {difficulty}
 
 IMPORTANT: 
 - If the provided Context is short or minimal, use your extensive general knowledge about the specified Syllabus and Topic to create high-quality, relevant practice questions.
@@ -610,6 +615,39 @@ def db_log(db, uid, action, detail):
     db["activity"].insert(0, {"id":uuid.uuid4().hex[:6],"user_id":uid,"action":action,"detail":detail,"ts":_now()})
     db["activity"] = db["activity"][:200]
 
+@app.before_request
+def log_request_info():
+    if request.path.startswith("/api/"):
+        print(f"[DEBUG API] {request.method} {request.path}")
+
+@app.errorhandler(404)
+def handle_404(e):
+    if request.path.startswith("/api/"):
+        return jsonify({"error": "API route not found", "path": request.path}), 404
+    return send_from_directory(app.static_folder, 'index.html')
+
+@app.errorhandler(500)
+@app.errorhandler(Exception)
+def handle_exception(e):
+    import traceback
+    err_trace = traceback.format_exc()
+    print(f"[CRITICAL ERROR] {e}\n{err_trace}")
+    # Write to a file we can read later
+    try:
+        with open("/Users/sanat/Downloads/eduMind/synapseAI/backend_error.log", "a") as f:
+            f.write(f"\n[{datetime.now()}] {request.method} {request.path}\n{e}\n{err_trace}\n")
+    except: pass
+    
+    if request.path.startswith("/api/"):
+        return jsonify({"error": "Internal Server Error", "message": str(e)}), 500
+    return f"<h1>Internal Server Error</h1><p>{e}</p>", 500
+
+@app.errorhandler(405)
+def handle_405(e):
+    if request.path.startswith("/api/"):
+        return jsonify({"error": "Method Not Allowed", "method": request.method, "path": request.path}), 405
+    return f"<h1>405 Method Not Allowed</h1>", 405
+
 # ══════════════════════════════════════════════════════════════════════════
 #  AUTH DECORATOR
 # ══════════════════════════════════════════════════════════════════════════
@@ -617,23 +655,27 @@ def auth(roles=None):
     def dec(fn):
         @wraps(fn)
         def wrap(*a, **kw):
-            tok = request.headers.get("Authorization","").replace("Bearer ","")
-            uid = TOKENS.get(tok)
-            if not uid and MONGO_OK:
-                session = mongo_db[M_SESSIONS].find_one({"token": tok})
-                if session:
-                    uid = session["user_id"]
-                    TOKENS[tok] = uid # Cache back to memory
-            
-            if not uid:
-                print(f"[AUTH DEBUG] Token rejected: {tok[:6]}... (Reason: Token not found in memory or MongoDB)")
-                return jsonify({"error":"Unauthorized"}), 401
-            
-            db  = db_load()
-            u   = next((x for x in db["users"] if x["id"]==uid), None)
-            if not u:
-                print(f"[AUTH DEBUG] Token valid but user {uid} not in DB!")
-                return jsonify({"error":"User not found"}), 401
+            try:
+                tok = request.headers.get("Authorization","").replace("Bearer ","")
+                uid = TOKENS.get(tok)
+                if not uid and MONGO_OK:
+                    session = mongo_db[M_SESSIONS].find_one({"token": tok})
+                    if session:
+                        uid = session["user_id"]
+                        TOKENS[tok] = uid # Cache back to memory
+                
+                if not uid:
+                    print(f"[AUTH DEBUG] Token rejected: {tok[:6]}... (Reason: Token not found in memory or MongoDB)")
+                    return jsonify({"error":"Unauthorized"}), 401
+                
+                db  = db_load()
+                u   = next((x for x in db["users"] if x["id"]==uid), None)
+                if not u:
+                    print(f"[AUTH DEBUG] Token valid but user {uid} not in DB!")
+                    return jsonify({"error":"User not found"}), 401
+            except Exception as e:
+                print(f"[AUTH ERROR] {e}")
+                return jsonify({"error": f"Auth system error: {str(e)}"}), 500
             
             if u.get("status")=="suspended": 
                 return jsonify({"error":"Suspended"}), 403
@@ -1503,9 +1545,9 @@ def generate_flashcards():
     except Exception as e:
         # Fallback for mock/demo
         if is_regional:
-            prompt = REGIONAL_FLASHCARDS_PROMPT.format(language=subject.title(), context=f"Detailed educational content for {topic}")
+            prompt = REGIONAL_FLASHCARDS_PROMPT.replace("{language}", subject.title()).replace("{context}", f"Detailed educational content for {topic}")
         else:
-            prompt = FLASHCARDS_PROMPT.format(context=f"Detailed educational content for {topic}")
+            prompt = FLASHCARDS_PROMPT.replace("{context}", f"Detailed educational content for {topic}")
             
         flashcards = _llm_json(prompt)
         return jsonify({"flashcards": flashcards})
@@ -1699,21 +1741,22 @@ def generate_questions():
 #  PRACTICE MODE ENDPOINTS
 # ══════════════════════════════════════════════════════════════════════════
 
-@app.post("/api/curriculum/practice/generate")
+@app.route("/api/curriculum/practice/generate", methods=["POST"])
 @auth()
 def generate_practice():
-    data    = request.json or {}
-    sid     = data.get("syllabus_id", "").strip()
-    topic   = data.get("topic", "the material")
-    obj_count  = int(data.get("objective_count", 5))
-    subj_count = int(data.get("subjective_count", 5))
-    diff    = data.get("difficulty", "medium").lower()
-    total   = obj_count + subj_count
-
-    if not sid or sid not in syllabi_registry:
-        return jsonify({"error": "Select a valid syllabus first"}), 400
-
     try:
+        print(f"[DEBUG] generate_practice hit with method: {request.method}")
+        data    = request.json or {}
+        sid     = data.get("syllabus_id", "").strip()
+        topic   = data.get("topic", "the material")
+        obj_count  = int(data.get("objective_count", 5))
+        subj_count = int(data.get("subjective_count", 5))
+        diff    = data.get("difficulty", "medium").lower()
+        total   = obj_count + subj_count
+
+        if not sid or sid not in syllabi_registry:
+            print(f"[DEBUG] syllabus {sid} not in registry")
+            return jsonify({"error": "Select a valid syllabus first"}), 400
         vs  = _load_vs(sid)
         ctx = ""
         if vs:
@@ -2590,4 +2633,4 @@ if __name__ == "__main__":
         print("ℹ️  No existing syllabi found. Upload files via the UI.")
     from flask import cli
     cli.show_server_banner = lambda *args: None
-    app.run(host="0.0.0.0", port=port, debug=False)
+    app.run(host="0.0.0.0", port=port, debug=True)
