@@ -2569,7 +2569,7 @@
             <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:24px; background:#f0f4ff; padding:20px; border-radius:16px; border:1px solid #c7d2fe;">
               <div>
                 <h4 id="uk-book-title" style="color:#003082; margin-bottom:4px;">Mathematics - Year 5</h4>
-                <div style="display:flex; align-items:center; gap:6px; font-size:12px; color:var(--green); font-weight:700;">
+            <div style="display:flex; align-items:center; gap:6px; font-size:12px; color:var(--green); font-weight:700;">
                   <span style="display:inline-block; width:8px; height:8px; background:var(--green); border-radius:50%;"></span>
                   UK Curriculum Loaded &amp; Indexed
                 </div>
@@ -2584,15 +2584,15 @@
       <!-- AI Study Chat Panel -->
       <div class="panel" id="panel-chat">
         <div class="chat-side">
-          <div style="padding:16px; border-bottom:1px solid #e2e8f0;">
-            <div class="stat-label" style="margin-bottom:12px;">Active Source</div>
+            <div class="stat-label" style="margin-bottom:12px;">Syllabus Selection</div>
             <select class="fi" id="chat-source-selector" style="margin-bottom:16px;" onchange="syncChatSource()">
-              <option value="">— Use All Sources —</option>
+              <option value="">— Select Material —</option>
             </select>
-
-            <div class="stat-label" style="margin-bottom:12px;">Knowledge Sources</div>
-            <div id="chat-syllabi-list" style="display:flex;flex-direction:column;gap:8px;">
-              <!-- Syllabi cards -->
+            
+            <div style="background:var(--indigo3); padding:16px; border-radius:12px; margin-top:16px;">
+               <div style="font-size:11px; font-weight:700; color:var(--indigo); margin-bottom:8px;">STUDENT TOOLS</div>
+               <button class="btn-outline" style="width:100%; font-size:12px; padding:8px; background:#fff; margin-bottom:8px;" onclick="clearDoubts()">🤔 Doubt Clearing Helper</button>
+               <button class="btn-outline" style="width:100%; font-size:12px; padding:8px; background:#fff;" onclick="showTutorSupport()">🙋 Ask a Human Tutor</button>
             </div>
           </div>
           <div style="padding:16px; margin-top:auto;">
@@ -2607,8 +2607,7 @@
         <div class="chat-main">
           <div class="chat-messages" id="chat-messages">
             <div class="msg bot">
-              <div class="msg-bubble">Hello! I'm your AI Study Assistant. Upload a document to start or select an
-                existing syllabus from the sidebar.</div>
+              <div class="msg-bubble">Hello! I'm your AI Study Assistant. Select a syllabus from the sidebar to start chatting about your materials.</div>
             </div>
           </div>
           <div id="chat-typing" style="display:none; padding:10px 24px; font-size:12px; color:var(--muted);">AI is
@@ -2879,23 +2878,113 @@
         </div>
       </div>
 
-      <!-- Analytics Panel -->
-      <div class="panel" id="panel-analytics">
-        <h3>Class Performance Analytics</h3>
-        <p style="color:var(--muted); margin-bottom:32px;">Identify learning gaps and classroom performance trends.</p>
+      <div class="panel" id="panel-practice">
+        <div id="practice-config-view">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:32px;">
+            <div>
+              <h3 id="practice-main-title">AI Practice Centre</h3>
+              <p style="color:var(--muted);">Configure your AI-powered practice session.</p>
+            </div>
+            <button class="btn-outline" onclick="showPanel('panel-dashboard')">← Back to Dashboard</button>
+          </div>
 
-        <div class="fg" style="max-width:400px; margin-bottom:32px;">
-          <label>Select Exam to Analyze</label>
-          <select class="fi" id="analytics-exam-select" onchange="loadAnalytics(this.value)">
-            <option value="">— Select Exam —</option>
-          </select>
+          <div class="card w-limit" style="padding:24px; margin-bottom:24px;">
+            <div class="grid" style="grid-template-columns:1fr 1fr; gap:20px; margin-bottom:24px;">
+              <div class="fg">
+                <label>Syllabus / Material</label>
+                <select class="fi" id="practice-syllabus-select" onchange="loadPracticeChapters(this.value)"></select>
+              </div>
+              <div class="fg">
+                <label>Topic / Chapter Focus</label>
+                <input type="text" class="fi" id="practice-topic" placeholder="e.g. Molecular Biology - Unit 1">
+              </div>
+            </div>
+
+            <div style="background:var(--indigo3); padding:20px; border-radius:16px; margin-bottom:24px;">
+               <div style="font-size:12px; font-weight:700; color:var(--indigo); margin-bottom:16px; display:flex; align-items:center; gap:8px;">
+                 <span>⚙️</span> Practice Configuration
+               </div>
+               <div class="grid" style="grid-template-columns:1fr 1fr 1fr; gap:16px;">
+                 <div class="fg">
+                   <label>Objectives (MCQ)</label>
+                   <input type="number" class="fi" id="practice-obj-count" value="5">
+                 </div>
+                 <div class="fg">
+                   <label>Subjective (Theory)</label>
+                   <input type="number" class="fi" id="practice-subj-count" value="2">
+                 </div>
+                 <div class="fg">
+                   <label>Difficulty</label>
+                   <select class="fi" id="practice-diff">
+                     <option value="easy">Easy</option>
+                     <option value="medium" selected>Medium</option>
+                     <option value="hard">Hard</option>
+                   </select>
+                 </div>
+               </div>
+            </div>
+
+            <button class="btn-submit saffron" style="width:100%; padding:16px; font-weight:700; font-size:16px;" onclick="startPracticeSession()">🚀 Start Practice Session</button>
+          </div>
         </div>
 
-        <div id="analytics-content">
-          <div class="card" style="padding:60px; text-align:center;">
-            <span style="font-size:32px;">📊</span>
-            <p style="color:var(--muted); margin-top:16px;">Select an exam above to view performance metrics.</p>
-          </div>
+        <div id="practice-session-view" style="display:none;">
+           <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:24px;">
+              <h4 id="practice-session-title" style="color:var(--indigo);">Practice Session</h4>
+              <div style="font-weight:700; color:var(--muted);" id="practice-progress-text">Question 1/1</div>
+           </div>
+           
+           <div id="practice-question-area">
+             <!-- Active question card -->
+           </div>
+
+           <div style="margin-top:24px; display:flex; justify-content:space-between; align-items:center;">
+             <button class="btn-outline" onclick="exitPractice()">Cancel Session</button>
+             <div style="display:flex; gap:12px;">
+                <button class="btn-submit indigo" id="practice-submit-btn" onclick="submitPracticeAnswer()">Submit Answer</button>
+                <button class="btn-submit saffron" id="practice-next-btn" style="display:none;" onclick="nextPracticeQuestion()">Next Question →</button>
+             </div>
+           </div>
+        </div>
+
+        <div id="practice-report-view" style="display:none;">
+           <div style="text-align:center; margin-bottom:32px;">
+              <div style="font-size:48px; margin-bottom:12px;">📊</div>
+              <h3 style="color:var(--indigo);">Performance Report</h3>
+              <p style="color:var(--muted);">AI-generated analysis of your practice session.</p>
+           </div>
+
+           <div class="grid" style="grid-template-columns:1fr 1fr; gap:24px; margin-bottom:32px;">
+              <div class="card" style="padding:24px; text-align:center;">
+                 <div style="font-size:12px; font-weight:700; color:var(--muted); text-transform:uppercase;">Score</div>
+                 <div style="font-size:42px; font-weight:800; color:var(--indigo);" id="report-score">0/0</div>
+                 <div style="font-size:14px; font-weight:600; color:var(--green);" id="report-percentage">0%</div>
+              </div>
+              <div class="card" style="padding:24px; text-align:center;">
+                 <div style="font-size:12px; font-weight:700; color:var(--muted); text-transform:uppercase;">Predicted Grade</div>
+                 <div style="font-size:42px; font-weight:800; color:var(--saffron);" id="report-grade">-</div>
+              </div>
+           </div>
+
+           <div class="card" style="padding:24px; margin-bottom:24px; border-left:4px solid var(--indigo);">
+              <h4 style="margin-bottom:12px;">Overall Feedback</h4>
+              <p id="report-feedback" style="line-height:1.6; color:var(--text);"></p>
+           </div>
+
+           <div class="card" style="padding:24px; margin-bottom:24px;">
+              <h4 style="margin-bottom:16px;">Learning Gaps & Recommendations</h4>
+              <div id="report-gaps" style="display:flex; flex-direction:column; gap:16px;">
+                 <!-- Gaps appear here -->
+              </div>
+           </div>
+
+           <div style="display:flex; justify-content:space-between; align-items:center; margin-top:40px; border-top:1px solid #eee; padding-top:24px;">
+              <div style="display:flex; gap:12px;">
+                 <button class="btn-outline" style="border-color:var(--indigo); color:var(--indigo);" onclick="printPracticeResults()">🖨️ Print Report</button>
+                 <button class="btn-outline" style="border-color:var(--green); color:var(--green);" onclick="downloadPracticeResults()">📥 Download PDF</button>
+              </div>
+              <button class="btn-saffron" style="padding:16px 40px;" onclick="showPanel('panel-dashboard')">Back to Dashboard</button>
+           </div>
         </div>
       </div>
   </div>
@@ -5290,7 +5379,6 @@
         document.getElementById('curriculum-bookshelf').style.display = 'block';
         window.currentBookPDF = data.pdf_url; 
 
-        const list = document.getElementById('chapter-list');
         list.innerHTML = data.chapters.map(chap => {
           const safeChap = chap.replace(/'/g, "\\'");
           return `
@@ -5302,7 +5390,7 @@
                     <div class="chapter-actions">
                         <button class="action-pill primary" onclick="handleCurriculumAction('${safeChap}', 'summarise')">Summarise</button>
                         <button class="action-pill" onclick="handleCurriculumAction('${safeChap}', 'flashcards')">Flashcards</button>
-                        <button class="action-pill" onclick="handleCurriculumAction('${safeChap}', 'generate_questions')">Generate Qs</button>
+                        <button class="action-pill" style="background:var(--indigo); color:#fff; border-color:var(--indigo);" onclick="handleCurriculumAction('${safeChap}', 'practice')">Practice Qs</button>
                         <button class="action-pill" onclick="handleCurriculumAction('${safeChap}', 'explain')">🔊 Listen</button>
                         <button class="action-pill" style="background:#e0f2fe; color:#0369a1; border-color:#bae6fd;" onclick="handleCurriculumAction('${safeChap}', 'video')">📹 Video Explanation</button>
                     </div>
@@ -5365,22 +5453,22 @@
         showPanel('panel-chat');
         return;
       }
-      if (action === 'generate_questions') {
+      if (action === 'generate_questions' || action === 'practice') {
         const matchingSyllabus = syllabi.find(s => s.id === activeSyllabus.id);
-        if (matchingSyllabus) activeSyllabus = matchingSyllabus; // Only update if found in user uploads
+        if (matchingSyllabus) activeSyllabus = matchingSyllabus;
         
-        // --- Reset QG State ---
-        document.getElementById('qg-preview').style.display = 'none';
-        document.getElementById('qg-config').style.display = 'block';
-        document.getElementById('qg-topic').value = '';
-        document.getElementById('qg-step1').classList.add('active');
-        document.getElementById('qg-step2').classList.remove('active');
-        document.getElementById('qg-step3').classList.remove('active');
-        document.getElementById('qg-chapters').innerHTML = '<div style="font-size:13px;color:var(--muted);padding:10px;">Select a syllabus to view chapters</div>';
+        showPanel('panel-practice');
+        document.getElementById('practice-config-view').style.display = 'block';
+        document.getElementById('practice-session-view').style.display = 'none';
+        document.getElementById('practice-report-view').style.display = 'none';
         
-        showPanel('panel-qgen');
-        document.getElementById('qg-syllabus-select').value = activeSyllabus.id;
-        loadSyllabusChapters(activeSyllabus.id);
+        // Sync Syllabus Selection
+        const sel = document.getElementById('practice-syllabus-select');
+        sel.innerHTML = syllabi.map(s => `<option value="${s.id}">${s.name}</option>`).join('');
+        sel.value = activeSyllabus.id;
+        
+        document.getElementById('practice-topic').value = topic || '';
+        document.getElementById('practice-main-title').textContent = `Practice: ${activeSyllabus.name}`;
         return;
       }
       if (action === 'video') { startVideoMode(topic); return; }
@@ -5647,28 +5735,9 @@
     async function ukHandleAction(topic, action) {
       if (!ukActiveSyllabus) { showToast('Please load a UK Curriculum book first.', 'warning'); return; }
 
-      // Practice mode
-      if (action === 'practice') {
-        openPractice(topic);
-        return;
-      }
-
-      // Video and question generation — delegate to existing functions
       if (action === 'video') { startVideoMode(topic); return; }
-      if (action === 'generate_questions') {
-        activeSyllabus = ukActiveSyllabus;  
-        // Reset and Sync QG Panel
-        document.getElementById('qg-preview').style.display = 'none';
-        document.getElementById('qg-config').style.display = 'block';
-        document.getElementById('qg-topic').value = '';
-        document.getElementById('qg-step1').classList.add('active');
-        document.getElementById('qg-step2').classList.remove('active');
-        document.getElementById('qg-step3').classList.remove('active');
-        
-        showPanel('panel-qgen');
-        // renderSyllabiLists() is called inside showPanel, so the value will exist
-        document.getElementById('qg-syllabus-select').value = activeSyllabus.id;
-        loadSyllabusChapters(activeSyllabus.id);
+      if (action === 'generate_questions' || action === 'practice') {
+        openPracticeConfig(ukActiveSyllabus.id, topic);
         return;
       }
 
@@ -5778,7 +5847,7 @@
       if (window.speechSynthesis) window.speechSynthesis.cancel();
     }
 
-    const panels = ['panel-dashboard', 'panel-curriculum', 'panel-uk-curriculum', 'panel-chat', 'panel-qgen', 'panel-eval', 'panel-qmaster', 'panel-institute', 'panel-analytics', 'panel-syllabus'];
+    const panels = ['panel-dashboard', 'panel-curriculum', 'panel-uk-curriculum', 'panel-chat', 'panel-qgen', 'panel-eval', 'panel-qmaster', 'panel-institute', 'panel-analytics', 'panel-syllabus', 'panel-practice'];
     function showPanel(id) {
       if (id === 'panel-curriculum' && !window.currMetadata) initCurriculumHub();
       if (id === 'panel-qmaster') refreshBanks();
@@ -6853,171 +6922,282 @@
       }
     }
 
+    // =========================================================================
+    // STUDENT PRACTICE LOGIC
+    // =========================================================================
+    let practiceSession = { questions: [], currentIndex: 0, attempts: [] };
 
-    // ── PRACTICE MODE LOGIC ──
-    let practiceQuestions = [];
-    let currentPracticeIndex = 0;
-
-    async function openPractice(topic) {
-      const overlay = document.getElementById('practice-overlay');
-      const label = document.getElementById('practice-topic-label');
-      const content = document.getElementById('practice-content');
+    function openPracticeConfig(sid, topic) {
+      showPanel('panel-practice');
+      document.getElementById('practice-config-view').style.display = 'block';
+      document.getElementById('practice-session-view').style.display = 'none';
+      document.getElementById('practice-report-view').style.display = 'none';
       
-      label.textContent = "Topic: " + topic;
-      overlay.style.display = 'flex';
-      content.innerHTML = '<div style="text-align:center; padding:40px;"><span class="spinner"></span><p>AI is preparing your practice questions...</p></div>';
+      const sel = document.getElementById('practice-syllabus-select');
+      sel.innerHTML = syllabi.map(s => `<option value="${s.id}">${s.name}</option>`).join('');
+      sel.value = sid;
+      
+      document.getElementById('practice-topic').value = topic || '';
+      const sName = syllabi.find(s=>s.id === sid)?.name || 'Material';
+      document.getElementById('practice-main-title').textContent = `Practice: ${sName}`;
+    }
 
+    async function startPracticeSession() {
+      const sid = document.getElementById('practice-syllabus-select').value;
+      const topic = document.getElementById('practice-topic').value;
+      const objCount = document.getElementById('practice-obj-count').value;
+      const subjCount = document.getElementById('practice-subj-count').value;
+      const diff = document.getElementById('practice-diff').value;
+
+      if (!sid) return showToast('Select a syllabus first', 'warning');
+
+      showToast('Generating practice questions...', 'info');
+      
       try {
-        const sid = ukActiveSyllabus?.id;
-        const res = await fetch(`${API_BASE}/curriculum/practice/generate`, {
+        const res = await fetch(API_BASE + '/curriculum/practice/generate', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('vidyai_token')}` },
-          body: JSON.stringify({ syllabus_id: sid, topic: topic, count: 10 })
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+          body: JSON.stringify({ 
+            syllabus_id: sid, 
+            topic, 
+            objective_count: objCount, 
+            subjective_count: subjCount, 
+            difficulty: diff 
+          })
         });
         const data = await res.json();
-        if (data.error || !Array.isArray(data)) {
-          throw new Error(data.error || "Multiple questions could not be generated for this topic.");
-        }
-        practiceQuestions = data;
-        currentPracticeIndex = 0;
-        renderPracticeQuestion();
+        if (!res.ok) throw new Error(data.error);
+
+        practiceSession = { questions: data, currentIndex: 0, attempts: [] };
+        renderPracticeStep();
+        
+        document.getElementById('practice-config-view').style.display = 'none';
+        document.getElementById('practice-session-view').style.display = 'block';
       } catch (e) {
-        showToast(e.message || "Failed to load practice questions", "error");
-        closePractice();
+        showToast(e.message, 'error');
       }
     }
 
-    function renderPracticeQuestion() {
-      const content = document.getElementById('practice-content');
-      if (!practiceQuestions || !practiceQuestions.length) {
-         content.innerHTML = `<div style="text-align:center; padding:40px;"><p>No questions could be generated. Try a different topic.</p><button class="btn-submit" onclick="closePractice()">Close</button></div>`;
-         return;
-      }
+    function renderPracticeStep() {
+      const q = practiceSession.questions[practiceSession.currentIndex];
+      const area = document.getElementById('practice-question-area');
+      const prog = document.getElementById('practice-progress-text');
       
-      const q = practiceQuestions[currentPracticeIndex];
-      if (!q) {
-        content.innerHTML = `
-          <div style="text-align:center; padding:40px;">
-            <div style="font-size:48px; margin-bottom:16px;">🎊</div>
-            <h2 style="color:var(--indigo);">Practice Complete!</h2>
-            <p style="color:var(--muted); margin-bottom:24px;">You've successfully finished this 10-question practice session. Great job!</p>
-            <button class="btn-submit" style="background:var(--indigo); color:#fff; padding:12px 32px;" onclick="closePractice()">Finish Practice</button>
-          </div>
-        `;
-        return;
-      }
-
+      prog.textContent = `Question ${practiceSession.currentIndex + 1} of ${practiceSession.questions.length}`;
+      
       let optionsHtml = '';
-      if (q.options && typeof q.options === 'object') {
-        optionsHtml = '<div style="background:var(--indigo3); padding:16px; border-radius:12px; margin-bottom:20px; font-size:14px; border:1px solid #c7d2fe;">';
+      if (q.type === 'objective' && q.options) {
+        optionsHtml = '<div style="margin-top:16px; display:grid; grid-template-columns:1fr 1fr; gap:12px;">';
         for (const [key, val] of Object.entries(q.options)) {
-          optionsHtml += `<div style="margin-bottom:8px;"><strong>${key}:</strong> ${val}</div>`;
+          optionsHtml += `
+            <label style="display:flex; align-items:center; gap:10px; padding:12px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px; cursor:pointer;">
+              <input type="radio" name="practice-ans" value="${key}">
+              <span><strong>${key}:</strong> ${val}</span>
+            </label>
+          `;
         }
         optionsHtml += '</div>';
+      } else {
+        optionsHtml = `
+          <div style="margin-top:16px;">
+            <label style="font-size:12px; font-weight:700; color:var(--muted); margin-bottom:8px; display:block;">Your Explanation / Answer</label>
+            <textarea class="fi" id="practice-subj-ans" style="height:120px; resize:none;" placeholder="Type your answer here..."></textarea>
+          </div>
+        `;
       }
 
-      content.innerHTML = `
-        <div class="practice-card fade-in" style="background:#fff; padding:24px; border-radius:20px; border:1px solid #e2e8f0; box-shadow:0 4px 12px rgba(0,0,0,0.05);">
-          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
-            <div style="font-size:12px; font-weight:700; color:var(--indigo); background:var(--indigo3); padding:4px 10px; border-radius:100px;">QUESTION ${currentPracticeIndex + 1} OF ${practiceQuestions.length}</div>
-            <div style="font-size:11px; color:var(--muted); font-weight:600;">Type: ${q.type || 'Standard'}</div>
-          </div>
-          
-          <h3 style="margin-bottom:24px; color:var(--text); line-height:1.4;">${q.question}</h3>
-          
+      area.innerHTML = `
+        <div class="card" style="padding:24px; border:1px solid #e2e8f0; box-shadow:0 10px 15px -3px rgba(0,0,0,0.1);">
+          <div style="font-size:11px; font-weight:700; color:var(--indigo); text-transform:uppercase; margin-bottom:12px;">${q.type} Question</div>
+          <h4 style="margin-bottom:20px; line-height:1.5;">${q.question}</h4>
           ${optionsHtml}
-
-          <div class="fg">
-            <label style="font-size:13px; color:var(--indigo);">Your Answer</label>
-            <textarea class="fi" id="practice-ans-input" style="height:120px; resize:none; border-radius:12px; padding:16px; border:1.5px solid #e2e8f0; font-size:14px;" placeholder="Explain or type your answer here..."></textarea>
-          </div>
-
-          <div id="practice-eval-box" style="display:none; margin-top:24px; padding:24px; border-radius:18px; background:var(--cream); border:1.5px solid #e2e8f0;">
-             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
-                <div id="practice-score-badge" style="font-weight:800; font-size:22px;"></div>
-                <div id="practice-correct-tag"></div>
-             </div>
-             <div id="practice-feedback" style="font-size:14px; color:var(--text); line-height:1.5; margin-bottom:16px;"></div>
-             <div style="background:#fff; padding:16px; border-radius:12px; border-left:5px solid var(--saffron); box-shadow:0 2px 4px rgba(0,0,0,0.03);">
-                <div style="display:flex; align-items:center; gap:8px; margin-bottom:6px;">
-                   <span style="font-size:16px;">💡</span>
-                   <strong style="font-size:12px; color:var(--saffron); letter-spacing:0.5px; text-transform:uppercase;">Student Improvement Plan</strong>
-                </div>
-                <div id="practice-improvements" style="font-size:14px; color:var(--text); line-height:1.5;"></div>
-             </div>
-          </div>
-
-          <div id="practice-model-ans-box" style="display:none; margin-top:20px; padding:20px; border-radius:16px; background:var(--indigo3); border:1px solid #c7d2fe; color:var(--indigo);">
-             <strong style="font-size:11px; display:block; margin-bottom:8px; text-transform:uppercase; letter-spacing:0.5px;">✓ Model Answer Key</strong>
-             <div style="font-size:14px; line-height:1.5;">${q.answer}</div>
-          </div>
-
-          <div style="display:flex; gap:12px; margin-top:32px; flex-wrap:wrap;">
-            <button class="btn-submit" id="btn-practice-submit" style="background:var(--indigo); color:#fff; flex:1; min-width:180px; padding:14px;" onclick="submitPracticeAnswer()">Check My Answer →</button>
-            <button class="btn-outline" style="min-width:140px;" onclick="togglePracticeModel()">Show Model Answer</button>
-            <button class="btn-submit" id="btn-practice-next" style="display:none; background:var(--green); color:#fff; flex:1; min-width:180px; padding:14px;" onclick="nextPractice()">Next Question ➔</button>
-          </div>
+          <div id="practice-feedback-area" style="margin-top:20px; display:none;"></div>
         </div>
       `;
+      
+      document.getElementById('practice-submit-btn').style.display = 'block';
+      document.getElementById('practice-next-btn').style.display = 'none';
     }
 
     async function submitPracticeAnswer() {
-      const q = practiceQuestions[currentPracticeIndex];
-      const ans = document.getElementById('practice-ans-input').value.trim();
-      const btn = document.getElementById('btn-practice-submit');
-      if (!ans) return showToast("Please write your answer first.", "warning");
+      const q = practiceSession.questions[practiceSession.currentIndex];
+      let studentAns = "";
+      
+      if (q.type === 'objective') {
+        const sel = document.querySelector('input[name="practice-ans"]:checked');
+        if (!sel) return showToast('Please select an option', 'warning');
+        studentAns = sel.value;
+      } else {
+        studentAns = document.getElementById('practice-subj-ans').value.trim();
+        if (!studentAns) return showToast('Please type an answer', 'warning');
+      }
 
-      btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Evaluating...';
-      showToast("AI is analyzing your answer against the curriculum...", "success");
+      const btn = document.getElementById('practice-submit-btn');
+      btn.disabled = true; btn.innerHTML = 'Evaluating...';
 
       try {
-        const res = await fetch(`${API_BASE}/curriculum/practice/evaluate`, {
+        const res = await fetch(API_BASE + '/curriculum/practice/evaluate', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('vidyai_token')}` },
-          body: JSON.stringify({ question: q.question, model_answer: q.answer, student_answer: ans })
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+          body: JSON.stringify({ question: q.question, model_answer: q.answer, student_answer: studentAns })
         });
-        const evalRes = await res.json();
+        const evalData = await res.json();
         
-        const evalBox = document.getElementById('practice-eval-box');
-        const scoreBadge = document.getElementById('practice-score-badge');
-        const correctTag = document.getElementById('practice-correct-tag');
-        const feedback = document.getElementById('practice-feedback');
-        const improvements = document.getElementById('practice-improvements');
-        
-        scoreBadge.textContent = `${evalRes.score}/10`;
-        scoreBadge.style.color = evalRes.score >= 7 ? 'var(--green)' : (evalRes.score >= 4 ? 'var(--saffron)' : 'var(--red)');
-        
-        correctTag.innerHTML = evalRes.is_correct ? '<span style="background:var(--green); color:#fff; padding:6px 14px; border-radius:100px; font-size:12px; font-weight:700;">PASS</span>' : '<span style="background:var(--red); color:#fff; padding:6px 14px; border-radius:100px; font-size:12px; font-weight:700;">REVISE</span>';
-        
-        feedback.textContent = evalRes.feedback;
-        improvements.textContent = evalRes.improvements;
-        
-        evalBox.style.display = 'block';
-        document.getElementById('btn-practice-next').style.display = 'block';
+        practiceSession.attempts.push({
+          question: q.question,
+          model_answer: q.answer,
+          student_answer: studentAns,
+          evaluation: evalData,
+          is_correct: evalData.is_correct,
+          score: evalData.score || 0
+        });
+
+        const feedbackArea = document.getElementById('practice-feedback-area');
+        feedbackArea.style.display = 'block';
+        feedbackArea.innerHTML = `
+          <div style="background:${evalData.is_correct ? '#f0fdf4' : '#fef2f2'}; padding:16px; border-radius:12px; border:1px solid ${evalData.is_correct ? '#bbf7d0' : '#fecaca'};">
+             <div style="font-weight:700; color:${evalData.is_correct ? '#166534' : '#991b1b'}; margin-bottom:4px;">
+                ${evalData.is_correct ? '✅ Correct!' : '❌ Needs Improvement'} (Score: ${evalData.score || 0}/10)
+             </div>
+             <p style="font-size:13px; color:#475569;">${evalData.feedback}</p>
+             <div style="margin-top:12px; padding-top:12px; border-top:1px solid rgba(0,0,0,0.05);">
+                <div style="font-size:11px; font-weight:700; color:var(--muted); text-transform:uppercase;">Model Answer</div>
+                <div style="font-size:13px; font-weight:600;">${q.answer}</div>
+             </div>
+          </div>
+        `;
+
         btn.style.display = 'none';
-        
-        // Scroll to feedback
-        evalBox.scrollIntoView({ behavior: 'smooth', block: 'end' });
-        
+        btn.disabled = false; btn.innerHTML = 'Submit Answer';
+        document.getElementById('practice-next-btn').style.display = 'block';
+        if (practiceSession.currentIndex === practiceSession.questions.length - 1) {
+           document.getElementById('practice-next-btn').textContent = 'Finish & See Report →';
+        }
       } catch (e) {
-        showToast("Evaluation system temporarily busy. Please try again.", "error");
-      } finally {
-        btn.disabled = false; btn.innerHTML = 'Check My Answer →';
+        showToast(e.message, 'error');
+        btn.disabled = false; btn.innerHTML = 'Submit Answer';
       }
     }
 
-    function togglePracticeModel() {
-      const box = document.getElementById('practice-model-ans-box');
-      box.style.display = box.style.display === 'none' ? 'block' : 'none';
+    function nextPracticeQuestion() {
+      if (practiceSession.currentIndex < practiceSession.questions.length - 1) {
+        practiceSession.currentIndex++;
+        renderPracticeStep();
+      } else {
+        finishPracticeAndGetReport();
+      }
     }
 
-    function nextPractice() {
-      currentPracticeIndex++;
-      renderPracticeQuestion();
+    async function finishPracticeAndGetReport() {
+       document.getElementById('practice-session-view').style.display = 'none';
+       showToast('Analysing your performance...', 'info');
+       
+       try {
+         const res = await fetch(API_BASE + '/curriculum/practice/report', {
+           method: 'POST',
+           headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+           body: JSON.stringify({ attempts: practiceSession.attempts })
+         });
+         const report = await res.json();
+         if (!res.ok) throw new Error(report.error);
+         
+         document.getElementById('report-score').textContent = `${report.obtained_marks}/${report.total_marks}`;
+         document.getElementById('report-percentage').textContent = `${report.percentage}%`;
+         document.getElementById('report-grade').textContent = report.predicted_grade || '-';
+         document.getElementById('report-feedback').textContent = report.overall_feedback;
+         
+         const gaps = document.getElementById('report-gaps');
+         gaps.innerHTML = (report.learning_gaps || []).map(g => `
+            <div style="background:#f8fafc; border:1px solid #e2e8f0; padding:16px; border-radius:12px;">
+               <div style="font-weight:700; color:var(--indigo); border-bottom:1px solid #e2e8f0; margin-bottom:10px; padding-bottom:4px;">${g.topic}</div>
+               <div style="font-size:13px; margin-bottom:8px;"><strong>Gap:</strong> ${g.gap}</div>
+               <div style="font-size:13px; color:var(--muted);"><strong>Recommendation:</strong> ${g.recommendation}</div>
+            </div>
+         `).join('') || '<p style="color:var(--muted);">No significant gaps identified. Excellent job!</p>';
+
+         document.getElementById('practice-report-view').style.display = 'block';
+       } catch (e) {
+         showToast('Error generating report: ' + e.message, 'error');
+         showPanel('panel-dashboard');
+       }
     }
 
-    function closePractice() {
-      document.getElementById('practice-overlay').style.display = 'none';
+    function printPracticeResults() {
+       const report = document.getElementById('practice-report-view').innerHTML;
+       const win = window.open('', '_blank');
+       win.document.write(`
+          <html>
+             <head>
+                <title>Practice Performance Report</title>
+                <style>
+                   body { font-family: sans-serif; padding: 40px; color: #333; line-height: 1.6; }
+                   h3 { color: #4f46e5; border-bottom: 2px solid #eee; padding-bottom: 10px; }
+                   .stat-row { display: flex; gap: 40px; margin-bottom: 30px; }
+                   .stat-box { background: #f8fafc; padding: 20px; border-radius: 12px; border: 1px solid #e2e8f0; flex: 1; text-align: center; }
+                   .stat-val { font-size: 32px; font-weight: 800; color: #4f46e5; }
+                   .card { background: #fff; border: 1px solid #eee; padding: 20px; border-radius: 10px; margin-bottom: 20px; }
+                   .gap-item { border-left: 4px solid #4f46e5; padding-left: 15px; margin-bottom: 20px; }
+                   .no-print { display: none; }
+                   @media print { .btn-saffron, .btn-outline { display: none; } }
+                </style>
+             </head>
+             <body>
+                ${report}
+                <script>window.print();<\/script>
+             </body>
+          </html>
+       `);
+       win.document.close();
+    }
+
+    function downloadPracticeResults() {
+       const win = window.open('', '_blank');
+       let content = `
+          <div style="font-family:sans-serif; padding:40px;">
+             <h2 style="color:#4f46e5; border-bottom:2px solid #eee; padding-bottom:10px;">Practice Session: ${practiceSession.questions.length} Questions</h2>
+             <p style="color:#64748b; margin-bottom:40px;">Detailed analysis of your recent AI-powered practice attempt.</p>
+       `;
+
+       practiceSession.attempts.forEach((att, idx) => {
+          content += `
+             <div style="margin-bottom:30px; padding:20px; border:1px solid #e2e8f0; border-radius:12px;">
+                <div style="font-weight:700; color:#4f46e5; margin-bottom:8px;">Question ${idx+1}</div>
+                <div style="font-size:16px; margin-bottom:15px; font-weight:600;">${att.question}</div>
+                <div style="background:#f0fdf4; padding:12px; border-radius:8px; margin-bottom:10px;">
+                   <strong>Your Answer:</strong> ${att.student_answer}
+                </div>
+                <div style="background:#f8fafc; padding:12px; border-radius:8px;">
+                   <strong>Model Answer:</strong> ${att.model_answer}
+                </div>
+                <div style="margin-top:10px; font-size:14px; color:#475569;">
+                   <strong>AI Evaluation:</strong> ${att.evaluation.feedback} (Score: ${att.evaluation.score}/10)
+                </div>
+             </div>
+          `;
+       });
+
+       content += "</div>";
+       win.document.write(`<html><head><title>Practice Session Summary</title></head><body>${content}<script>window.print();<\/script></body></html>`);
+       win.document.close();
+    }
+    function exitPractice() {
+       if (confirm("Quit this practice session? Progress will be lost.")) {
+          showPanel('panel-dashboard');
+       }
+    }
+
+
+    // ── STUDENT TOOLS ──
+    function clearDoubts() {
+       const sid = document.getElementById('chat-source-selector').value;
+       if (!sid) return showToast('Select a syllabus first', 'warning');
+       const inp = document.getElementById('chat-inp');
+       inp.value = "What are the most common misconceptions or difficult parts of this material that I should be aware of?";
+       sendChat();
+    }
+    function showTutorSupport() {
+       showToast('Tutor support is being connected...', 'info');
+       setTimeout(() => showToast('All tutors are currently busy. Please try again later or use the AI assistant.', 'warning'), 2000);
     }
     function showToast(msg, type = '') {
       const t = document.getElementById('toast');

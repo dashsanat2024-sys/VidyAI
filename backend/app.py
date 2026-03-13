@@ -402,45 +402,6 @@ Format:
 REGIONAL_SUMMARISE_PROMPT = """
 You are an expert educator. Summarize the provided context in exactly 5 lines.
 Each line should be a clear, concise point.
-Include a real-time, practical example for each point if possible.
-
-CRITICAL INSTRUCTION: You MUST write the summary ENTIRELY in the '{language}' language. Do not use English.
-
-Context:
-{context}
-
-Format (but written in {language}):
-1. [Point 1] - Example: [Example 1]
-2. [Point 2] - Example: [Example 2]
-...
-"""
-
-FLASHCARDS_PROMPT = """
-You are an expert tutor. Generate exactly 10 comprehensive flashcard-style Question and Answer pairs from the provided context.
-Ensure the questions cover the entire chapter/topic thoroughly.
-Output EXACTLY valid JSON (no markdown).
-
-Each item in the list should have:
-"question": (string),
-"answer": (string)
-
-Context:
-{context}
-
-JSON array only:
-"""
-
-REGIONAL_FLASHCARDS_PROMPT = """
-You are an expert tutor. Generate exactly 10 comprehensive flashcard-style Question and Answer pairs from the provided context.
-Ensure the questions cover the entire chapter/topic thoroughly.
-Output EXACTLY valid JSON (no markdown).
-
-CRITICAL INSTRUCTION: You MUST write the flashcard questions and answers ENTIRELY in the '{language}' language. Do not output English.
-
-Each item in the list should have:
-"question": (string in {language}),
-"answer": (string in {language})
-
 Context:
 {context}
 
@@ -453,15 +414,24 @@ Generate exactly {count} distinct practice questions based on the provided conte
 
 IMPORTANT: 
 - If the provided Context is short or minimal, use your extensive general knowledge about the specified Syllabus and Topic to create high-quality, relevant practice questions.
-- Ensure the questions are pedagogically sound and appropriate for the syllabus level.
+- Return EXACTLY a valid JSON array of objects.
+- Do NOT return blank questions. Each question must be clear and complete.
 
-Output EXACTLY a valid JSON array of objects.
-
-Each object MUST have:
-"question": (string),
-"answer": (string),
-"type": ("objective" | "subjective"),
-"options": (object with keys A,B,C,D if objective, else null)
+Structure Example:
+[
+  {{
+    "question": "What is the capital of France?",
+    "answer": "Paris",
+    "type": "objective",
+    "options": {{"A": "London", "B": "Berlin", "C": "Paris", "D": "Madrid"}}
+  }},
+  {{
+    "question": "Explain the process of photosynthesis.",
+    "answer": "Photosynthesis is the process by which green plants...",
+    "type": "subjective",
+    "options": null
+  }}
+]
 
 Context:
 {context}
@@ -484,8 +454,27 @@ Return EXACTLY valid JSON with:
 Question: {question}
 Model Answer: {model_answer}
 Student Answer: {student_answer}
+"""
 
-JSON only:
+PRACTICE_REPORT_PROMPT = """
+You are an expert academic counselor.
+Analyze the student's performance across this practice session and provide a comprehensive report.
+
+Session Data:
+{session_data}
+
+Return EXACTLY valid JSON with:
+"total_marks": (number),
+"obtained_marks": (number),
+"percentage": (number),
+"overall_feedback": (string),
+"learning_gaps": [
+  {{"topic": "topic name", "gap": "description of the missing concept", "recommendation": "what to study"}}
+],
+"predicted_grade": (string, e.g. "A", "B", "C"),
+"strengths": ["point 1", "point 2"]
+
+Focus on being constructive and encouraging.
 """
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -1046,7 +1035,7 @@ def load_curriculum_book():
         ("class11", "geography"):        "https://ncert.nic.in/textbook/pdf/legy101.pdf",
         ("class12", "geography"):        "https://ncert.nic.in/textbook/pdf/legy201.pdf",
         ("class11", "economics"):        "https://ncert.nic.in/textbook/pdf/leec101.pdf",
-        ("class12", "economics"):        "https://ncert.nic.in/textbook/pdf/leec201.pdf",
+        ("class12", "economics"):          "https://ncert.nic.in/textbook/pdf/leec201.pdf",
         ("class12", "accountancy"):      "https://ncert.nic.in/textbook/pdf/leac201.pdf",
         ("class12", "business studies"): "https://ncert.nic.in/textbook/pdf/lebs201.pdf",
         ("class11", "computer science"): "https://ncert.nic.in/textbook/pdf/lecs101.pdf",
@@ -1438,9 +1427,9 @@ def summarise_chapter():
         
         # If no context (mock), use a generic LLM call or fall back
         if is_regional:
-            prompt = REGIONAL_SUMMARISE_PROMPT.format(language=subject.title(), context=context if context else f"Summary of {topic}")
+            prompt = REGIONAL_SUMMARISE_PROMPT.replace("{language}", subject.title()).replace("{context}", context if context else f"Summary of {topic}")
         else:
-            prompt = SUMMARISE_PROMPT.format(context=context if context else f"Summary of {topic}")
+            prompt = SUMMARISE_PROMPT.replace("{context}", context if context else f"Summary of {topic}")
             
         summary = _llm_text(prompt)
         return jsonify({"summary": summary})
@@ -1476,9 +1465,9 @@ def generate_flashcards():
             context = "\n\n".join(d.page_content for d in docs)
         
         if is_regional:
-            prompt = REGIONAL_FLASHCARDS_PROMPT.format(language=subject.title(), context=context if context else f"Flashcards for {topic}")
+            prompt = REGIONAL_FLASHCARDS_PROMPT.replace("{language}", subject.title()).replace("{context}", context if context else f"Flashcards for {topic}")
         else:
-            prompt = FLASHCARDS_PROMPT.format(context=context if context else f"Flashcards for {topic}")
+            prompt = FLASHCARDS_PROMPT.replace("{context}", context if context else f"Flashcards for {topic}")
             
         flashcards = _llm_json(prompt)
         if not isinstance(flashcards, list): raise Exception("Invalid JSON from LLM")
@@ -1688,7 +1677,10 @@ def generate_practice():
     data    = request.json or {}
     sid     = data.get("syllabus_id", "").strip()
     topic   = data.get("topic", "the material")
-    count   = int(data.get("count", 10))
+    obj_count  = int(data.get("objective_count", 5))
+    subj_count = int(data.get("subjective_count", 5))
+    diff    = data.get("difficulty", "medium").lower()
+    total   = obj_count + subj_count
 
     if not sid or sid not in syllabi_registry:
         return jsonify({"error": "Select a valid syllabus first"}), 400
@@ -1705,20 +1697,57 @@ def generate_practice():
             ctx = f"This is for the {syllabi_registry[sid]['name']} syllabus on the topic of {topic}."
         
         prompt = MIXED_PRACTICE_GEN_PROMPT.format(
-            count=count,
+            total_count=total, 
+            objective_count=obj_count, 
+            subjective_count=subj_count,
+            difficulty=diff,
             context=ctx,
             topic=topic
         )
-        data = _llm_json(prompt, temperature=0.3)
-        if not isinstance(data, list):
-            # If AI returned a dict with error or single object, wrap it
-            if isinstance(data, dict) and "error" not in data:
-                data = [data]
-            elif not isinstance(data, list):
-                return jsonify({"error": "Failed to generate valid practice questions array"}), 500
+        raw_data = _llm_json(prompt, temperature=0.2)
+        
+        # Robustly handle wrapped JSON (e.g. {"questions": [...]})
+        if isinstance(raw_data, dict) and "questions" in raw_data:
+            data = raw_data["questions"]
+        elif isinstance(raw_data, dict) and "error" not in raw_data:
+            data = [raw_data]
+        else:
+            data = raw_data
 
-        return jsonify(data)
+        if not isinstance(data, list):
+            return jsonify({"error": "Failed to generate valid practice questions array"}), 500
+
+        # Defensive filtering and normalization
+        valid_qs = []
+        for q in data:
+            if not isinstance(q, dict): continue
+            
+            # Key normalization
+            q_text = q.get("question") or q.get("Question") or q.get("q") or q.get("text")
+            a_text = q.get("answer") or q.get("Answer") or q.get("a") or q.get("explanation")
+            
+            # If we have a question but no answer, or vice versa, it's malformed
+            if not q_text or not a_text:
+                continue
+
+            # Ensure answer is a string
+            if isinstance(a_text, list): a_text = "; ".join(a_text)
+            
+            # Success: Normalize and add
+            valid_qs.append({
+                "question": str(q_text).strip(),
+                "answer": str(a_text).strip(),
+                "type": q.get("type", "subjective"),
+                "options": q.get("options")
+            })
+        
+        if not valid_qs:
+            return jsonify({"error": "AI generated empty or malformed questions. Please try again."}), 500
+
+        return jsonify(valid_qs)
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
 @app.post("/api/curriculum/practice/evaluate")
@@ -1733,11 +1762,7 @@ def evaluate_practice():
         return jsonify({"error": "Missing question or answer"}), 400
 
     try:
-        prompt = PRACTICE_EVALUATION_PROMPT.format(
-            question=question,
-            model_answer=model_ans,
-            student_answer=stud_ans
-        )
+        prompt = PRACTICE_EVALUATION_PROMPT.replace("{question}", question).replace("{model_answer}", model_ans).replace("{student_answer}", stud_ans)
         
         raw  = _get_llm().invoke(prompt).content
         res  = _clean_json(raw)
@@ -1782,11 +1807,9 @@ def gen_qs_legacy():
             retriever = vs.as_retriever(search_kwargs={"k":8})
             docs = retriever.invoke(topic_str)
             context = "\n\n".join(d.page_content for d in docs)
-        prompt    = MIXED_QUESTION_GEN_PROMPT.format(
-            total_count=total, objective_count=obj_count, subjective_count=subj_count,
-            easy_count=easy_count, medium_count=medium_count, hard_count=hard_count,
-            topic=topic_str, context=context
-        )
+        prompt    = MIXED_QUESTION_GEN_PROMPT.replace("{total_count}", str(total)).replace("{objective_count}", str(obj_count)).replace("{subjective_count}", str(subj_count)) \
+                                             .replace("{easy_count}", str(easy_count)).replace("{medium_count}", str(medium_count)).replace("{hard_count}", str(hard_count)) \
+                                             .replace("{topic}", topic_str).replace("{context}", context)
         questions = _llm_json(prompt, temperature=0.2)
         if not isinstance(questions, list):
             return jsonify({"error":"LLM did not return a question list"}), 500
@@ -2321,7 +2344,7 @@ def _index_doc(path, did, ext):
 def _extract_chapters(docs):
     try:
         sample = "\n\n".join(d.page_content for d in docs[:6])[:3000]
-        prompt = CHAPTER_EXTRACT_PROMPT.format(context=sample)
+        prompt = CHAPTER_EXTRACT_PROMPT.replace("{context}", sample)
         llm = _get_llm()
         raw = llm.invoke(prompt).content
         clean = re.sub(r"```(?:json)?|```","",raw).strip()
