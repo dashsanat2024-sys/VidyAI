@@ -449,21 +449,26 @@ JSON array only:
 
 MIXED_PRACTICE_GEN_PROMPT = """
 You are a high-quality academic practice generator.
-Generate exactly {count} distinct practice questions ONLY from the provided context.
-Output EXACTLY valid JSON (no markdown).
+Generate exactly {count} distinct practice questions based on the provided context and topic.
 
-Each item should have:
+IMPORTANT: 
+- If the provided Context is short or minimal, use your extensive general knowledge about the specified Syllabus and Topic to create high-quality, relevant practice questions.
+- Ensure the questions are pedagogically sound and appropriate for the syllabus level.
+
+Output EXACTLY a valid JSON array of objects.
+
+Each object MUST have:
 "question": (string),
 "answer": (string),
 "type": ("objective" | "subjective"),
-"options": (object with A,B,C,D if objective, else null)
+"options": (object with keys A,B,C,D if objective, else null)
 
 Context:
 {context}
 
 Topic: {topic}
 
-JSON array only:
+Return ONLY the JSON array:
 """
 
 PRACTICE_EVALUATION_PROMPT = """
@@ -1704,9 +1709,14 @@ def generate_practice():
             context=ctx,
             topic=topic
         )
-        
-        raw  = _get_llm().invoke(prompt).content
-        data = _clean_json(raw)
+        data = _llm_json(prompt, temperature=0.3)
+        if not isinstance(data, list):
+            # If AI returned a dict with error or single object, wrap it
+            if isinstance(data, dict) and "error" not in data:
+                data = [data]
+            elif not isinstance(data, list):
+                return jsonify({"error": "Failed to generate valid practice questions array"}), 500
+
         return jsonify(data)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
