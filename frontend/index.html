@@ -6851,9 +6851,9 @@
 
       try {
         const sid = ukActiveSyllabus?.id;
-        const res = await fetch(`${API_BASE}/api/curriculum/practice/generate`, {
+        const res = await fetch(`${API_BASE}/curriculum/practice/generate`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('vidyai_token')}` },
           body: JSON.stringify({ syllabus_id: sid, topic: topic, count: 3 })
         });
         practiceQuestions = await res.json();
@@ -6933,9 +6933,9 @@
       showToast("AI is analyzing your answer against the curriculum...", "success");
 
       try {
-        const res = await fetch(`${API_BASE}/api/curriculum/practice/evaluate`, {
+        const res = await fetch(`${API_BASE}/curriculum/practice/evaluate`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('vidyai_token')}` },
           body: JSON.stringify({ question: q.question, model_answer: q.answer, student_answer: ans })
         });
         const evalRes = await res.json();
