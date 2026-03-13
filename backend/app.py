@@ -720,6 +720,31 @@ def upload():
     db_log(db, u["id"], "upload", f"Uploaded {fn}"); db_save(db)
     return jsonify({"doc": doc, "syllabus_id": did, "chunks": chunks, "chapters": chapters}), 201
 
+@app.post("/api/syllabi/register-virtual")
+@auth()
+def register_virtual():
+    u = request.user
+    data = request.json or {}
+    sid = data.get("syllabus_id")
+    name = data.get("name")
+    chapters = data.get("chapters", [])
+    
+    if not sid or not name:
+        return jsonify({"error": "Missing id or name"}), 400
+        
+    if sid not in syllabi_registry:
+        syllabi_registry[sid] = {
+            "id": sid,
+            "name": name,
+            "chapters": chapters,
+            "owner_id": u["id"],
+            "created_at": _now(),
+            "is_virtual": True
+        }
+        _save_syllabi()
+    
+    return jsonify({"success": True, "syllabus_id": sid})
+
 @app.get("/api/documents")
 @auth()
 def list_docs():

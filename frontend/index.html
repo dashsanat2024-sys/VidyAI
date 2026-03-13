@@ -5597,6 +5597,21 @@
         year, subj, region, chapters
       };
 
+      // Trigger registration on backend so AI tools know about this syllabus
+      try {
+        await fetch(`${API_BASE}/syllabi/register-virtual`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('vidyai_token')}` },
+          body: JSON.stringify({
+            syllabus_id: ukActiveSyllabus.id,
+            name: ukActiveSyllabus.name,
+            chapters: ukActiveSyllabus.chapters
+          })
+        });
+      } catch (e) {
+        console.warn("Virtual registration skipped:", e);
+      }
+
       document.getElementById('uk-book-title').textContent = `${subj} — ${year} (${region})`;
       document.getElementById('uk-curriculum-bookshelf').style.display = 'block';
       ukRenderChapters(chapters);
