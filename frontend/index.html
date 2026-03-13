@@ -1915,15 +1915,18 @@
         padding: 12px;
       }
       .chapter-actions {
-        flex-wrap: wrap;
+        display: flex;
+        flex-direction: column;
         width: 100%;
-        gap: 6px;
-        justify-content: flex-start;
+        gap: 8px;
+        margin-top: 10px;
       }
       .action-pill {
-        padding: 4px 10px;
-        font-size: 10px;
-        flex: 0 1 auto;
+        width: 100%;
+        padding: 10px;
+        font-size: 13px;
+        text-align: center;
+        justify-content: center;
       }
 
       /* Hamburger Menu UI */
@@ -2048,7 +2051,7 @@
         <div class="hero-badge fade-in"><span class="pulse-dot"></span>Trusted by 500+ Schools across India</div>
         <h1 class="fade-in" style="animation-delay:.1s">AI-Powered Learning for<br>Every <em>multimodal Classroom</em>
         </h1>
-        <p class="hero-sub fade-in" style="animation-delay:.2s">From NCERT to UK National Curriculum — automatically load
+        <p class="hero-sub fade-in" style="animation-delay:.2s">From NCERT to Indian state boards — automatically load
           official textbooks, generate **AI Audio & Video Explanations**, summaries, flashcards, and question papers. Built for schools, teachers and students.</p>
         <div class="hero-ctas fade-in" style="animation-delay:.3s">
           <button class="btn-hero-primary" onclick="openModal('register')">🚀 Start Free Trial</button>
@@ -2077,8 +2080,8 @@
 
     <!-- STRIP -->
     <div class="strip">
-      <div class="strip-item"><span class="strip-icon">📖</span>NCERT & UK Books Auto-Loaded</div>
-      <div class="strip-item"><span class="strip-icon">🔊</span>AI Audio British Teacher</div>
+      <div class="strip-item"><span class="strip-icon">📖</span>NCERT Textbooks Auto-Loaded</div>
+      <div class="strip-item"><span class="strip-icon">🔊</span>AI Audio Explanations</div>
       <div class="strip-item"><span class="strip-icon">📹</span>AI Video Lesson Explainer</div>
       <div class="strip-item"><span class="strip-icon">🤖</span>GPT-4o Learning Model</div>
       <div class="strip-item"><span class="strip-icon">🖨️</span>Printable Exam Papers</div>
@@ -2112,8 +2115,8 @@
             <p class="role-desc">Create lesson plans, generate question papers, evaluate bulk answer sheets, and
               share detailed reports with parents automatically.</p>
             <ul class="role-features">
-              <li>Auto-load NCERT & UK Textbooks</li>
-              <li>AI British Teacher Audio Explanations</li>
+              <li>Auto-load NCERT & State Math/Science</li>
+              <li>AI Voice-Guided Audio Explanations</li>
               <li>One-Click Exam Paper Generation</li>
               <li>Printable question papers with keys</li>
               <li>Interactive Video Lesson creation</li>
@@ -2131,7 +2134,7 @@
               <li>📹 Watch AI Teacher Video Lessons</li>
               <li>Practice with interactive flashcards</li>
               <li>AI study chat tutor for deep-dives</li>
-              <li>UK & Indian CBSE/State curricula</li>
+              <li>NCERT & Indian State curricula</li>
             </ul>
             <button class="btn-role" onclick="openModalWithRole('register','student')">Join as Student
               →</button>
@@ -5584,12 +5587,12 @@
       list.innerHTML = chapters.map((ch, i) => {
         const safeChap = ch.replace(/'/g, "\\'").replace(/"/g, '&quot;');
         return `
-          <div style="background:var(--paper); border:1px solid #c7d2fe; border-radius:12px; padding:16px 20px; margin-bottom:12px; display:flex; justify-content:space-between; align-items:center;">
-            <div>
-              <div style="font-weight:600; color:#003082; margin-bottom:4px;">${ch}</div>
-              <div style="font-size:12px; color:var(--muted);">${ukActiveSyllabus?.year || ''} • UK National Curriculum</div>
+          <div class="chapter-list-item">
+            <div class="chapter-info">
+              <div class="chapter-name">${ch}</div>
+              <div style="font-size:12px; color:var(--muted);">${ukActiveSyllabus?.year || ''} • International Curriculum</div>
             </div>
-            <div style="display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end;">
+            <div class="chapter-actions">
               <button class="action-pill primary" onclick="ukHandleAction('${safeChap}', 'summarise')">Summarise</button>
               <button class="action-pill" onclick="ukHandleAction('${safeChap}', 'flashcards')">Flashcards</button>
               <button class="action-pill" onclick="ukHandleAction('${safeChap}', 'generate_questions')">Generate Qs</button>
