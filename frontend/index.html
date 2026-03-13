@@ -2588,14 +2588,12 @@
             <select class="fi" id="chat-source-selector" style="margin-bottom:16px;" onchange="syncChatSource()">
               <option value="">— Select Material —</option>
             </select>
-            
             <div style="background:var(--indigo3); padding:16px; border-radius:12px; margin-top:16px;">
                <div style="font-size:11px; font-weight:700; color:var(--indigo); margin-bottom:8px;">STUDENT TOOLS</div>
                <button class="btn-outline" style="width:100%; font-size:12px; padding:8px; background:#fff; margin-bottom:8px;" onclick="clearDoubts()">🤔 Doubt Clearing Helper</button>
                <button class="btn-outline" style="width:100%; font-size:12px; padding:8px; background:#fff;" onclick="showTutorSupport()">🙋 Ask a Human Tutor</button>
             </div>
           </div>
-        </div>
         <div class="chat-main">
           <div class="chat-messages" id="chat-messages">
             <div class="msg bot">
@@ -2979,7 +2977,6 @@
            </div>
         </div>
       </div>
-  </div>
 
 
   <!-- Syllabus Manager -->
@@ -5385,7 +5382,7 @@
                     <div class="chapter-actions">
                         <button class="action-pill primary" onclick="handleCurriculumAction('${safeChap}', 'summarise')">Summarise</button>
                         <button class="action-pill" onclick="handleCurriculumAction('${safeChap}', 'flashcards')">Flashcards</button>
-                        <button class="action-pill" style="background:var(--indigo); color:#fff; border-color:var(--indigo);" onclick="handleCurriculumAction('${safeChap}', 'practice')">Practice Qs</button>
+                        <button class="action-pill" style="background:var(--indigo); color:#fff; border-color:var(--indigo);" onclick="handleCurriculumAction('${safeChap}', 'generate_questions')">Generate Qs</button>
                         <button class="action-pill" onclick="handleCurriculumAction('${safeChap}', 'explain')">🔊 Listen</button>
                         <button class="action-pill" style="background:#e0f2fe; color:#0369a1; border-color:#bae6fd;" onclick="handleCurriculumAction('${safeChap}', 'video')">📹 Video Explanation</button>
                     </div>
@@ -5408,9 +5405,22 @@
     function populateChatSources() {
       const sel = document.getElementById('chat-source-selector');
       if (!sel) return;
-      sel.innerHTML = '<option value="">— Use All Sources —</option>' +
-        syllabi.map(s => `<option value="${s.id}">${s.name}</option>`).join('');
+      
+      let options = syllabi.map(s => `<option value="${s.id}">${s.name}</option>`);
+      
+      // Inject hub books if active and not in uploaded list
+      if (activeSyllabus && !syllabi.find(s => s.id === activeSyllabus.id)) {
+        options.unshift(`<option value="${activeSyllabus.id}">${activeSyllabus.name} (Curriculum Hub)</option>`);
+      }
+      if (ukActiveSyllabus && !syllabi.find(s => s.id === ukActiveSyllabus.id)) {
+        options.unshift(`<option value="${ukActiveSyllabus.id}">${ukActiveSyllabus.name} (UK Hub)</option>`);
+      }
+
+      sel.innerHTML = '<option value="">— Select Material —</option>' + options.join('');
+      
+      // Default to what's active
       if (activeSyllabus) sel.value = activeSyllabus.id;
+      else if (ukActiveSyllabus) sel.value = ukActiveSyllabus.id;
     }
 
     function syncChatSource() {
@@ -5448,8 +5458,13 @@
         showPanel('panel-chat');
         return;
       }
-      if (action === 'generate_questions' || action === 'practice') {
-        openPracticeConfig(activeSyllabus.id, topic);
+      if (action === 'generate_questions') {
+        showPanel('panel-qgen');
+        if (activeSyllabus) {
+          document.getElementById('qg-syllabus-select').value = activeSyllabus.id;
+          loadSyllabusChapters(activeSyllabus.id);
+        }
+        if (topic) document.getElementById('qg-topic').value = topic;
         return;
       }
       if (action === 'video') { startVideoMode(topic); return; }
@@ -5706,7 +5721,7 @@
             <div class="chapter-actions">
               <button class="action-pill primary" onclick="ukHandleAction('${safeChap}', 'summarise')">Summarise</button>
               <button class="action-pill" onclick="ukHandleAction('${safeChap}', 'flashcards')">Flashcards</button>
-              <button class="action-pill" onclick="ukHandleAction('${safeChap}', 'practice')">Practice Qs</button>
+              <button class="action-pill" onclick="ukHandleAction('${safeChap}', 'generate_questions')">Generate Qs</button>
               <button class="action-pill" onclick="ukHandleAction('${safeChap}', 'explain')">🔊 Listen</button>
               <button class="action-pill" style="background:#e0f2fe; color:#0369a1; border-color:#bae6fd;" onclick="ukHandleAction('${safeChap}', 'video')">📹 Video Explanation</button>
             </div>
@@ -5718,8 +5733,13 @@
       if (!ukActiveSyllabus) { showToast('Please load a UK Curriculum book first.', 'warning'); return; }
 
       if (action === 'video') { startVideoMode(topic); return; }
-      if (action === 'generate_questions' || action === 'practice') {
-        openPracticeConfig(ukActiveSyllabus.id, topic);
+      if (action === 'generate_questions') {
+        showPanel('panel-qgen');
+        if (ukActiveSyllabus) {
+          document.getElementById('qg-syllabus-select').value = ukActiveSyllabus.id;
+          loadSyllabusChapters(ukActiveSyllabus.id);
+        }
+        if (topic) document.getElementById('qg-topic').value = topic;
         return;
       }
 
@@ -5853,6 +5873,7 @@
       document.getElementById('page-title').textContent = newTitle;
 
       if (id === 'panel-eval') refreshExamsList();
+      if (id === 'panel-chat') populateChatSources();
       
       // Auto-Sync QGen if hidden or sidebar clicked
       if (id === 'panel-qgen') {
@@ -6050,16 +6071,6 @@
 
       sel.innerHTML = '<option value="">— Select Knowledge Source —</option>' + options.join('');
 
-      const chatList = document.getElementById('chat-syllabi-list');
-      chatList.innerHTML = syllabi.map(s => `
-            <div style="display:flex; justify-content:space-between; align-items:center; padding:10px; border-radius:8px; border:1px solid ${activeSyllabus?.id === s.id ? 'var(--blue)' : '#e2e8f0'}; background:${activeSyllabus?.id === s.id ? 'var(--indigo3)' : '#fff'}; cursor:pointer; overflow:hidden;">
-                <div onclick="setActiveSyllabus('${s.id}')" style="flex:1; overflow:hidden;">
-                    <div style="font-size:12px; font-weight:600; white-space:nowrap; text-overflow:ellipsis; overflow:hidden;">${s.name}</div>
-                    <div style="font-size:10px; color:var(--muted);">${s.chunks} chunks</div>
-                </div>
-                <button class="btn-outline" style="padding:4px 6px; border-color:var(--red); color:var(--red); font-size:10px; margin-left:8px;" onclick="event.stopPropagation(); deleteSyllabus('${s.id}')">✕</button>
-            </div>
-        `).join('');
 
       const mgrList = document.getElementById('syllabus-manager-list');
       mgrList.innerHTML = syllabi.map(s => `
