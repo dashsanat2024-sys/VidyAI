@@ -1489,11 +1489,9 @@ def _llm_text(prompt, temperature=0.7):
         print(f"[OpenAI Error] {e}")
         return f"ERROR: {str(e)}"
 
-def _llm_json(prompt, temperature=0.2):
-    """Refined JSON LLM helper."""
-    raw = _llm_text(prompt, temperature)
-    if raw.startswith("ERROR:"):
-        return {"error": raw}
+def _clean_json(raw):
+    """Refined JSON helper for raw strings."""
+    if not raw or not isinstance(raw, str): return raw
     try:
         clean = re.sub(r"```(?:json)?|```", "", raw).strip()
         try: return json.loads(clean)
@@ -1506,6 +1504,11 @@ def _llm_json(prompt, temperature=0.2):
         return json.loads(clean)
     except:
         return {"error": "Failed to parse JSON", "raw": raw}
+
+def _llm_json(prompt, temperature=0.2):
+    """Prompts LLM and returns clean JSON."""
+    raw = _llm_text(prompt, temperature)
+    return _clean_json(raw)
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -1648,7 +1651,7 @@ def generate_practice():
     data    = request.json or {}
     sid     = data.get("syllabus_id", "").strip()
     topic   = data.get("topic", "the material")
-    count   = int(data.get("count", 3))
+    count   = int(data.get("count", 10))
 
     if not sid or sid not in syllabi_registry:
         return jsonify({"error": "Select a valid syllabus first"}), 400

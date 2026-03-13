@@ -6854,13 +6854,17 @@
         const res = await fetch(`${API_BASE}/curriculum/practice/generate`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('vidyai_token')}` },
-          body: JSON.stringify({ syllabus_id: sid, topic: topic, count: 3 })
+          body: JSON.stringify({ syllabus_id: sid, topic: topic, count: 10 })
         });
-        practiceQuestions = await res.json();
+        const data = await res.json();
+        if (data.error || !Array.isArray(data)) {
+          throw new Error(data.error || "Multiple questions could not be generated for this topic.");
+        }
+        practiceQuestions = data;
         currentPracticeIndex = 0;
         renderPracticeQuestion();
       } catch (e) {
-        showToast("Failed to load practice questions", "error");
+        showToast(e.message || "Failed to load practice questions", "error");
         closePractice();
       }
     }
