@@ -2594,14 +2594,8 @@
                <button class="btn-outline" style="width:100%; font-size:12px; padding:8px; background:#fff; margin-bottom:8px;" onclick="clearDoubts()">🤔 Doubt Clearing Helper</button>
                <button class="btn-outline" style="width:100%; font-size:12px; padding:8px; background:#fff;" onclick="showTutorSupport()">🙋 Ask a Human Tutor</button>
             </div>
-          <div style="padding:16px; margin-top:auto;">
-            <div style="border:2px dashed #cbd5e1; border-radius:12px; padding:20px; text-align:center; cursor:pointer;"
-              onclick="document.getElementById('file-upl').click()">
-              <div style="font-size:24px;margin-bottom:8px;">📎</div>
-              <div style="font-size:12px;font-weight:600;color:var(--muted);">Drop file to index</div>
-              <input type="file" id="file-upl" hidden onchange="handleFileUpload(this)">
-            </div>
           </div>
+        </div>
         <div class="chat-main">
           <div class="chat-messages" id="chat-messages">
             <div class="msg bot">
@@ -3299,6 +3293,8 @@
 
     let docs = [];
     let syllabi = [];
+    let practiceQuestions = [];
+    let currentPracticeIndex = 0;
     let activeSyllabus = null;
     let genQuestions = [];
     let evaluations = [];
@@ -6912,6 +6908,16 @@
     // STUDENT PRACTICE LOGIC
     // =========================================================================
     let practiceSession = { questions: [], currentIndex: 0, attempts: [] };
+
+    async function loadPracticeChapters(sid) {
+       const sel = document.getElementById('practice-syllabus-select');
+       if (!sid) return;
+       const found = syllabi.find(s => s.id === sid);
+       if (found) {
+          // just ensures context is set
+          setActiveSyllabus(sid);
+       }
+    }
 
     function openPracticeConfig(sid, topic) {
       showPanel('panel-practice');
