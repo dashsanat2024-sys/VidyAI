@@ -469,12 +469,40 @@ Return EXACTLY valid JSON with:
 "percentage": (number),
 "overall_feedback": (string),
 "learning_gaps": [
-  {{"topic": "topic name", "gap": "description of the missing concept", "recommendation": "what to study"}}
+  {"topic": "topic name", "gap": "description of the missing concept", "recommendation": "what to study"}
 ],
 "predicted_grade": (string, e.g. "A", "B", "C"),
 "strengths": ["point 1", "point 2"]
 
 Focus on being constructive and encouraging.
+"""
+
+FLASHCARDS_PROMPT = """
+You are an expert educator. Based on the following context, generate exactly 5 high-quality flashcards.
+Each flashcard must have a 'question' and a clear, concise 'answer'.
+
+Context:
+{context}
+
+Return EXACTLY a valid JSON array of objects like this:
+[
+  {"question": "What is...?", "answer": "It is..."},
+  ...
+]
+"""
+
+REGIONAL_FLASHCARDS_PROMPT = """
+You are an expert educator. Based on the following context, generate exactly 5 high-quality flashcards in {language}.
+Each flashcard must have a 'question' and a clear, concise 'answer'.
+
+Context:
+{context}
+
+Return EXACTLY a valid JSON array of objects like this:
+[
+  {"question": "...", "answer": "..."},
+  ...
+]
 """
 
 # ══════════════════════════════════════════════════════════════════════════

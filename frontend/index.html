@@ -3146,7 +3146,10 @@
         if (!contentType || !contentType.includes("application/json")) {
            const text = await res.text();
            console.error("Non-JSON response:", text);
-           throw new Error(`Server returned HTML instead of JSON. Status: ${res.status}. Check backend logs.`);
+           if (text.includes("<!DOCTYPE html>") || text.startsWith("<")) {
+             throw new Error("Server error: Received HTML instead of JSON. This usually indicates a crashed backend or missing prompt. Check backend logs.");
+           }
+           throw new Error(`Server returned non-JSON response. Status: ${res.status}`);
         }
 
         const data = await res.json();
@@ -3281,6 +3284,8 @@
       document.getElementById('video-overlay').classList.remove('open');
       if (window.speechSynthesis) window.speechSynthesis.cancel();
       videoScript = [];
+      const box = document.getElementById('teacher-box');
+      if (box) box.classList.remove('speaking');
     }
 
     let me = null;
@@ -5847,6 +5852,10 @@
     function closeResults() { 
       document.getElementById('results-overlay').classList.remove('open'); 
       if (window.speechSynthesis) window.speechSynthesis.cancel();
+      // Ensure all speech stops immediately
+      window.speechSynthesis.pause();
+      window.speechSynthesis.resume();
+      window.speechSynthesis.cancel();
     }
 
     const panels = ['panel-dashboard', 'panel-curriculum', 'panel-uk-curriculum', 'panel-chat', 'panel-qgen', 'panel-eval', 'panel-qmaster', 'panel-institute', 'panel-analytics', 'panel-syllabus', 'panel-practice'];
