@@ -2678,10 +2678,13 @@
 
       <!-- Question Generator Panel -->
       <div class="panel" id="panel-qgen">
-        <div class="stepper">
-          <div class="step active" id="qg-step1">1. Configure</div>
-          <div class="step" id="qg-step2">2. Chapters</div>
-          <div class="step" id="qg-step3">3. Preview</div>
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:24px;">
+          <div class="stepper" style="margin-bottom:0; flex:1;">
+            <div class="step active" id="qg-step1">1. Configure</div>
+            <div class="step" id="qg-step2">2. Chapters</div>
+            <div class="step" id="qg-step3">3. Preview</div>
+          </div>
+          <button class="btn-outline" onclick="resetQGen()" style="padding:10px 16px; font-size:13px; border-radius:8px;">🔄 Refresh Config</button>
         </div>
 
         <div id="qg-config">
@@ -5437,7 +5440,7 @@
         if (!res.ok) throw new Error(data.error);
 
         // Set global activeSyllabus for context
-        activeSyllabus = { id: data.syllabus_id, name: data.name };
+        activeSyllabus = { id: data.syllabus_id, name: data.name, pdf_url: data.pdf_url };
         document.getElementById('curr-book-title').textContent = data.name;
         document.getElementById('curriculum-bookshelf').style.display = 'block';
         window.currentBookPDF = data.pdf_url; 
@@ -5489,7 +5492,7 @@
         options.unshift(`<option value="${ukActiveSyllabus.id}">${ukActiveSyllabus.name} (UK Hub)</option>`);
       }
 
-      sel.innerHTML = '<option value="">— Select Material —</option>' + options.join('');
+      sel.innerHTML = '<option value="">— Search All Materials —</option>' + options.join('');
       
       // Default to what's active
       if (activeSyllabus) sel.value = activeSyllabus.id;
@@ -5532,6 +5535,7 @@
         return;
       }
       if (action === 'generate_questions') {
+        resetQGen();
         showPanel('panel-qgen');
         if (activeSyllabus) {
           document.getElementById('qg-syllabus-select').value = activeSyllabus.id;
@@ -5815,6 +5819,7 @@
 
       if (action === 'video') { startVideoMode(topic); return; }
       if (action === 'generate_questions') {
+        resetQGen();
         showPanel('panel-qgen');
         if (ukActiveSyllabus) {
           document.getElementById('qg-syllabus-select').value = ukActiveSyllabus.id;
@@ -5948,6 +5953,14 @@
       if (id === 'panel-qmaster') refreshBanks();
       if (id === 'panel-dashboard') updateDashUI();
       if (id === 'panel-interactive-practice') initInteractivePractice();
+
+      // Ensure Syllabus Pill is always up to date in top right
+      if (activeSyllabus) {
+        const pill = document.getElementById('active-syl-pill');
+        const pillName = document.getElementById('active-syl-name');
+        if (pill) pill.style.display = 'flex';
+        if (pillName) pillName.textContent = activeSyllabus.name;
+      }
 
       panels.forEach(p => {
         const el = document.getElementById(p);
@@ -6537,10 +6550,31 @@
     }
 
     function startNewBank() {
-      editingBank = { exam_id: null, topic: '', syllabus_id: '', syllabus_name: '', questions: [] };
+      const dummyId = 'EX-' + Math.random().toString(36).substr(2, 6).toUpperCase();
+      editingBank = { exam_id: dummyId, topic: '', syllabus_id: '', syllabus_name: '', questions: [] };
       bankQuestions = [];
       populateSyllabusSelect();
       openEditor();
+    }
+
+    function resetQGen() {
+      // Clear previous questions and reset stepper
+      document.getElementById('qg-config').style.display = 'block';
+      document.getElementById('qg-preview').style.display = 'none';
+      document.getElementById('gen-btn').disabled = false;
+      document.getElementById('gen-btn').innerHTML = 'Generate Exam Paper →';
+      
+      const steps = ['qg-step1', 'qg-step2', 'qg-step3'];
+      steps.forEach((s, idx) => {
+        const el = document.getElementById(s);
+        if (el) {
+          el.classList.remove('active');
+          if (idx === 0) el.classList.add('active');
+        }
+      });
+      
+      document.getElementById('questions-list').innerHTML = '';
+      document.getElementById('qg-topic').value = '';
     }
 
     function openEditor() {
@@ -6744,13 +6778,16 @@
       if (!topic || !sid || bankQuestions.length === 0) return showToast('Topic, Syllabus, and Questions required', 'error');
 
       try {
+        const sel = document.getElementById('edit-bank-syllabus');
+        const sName = sel.options[sel.selectedIndex]?.text || 'Unknown';
+
         const res = await fetch(API_BASE + '/exams/save', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
           body: JSON.stringify({
             exam_id: editingBank.exam_id,
             syllabus_id: sid,
-            syllabus_name: editingBank.syllabus_name,
+            syllabus_name: sName,
             topic: topic,
             questions: bankQuestions
           })

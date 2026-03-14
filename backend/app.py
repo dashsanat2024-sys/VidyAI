@@ -1043,6 +1043,33 @@ def chat():
                 })
             except Exception as e:
                 print(f"[Chat error] {e}")
+        elif not syllabus_id:
+            # CROSS-SYLLABUS RAG: Search across all available materials
+            all_context = []
+            all_sources = set()
+            for sid, info in syllabi_registry.items():
+                try:
+                    vs = _load_vs(sid)
+                    if vs:
+                        docs = vs.similarity_search(question, k=2)
+                        if docs:
+                            ctx = f"--- Source: {info.get('name', 'Unknown')} ---\n"
+                            ctx += "\n".join([d.page_content for d in docs])
+                            all_context.append(ctx)
+                            for d in docs:
+                                all_sources.add(Path(d.metadata.get("source","")).name)
+                except: continue
+            
+            if all_context:
+                context_str = "\n\n".join(all_context)
+                prompt = f"Using the following educational context from multiple sources:\n\n{context_str}\n\nQuestion: {question}\n\nProvide a comprehensive and helpful answer based ONLY on the provided context if possible."
+                answer = _llm_text(prompt)
+                return jsonify({
+                    "answer": answer,
+                    "sources": list(all_sources),
+                    "syllabus_id": "global",
+                    "syllabus_name": "All Materials"
+                })
                 
         # Non-Syllabus General chat functionality 
         try:
