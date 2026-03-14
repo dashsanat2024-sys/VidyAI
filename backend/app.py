@@ -2148,7 +2148,7 @@ def get_exam(exam_id):
     return jsonify(e)
 
 @app.get("/api/exams/<exam_id>/answer-key")
-@auth(roles=["tutor","admin"])
+@auth(roles=["tutor", "teacher", "school_admin"])
 def exam_answer_key(exam_id):
     e = _load_exam(exam_id)
     if not e: return jsonify({"error":"Exam not found"}), 404
@@ -2185,7 +2185,7 @@ def idle_sheet(exam_id):
 #  EVALUATION ENDPOINTS
 # ══════════════════════════════════════════════════════════════════════════
 @app.post("/api/exams/<exam_id>/evaluate")
-@auth()
+@auth(roles=["tutor", "teacher", "school_admin"])
 def evaluate_exam_sheet(exam_id):
     e = _load_exam(exam_id)
     if not e: return jsonify({"error":"Exam not found"}), 404
@@ -2211,7 +2211,7 @@ def evaluate_exam_sheet(exam_id):
     return jsonify(payload)
 
 @app.post("/api/exams/<exam_id>/bulk-evaluate")
-@auth(roles=["tutor", "school_admin"])
+@auth(roles=["tutor", "teacher", "school_admin"])
 def bulk_evaluate(exam_id):
     e = _load_exam(exam_id)
     if not e: return jsonify({"error":"Exam not found"}), 404
@@ -2259,7 +2259,7 @@ def get_evaluation(eval_id):
     return jsonify(ev)
 
 @app.post("/api/evaluations/<eval_id>/audit")
-@auth(roles=["tutor", "school_admin"])
+@auth(roles=["tutor", "teacher", "school_admin"])
 def audit_evaluation(eval_id):
     ev = evaluations_registry.get(eval_id) or _load_json(EVAL_DIR / f"{eval_id}.json", {})
     if not ev: return jsonify({"error":"Not found"}), 404
@@ -2272,7 +2272,7 @@ def audit_evaluation(eval_id):
     return jsonify({"evaluation_id":eval_id,"audit":ev["audit"]})
 
 @app.put("/api/evaluations/<eval_id>/marks")
-@auth(roles=["tutor", "school_admin"])
+@auth(roles=["tutor", "teacher", "school_admin"])
 def update_marks(eval_id):
     ev = evaluations_registry.get(eval_id) or _load_json(EVAL_DIR / f"{eval_id}.json", {})
     if not ev: return jsonify({"error":"Not found"}), 404
@@ -2287,7 +2287,7 @@ def update_marks(eval_id):
     return jsonify(ev)
 
 @app.get("/api/exams/<exam_id>/analytics")
-@auth(roles=["tutor", "school_admin"])
+@auth(roles=["tutor", "teacher", "school_admin"])
 def get_exam_analytics(exam_id):
     evals = [v for k,v in evaluations_registry.items() if v.get("exam_id") == exam_id]
     if not evals: return jsonify({"error": "No evaluations found"}), 404
@@ -2387,7 +2387,7 @@ def bulk_accuracy(bulk_id):
 
 # Legacy eval endpoints kept for frontend compatibility
 @app.post("/api/evaluate/single")
-@auth(roles=["tutor","admin"])
+@auth(roles=["tutor", "teacher", "school_admin"])
 def eval_single_legacy():
     return jsonify({"error":"Use POST /api/exams/<exam_id>/evaluate instead"}), 400
 

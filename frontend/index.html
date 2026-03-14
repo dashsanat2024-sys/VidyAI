@@ -2669,11 +2669,24 @@
 
       <div class="panel" id="panel-analytics">
         <div class="w-limit">
-          <h3>Advanced Analytics</h3>
-          <p style="color:var(--muted); margin-bottom:24px;">Detailed performance insights and learning gap analysis across all courses.</p>
-          <div class="card" style="padding:60px; text-align:center; color:var(--muted);">
-            <div style="font-size:40px; margin-bottom:16px;">📈</div>
-            <p>Analytics dashboard is being populated with your latest data. Please check back in a moment.</p>
+          <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:32px;">
+            <div>
+              <h3>Advanced Analytics</h3>
+              <p style="color:var(--muted);">Detailed performance insights and learning gap analysis.</p>
+            </div>
+            <div style="width:300px;">
+              <label style="font-size:11px; font-weight:700; color:var(--indigo);">Select Exam Paper</label>
+              <select class="fi" id="analytics-exam-select" onchange="loadAnalytics(this.value)">
+                <option value="">— Select Exam ID —</option>
+              </select>
+            </div>
+          </div>
+
+          <div id="analytics-content">
+            <div class="card" style="padding:60px; text-align:center; color:var(--muted);">
+              <div style="font-size:40px; margin-bottom:16px;">📈</div>
+              <p>Select an exam reference from the dropdown to view detailed analytics and class leaderboard.</p>
+            </div>
           </div>
         </div>
       </div>
