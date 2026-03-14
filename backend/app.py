@@ -80,10 +80,6 @@ ALLOWED = {"pdf","txt","md","mp3","mp4","wav","m4a","jpg","jpeg","png","webp"}
 app = Flask(__name__, static_folder="../frontend", static_url_path="")
 CORS(app)
 
-@app.route('/')
-def serve_frontend():
-    return send_from_directory(app.static_folder, 'index.html')
-
 @app.route('/manifest.json')
 def serve_manifest():
     return send_from_directory(app.static_folder, 'manifest.json')
@@ -101,6 +97,7 @@ def download_upload(filename):
 TOKENS: Dict[str, str] = {}          # token → user_id
 syllabi_registry: Dict[str, dict] = {}
 qa_chains: Dict[str, Any] = {}
+vector_stores: Dict[str, Any] = {}
 memories: Dict[str, Any] = {}
 exams_registry: Dict[str, dict] = {}
 evaluations_registry: Dict[str, dict] = {}
@@ -1051,14 +1048,18 @@ def chat():
                 try:
                     vs = _load_vs(sid)
                     if vs:
-                        docs = vs.similarity_search(question, k=2)
-                        if docs:
-                            ctx = f"--- Source: {info.get('name', 'Unknown')} ---\n"
-                            ctx += "\n".join([d.page_content for d in docs])
-                            all_context.append(ctx)
-                            for d in docs:
-                                all_sources.add(Path(d.metadata.get("source","")).name)
-                except: continue
+                        # Ensure we are calling similarity_search on a VectorStore, not a Chain
+                        if hasattr(vs, "similarity_search"):
+                            docs = vs.similarity_search(question, k=2)
+                            if docs:
+                                ctx = f"--- Source: {info.get('name', 'Unknown')} ---\n"
+                                ctx += "\n".join([d.page_content for d in docs])
+                                all_context.append(ctx)
+                                for d in docs:
+                                    all_sources.add(Path(d.metadata.get("source","")).name)
+                except Exception as e: 
+                    print(f"[Global RAG Search error for {sid}] {e}")
+                    continue
             
             if all_context:
                 context_str = "\n\n".join(all_context)
@@ -1727,7 +1728,9 @@ def generate_questions():
             context   = "\n\n".join(d.page_content for d in docs)
         except Exception as _vs_err:
             print(f"[VS Fallback] Vector store not ready for {syllabus_id}: {_vs_err}")
-            context   = f"Please use your general knowledge to generate high-quality academic questions for the topic: {topic_str}. The specific course materials are currently being processed, so rely on standard curriculum standards for this subject."
+            s_info = syllabi_registry.get(syllabus_id, {})
+            s_name = s_info.get('name', 'General Knowledge')
+            context = f"Provide high-quality academic questions based on the textbook '{s_name}' for the topic: {topic_str}. Rely on standard educational standards for this subject curriculum."
 
         # Safer formatting to prevent KeyError from context braces
         if is_regional:
@@ -1785,8 +1788,10 @@ def generate_questions():
         })
 
     exam_id = uuid.uuid4().hex[:10]
+    u = request.user
     exam_payload = {
         "exam_id": exam_id,
+        "owner_id": u["id"],
         "created_at": _now(),
         "syllabus_id": syllabus_id,
         "syllabus_name": syllabi_registry[syllabus_id]["name"],
@@ -2077,12 +2082,12 @@ def list_exams():
                 q.pop("answer_key_points", None)
                 q.pop("evaluation_rubric", None)
     elif u["role"] != "school_admin":
-        exams = [e for e in exams if e.get("owner_id") == u["id"]]
+        exams = [e for e in exams if e.get("owner_id") == u["id"] or e.get("owner_id") is None]
         
     return jsonify({"exams": exams})
 
 @app.post("/api/exams/save")
-@auth(roles=["tutor", "school_admin"])
+@auth(roles=["tutor", "teacher", "school_admin"])
 def save_exam_bank():
     data = request.json or {}
     eid = data.get("exam_id") or uuid.uuid4().hex[:10]
@@ -2107,7 +2112,7 @@ def save_exam_bank():
     return jsonify({"ok": True, "exam_id": eid})
 
 @app.delete("/api/exams/<exam_id>")
-@auth(roles=["tutor", "school_admin"])
+@auth(roles=["tutor", "teacher", "school_admin"])
 def delete_exam(exam_id):
     u = request.user
     if exam_id not in exams_registry: return jsonify({"error": "Not found"}), 404
@@ -2492,14 +2497,14 @@ def _normalize(text): return re.sub(r"\s+"," ",str(text or "").strip().lower())
 
 def _load_vs(did):
     """Retrieve vector store from cache, or re-index if possible."""
-    if did in qa_chains: return qa_chains[did]
+    if did in vector_stores: return vector_stores[did]
     
     # Try re-indexing if it's a real document with a path
     db = db_load()
     doc = next((d for d in db.get("documents",[]) if d["id"]==did), None)
     if doc and doc.get("path") and Path(doc["path"]).exists():
-        chunks, chapters = _index_doc(Path(doc["path"]), did, doc["ext"])
-        return qa_chains.get(did)
+        _index_doc(Path(doc["path"]), did, doc["ext"])
+        return vector_stores.get(did)
         
     return None
 
@@ -2530,7 +2535,7 @@ def _index_doc(path, did, ext):
         emb_fn = _get_emb()
         vs = InMemoryVectorStore.from_documents(chunks, emb_fn)
         # Store in global cache for the session
-        qa_chains[did] = vs
+        vector_stores[did] = vs
         
         chapters = _extract_chapters(docs)
         return len(chunks), chapters
