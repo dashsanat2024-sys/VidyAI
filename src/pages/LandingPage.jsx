@@ -67,10 +67,10 @@ export default function LandingPage() {
       {/* ── NAV ── */}
       <nav>
         <a className="nav-logo" href="#">
-          <div className="nav-logo-icon">🎓</div>
+          <ParvidyaLogo size={42} />
           <div>
             <div className="nav-logo-name">Parvidya</div>
-            <div className="nav-tagline">AI Education for Every Classroom</div>
+            <div className="nav-tagline">AI Education for Every Indian Classroom</div>
           </div>
         </a>
         <div className="nav-links">
@@ -276,7 +276,7 @@ export default function LandingPage() {
           <div className="footer-top">
             <div className="footer-col">
               <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
-                <div style={{ width: 36, height: 36, background: 'linear-gradient(135deg,var(--saffron),var(--saffron2))', borderRadius: 10, display: 'grid', placeItems: 'center', fontSize: 16 }}>🎓</div>
+                <ParvidyaLogo size={38} />
                 <span style={{ fontFamily: 'var(--serif)', fontSize: 20, color: '#fff' }}>Parvidya</span>
               </div>
               <p style={{ fontSize: 13, lineHeight: 1.7 }}>AI-powered education for Indian schools and colleges. Making quality education accessible to every student.</p>
@@ -313,7 +313,7 @@ export default function LandingPage() {
       <style>{`
         nav { position:fixed; top:0; left:0; right:0; z-index:100; padding:0 40px; height:70px; display:flex; align-items:center; gap:32px; background:rgba(253,250,245,.92); backdrop-filter:blur(16px); border-bottom:1px solid rgba(232,224,208,.6); }
         .nav-logo { display:flex; align-items:center; gap:12px; text-decoration:none; }
-        .nav-logo-icon { width:40px; height:40px; background:linear-gradient(135deg,var(--saffron),var(--saffron2)); border-radius:12px; display:grid; place-items:center; font-size:20px; box-shadow:0 4px 12px rgba(232,118,26,.3); flex-shrink:0; }
+        /* .nav-logo-icon replaced by ParvidyaLogo SVG component */
         .nav-logo-name { font-family:var(--serif); font-size:22px; color:var(--indigo); }
         .nav-tagline { font-size:11px; color:var(--muted); font-weight:500; letter-spacing:.3px; margin-top:-2px; }
         .nav-links { display:flex; gap:28px; margin-left:auto; }

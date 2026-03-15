@@ -75,7 +75,7 @@ for _d in [DATA_F.parent, UPL_DIR, DB_DIR, EXAMS_DIR, EVAL_DIR, BULK_DIR]:
 ALLOWED = {"pdf","txt","md","mp3","mp4","wav","m4a","jpg","jpeg","png","webp"}
 
 # ── Flask ─────────────────────────────────────────────────────────────────────
-app = Flask(__name__, static_folder="dist", static_url_path="")
+app = Flask(__name__, static_folder="../vidyai-react/dist", static_url_path="")
 CORS(app, resources={r"/api/*": {"origins": "*"}})
 app.config["MAX_CONTENT_LENGTH"] = 100 * 1024 * 1024
 
@@ -2660,26 +2660,26 @@ def email_practice_report():
 @app.get("/api/admin/users")
 @auth(roles=["admin","school_admin"])
 def admin_list_users():
-    db   = db_load()
-    u    = request.user
+    """
+    Return ALL registered users to admin / school_admin — no institution
+    filtering whatsoever.  Every user who successfully signs up must
+    appear here immediately, regardless of what institution they entered
+    (or left blank) at registration time.
+    """
+    db          = db_load()
+    u           = request.user
     role_filter = request.args.get("role")
 
+    # Include every user except the caller themselves.
+    # school_admin cannot see super-admin accounts to prevent privilege
+    # escalation, but they see every student / teacher / parent / tutor.
     if u["role"] == "admin":
-        # Super-admin: see every single user
-        users = list(db["users"])
+        users = [x for x in db["users"] if x["id"] != u["id"]]
     else:
-        # school_admin: see all users who share their institution,
-        # PLUS any user with NO institution (just registered, institution not yet set),
-        # but never other admin/school_admin accounts
-        inst  = u.get("institution", "").strip()
         users = [
             x for x in db["users"]
-            if x["role"] not in ("admin",)
-            and x["id"] != u["id"]
-            and (
-                x.get("institution", "").strip() == inst   # same institution
-                or x.get("institution", "").strip() == ""  # no institution set yet
-            )
+            if x["id"] != u["id"]
+            and x["role"] != "admin"   # hide super-admin from school_admin
         ]
 
     if role_filter:
@@ -2737,21 +2737,14 @@ def admin_stats():
     db = db_load()
     u  = request.user
 
+    # Same rule as admin_list_users — show every user with no filtering
     if u["role"] == "admin":
-        # Super-admin sees all users
         users = [x for x in db["users"] if x["id"] != u["id"]]
     else:
-        # school_admin: same logic as admin_list_users —
-        # see users in same institution AND users with no institution set yet
-        inst  = u.get("institution", "").strip()
         users = [
             x for x in db["users"]
-            if x["role"] not in ("admin",)
-            and x["id"] != u["id"]
-            and (
-                x.get("institution", "").strip() == inst   # same institution
-                or x.get("institution", "").strip() == ""  # no institution yet
-            )
+            if x["id"] != u["id"]
+            and x["role"] != "admin"
         ]
 
     # Activity log: filter to only show actions by users this role should see
