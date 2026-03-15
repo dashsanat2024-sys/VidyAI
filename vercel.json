@@ -10,7 +10,7 @@
       }
     },
     {
-      "src": "vidyai-react/dist/**",
+      "src": "dist/**",
       "use": "@vercel/static"
     }
   ],
@@ -21,11 +21,11 @@
     },
     {
       "src": "/assets/(.*)",
-      "dest": "vidyai-react/dist/assets/$1"
+      "dest": "dist/assets/$1"
     },
     {
       "src": "/(.*\\.(js|css|png|jpg|svg|ico|woff2?))",
-      "dest": "vidyai-react/dist/$1"
+      "dest": "dist/$1"
     },
     {
       "src": "/(.*)",
