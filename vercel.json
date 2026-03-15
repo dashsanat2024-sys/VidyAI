@@ -6,7 +6,9 @@
       "use": "@vercel/python",
       "config": {
         "maxLambdaSize": "50mb",
-        "runtime": "python3.11"
+        "runtime": "python3.11",
+        "maxDuration": 60,
+        "memory": 1024
       }
     },
     {
@@ -35,10 +37,5 @@
   "env": {
     "VERCEL": "1"
   },
-  "functions": {
-    "app.py": {
-      "maxDuration": 60,
-      "memory": 1024
-    }
   }
 }
