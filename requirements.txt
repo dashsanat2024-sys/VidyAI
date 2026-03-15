@@ -1,0 +1,45 @@
+# VidyAI — Production Dependencies
+# Stack: Flask + MongoDB (primary) + JSON (fallback) + LangChain + OpenAI GPT-4o
+
+# ── Web Framework ──────────────────────────────────────────────────────────────
+flask>=3.0.0
+flask-cors>=4.0.0
+werkzeug>=3.0.0
+
+# ── OpenAI SDK (GPT-4o / GPT-4o-mini + Whisper + Vision) ─────────────────────
+openai>=1.35.0
+
+# ── LangChain Core ────────────────────────────────────────────────────────────
+langchain>=0.2.0
+langchain-core>=0.2.0
+langchain-openai>=0.1.0
+langchain-text-splitters>=0.2.0
+langchain-community>=0.2.0      # PyPDFLoader (eval answer extraction)
+
+# ── PDF Processing ────────────────────────────────────────────────────────────
+pypdf>=4.0.0
+
+# ── MongoDB — Primary Database ────────────────────────────────────────────────
+pymongo[srv]>=4.6.0             # [srv] = SRV DNS support for Atlas
+dnspython>=2.6.0                # Required by pymongo SRV
+certifi>=2024.2.2               # TLS cert bundle for Atlas SSL
+
+# ── Environment / Config ──────────────────────────────────────────────────────
+python-dotenv>=1.0.0
+
+# ── Tokenisation (LangChain token counting) ───────────────────────────────────
+tiktoken>=0.7.0
+
+# ── PDF Generation (question paper placeholder PDFs) ─────────────────────────
+reportlab>=4.0.0
+
+# ── Email ─────────────────────────────────────────────────────────────────────
+# Uses stdlib smtplib — no extra package needed
+
+# ── Vercel Deployment Notes ───────────────────────────────────────────────────
+# 1. Set env vars in Vercel dashboard:
+#      OPENAI_API_KEY, MONGO_URI, SMTP_HOST, SMTP_USER, SMTP_PASS, SMTP_PORT
+# 2. Vercel Python serverless runtime supports packages above.
+# 3. /tmp is the only writable directory on Vercel (IS_VERCEL=1 auto-detects this).
+# 4. Build the React frontend first:  cd vidyai-react && npm run build
+# 5. Point Flask static_folder to vidyai-react/dist/

@@ -1,0 +1,206 @@
+import { useState, useRef, useEffect } from 'react'
+import { useAuth } from '../../context/AuthContext'
+import { useApp } from '../../context/AppContext'
+import { apiPost, apiPostForm, speakText } from '../../utils/api'
+
+function Message({ role, text, sources }) {
+  return (
+    <div className={`msg ${role}`}>
+      <div className="msg-bubble">{text}</div>
+      {sources?.length > 0 && (
+        <div style={{ fontSize: 10, color: 'var(--indigo2)', marginTop: 4, fontWeight: 600 }}>
+          📎 Sources: {sources.join(', ')}
+        </div>
+      )}
+    </div>
+  )
+}
+
+export default function ChatPanel({ showToast }) {
+  const { token } = useAuth()
+  const { syllabi, activeSyllabus, setActiveSyllabus, removeSyllabus, refreshData } = useApp()
+
+  const [messages,    setMessages]    = useState([])
+  const [input,       setInput]       = useState('')
+  const [typing,      setTyping]      = useState(false)
+  const [selectedSyl, setSelectedSyl] = useState('')
+  const [speaking,    setSpeaking]    = useState(false)
+  const [deleting,    setDeleting]    = useState(false)
+  const bottomRef = useRef(null)
+  const fileRef   = useRef(null)
+
+  useEffect(() => {
+    if (activeSyllabus?.id) setSelectedSyl(activeSyllabus.id)
+  }, [activeSyllabus])
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [messages, typing])
+
+  const addMsg = (role, text, sources = []) =>
+    setMessages(prev => [...prev, { role, text, sources, id: Date.now() }])
+
+  const sendChat = async () => {
+    const q = input.trim()
+    if (!q) return
+    setInput('')
+    addMsg('user', q)
+    setTyping(true)
+    try {
+      const res  = await apiPost('/chat', { question: q, syllabus_id: selectedSyl || undefined }, token)
+      const data = await res.json()
+      setTyping(false)
+      if (data.answer) addMsg('bot', data.answer, data.sources)
+      else if (data.error) addMsg('bot', `Error: ${data.error}`)
+    } catch { showToast('Chat error', 'error'); setTyping(false) }
+  }
+
+  const handleFileUpload = async (e) => {
+    const file = e.target.files[0]; if (!file) return
+    const fd = new FormData()
+    fd.append('file', file)
+    fd.append('syllabus_name', file.name.replace(/\.[^/.]+$/, ''))
+    showToast('Processing document…', 'success')
+    try {
+      const res  = await apiPostForm('/upload', fd, token)
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Upload failed')
+      showToast('Document indexed!', 'success')
+      await refreshData()
+      if (data.syllabus_id) {
+        setSelectedSyl(data.syllabus_id)
+        setActiveSyllabus({ id: data.syllabus_id, name: data.syllabus_name || file.name })
+      }
+    } catch (e) { showToast(e.message, 'error') }
+    fileRef.current.value = ''
+  }
+
+  // Delete syllabus from backend and remove from local list
+  const handleDeleteSyllabus = async () => {
+    if (!selectedSyl) { showToast('Select a syllabus to remove', 'warning'); return }
+    if (!window.confirm('Remove this syllabus from your list? This cannot be undone.')) return
+    setDeleting(true)
+    try {
+      const res = await fetch(`/api/syllabi/${selectedSyl}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` }
+      })
+      if (res.ok) {
+        removeSyllabus(selectedSyl)
+        setSelectedSyl('')
+        showToast('Syllabus removed', 'success')
+      } else {
+        const d = await res.json()
+        showToast(d.error || 'Failed to remove', 'error')
+      }
+    } catch { showToast('Failed to remove', 'error') }
+    setDeleting(false)
+  }
+
+  const handleSpeak = () => {
+    const last = [...messages].reverse().find(m => m.role === 'bot')
+    if (!last) { showToast('No AI response to read', 'warning'); return }
+    setSpeaking(true)
+    speakText(last.text, () => setSpeaking(false))
+  }
+
+  const quickPrompts = [
+    'Summarise the key concepts',
+    'Give me 5 important questions',
+    'Explain the hardest topic simply',
+    'What should I focus on for exams?',
+  ]
+
+  const selectedName = syllabi.find(s => s.id === selectedSyl)?.name || ''
+
+  return (
+    <div className="panel active">
+      <div style={{ maxWidth: 900, margin: '0 auto', display: 'flex', flexDirection: 'column', height: 'calc(100vh - 110px)' }}>
+
+        {/* Header bar */}
+        <div style={{ display: 'flex', gap: 10, marginBottom: 14, flexWrap: 'wrap', alignItems: 'center' }}>
+          <select className="fi sel" style={{ flex: 1, minWidth: 200 }}
+            value={selectedSyl} onChange={e => setSelectedSyl(e.target.value)}>
+            <option value="">— Select Knowledge Source (optional) —</option>
+            {syllabi.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+          </select>
+
+          {/* Clear / Delete syllabus */}
+          {selectedSyl && (
+            <button
+              onClick={handleDeleteSyllabus}
+              disabled={deleting}
+              title={`Remove "${selectedName}" from your list`}
+              style={{ padding: '9px 14px', background: '#fee2e2', border: '1px solid #fca5a5', borderRadius: 9, color: '#991b1b', fontSize: 12, fontWeight: 700, cursor: 'pointer', fontFamily: 'var(--sans)', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: 5 }}>
+              {deleting ? '…' : '🗑 Remove'}
+            </button>
+          )}
+
+          <button className="btn-saffron" onClick={() => fileRef.current.click()} style={{ whiteSpace: 'nowrap' }}>
+            📎 Upload Doc
+          </button>
+          <button className="btn-outline" onClick={handleSpeak} disabled={speaking} style={{ whiteSpace: 'nowrap' }}>
+            {speaking ? '🔊 Speaking…' : '🔊 Listen'}
+          </button>
+          <button className="btn-outline" onClick={() => setMessages([])} style={{ whiteSpace: 'nowrap' }}>
+            🗑 Clear Chat
+          </button>
+          <input ref={fileRef} type="file" accept=".pdf,.txt,.md,.mp3,.mp4,.wav,.m4a" style={{ display: 'none' }} onChange={handleFileUpload} />
+        </div>
+
+        {/* Messages */}
+        <div className="card" style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+          <div className="chat-messages" style={{ flex: 1, overflowY: 'auto', padding: 20, display: 'flex', flexDirection: 'column', gap: 14 }}>
+            {messages.length === 0 && (
+              <div style={{ textAlign: 'center', padding: '40px 20px' }}>
+                <div style={{ fontSize: 48, marginBottom: 16 }}>💬</div>
+                <div style={{ fontFamily: 'var(--serif)', fontSize: 20, color: 'var(--indigo)', marginBottom: 8 }}>
+                  Your AI Study Tutor
+                </div>
+                <p style={{ color: 'var(--muted)', fontSize: 14, maxWidth: 440, margin: '0 auto 24px', lineHeight: 1.6 }}>
+                  {syllabi.length === 0
+                    ? 'Upload a PDF or text file to start. The AI will answer questions using only your document.'
+                    : 'Select a syllabus above and ask any question. I answer using your materials.'}
+                </p>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, justifyContent: 'center' }}>
+                  {quickPrompts.map(p => (
+                    <button key={p} className="chip selected" onClick={() => setInput(p)}>{p}</button>
+                  ))}
+                </div>
+              </div>
+            )}
+            {messages.map(m => <Message key={m.id} role={m.role} text={m.text} sources={m.sources} />)}
+            {typing && (
+              <div className="msg bot">
+                <div className="msg-bubble" style={{ display: 'flex', gap: 6, padding: '14px 16px' }}>
+                  {[0,1,2].map(i => (
+                    <div key={i} style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--muted2)', animation: `typingBounce 1.2s ${i * 0.2}s infinite` }} />
+                  ))}
+                </div>
+              </div>
+            )}
+            <div ref={bottomRef} />
+          </div>
+
+          <div className="chat-input-row">
+            <input className="fi" style={{ flex: 1, borderRadius: 50, padding: '11px 20px' }}
+              placeholder={selectedSyl ? `Ask about "${selectedName}"…` : 'Ask anything…'}
+              value={input}
+              onChange={e => setInput(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && sendChat()} />
+            <button className="btn-saffron" onClick={sendChat} style={{ borderRadius: 50, padding: '11px 22px' }}>
+              Send →
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <style>{`
+        @keyframes typingBounce {
+          0%, 60%, 100% { transform: translateY(0); }
+          30% { transform: translateY(-6px); }
+        }
+      `}</style>
+    </div>
+  )
+}
