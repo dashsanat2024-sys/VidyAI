@@ -1,34 +1,24 @@
 // ── Parvidya Professional Logo ─────────────────────────────────────────────
-function ParvidyaLogo({ size = 40 }) {
-  const s = size
+function ParvidyaLogo({ size = 40, dark = false }) {
   return (
-    <svg width={s} height={s} viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: 0 }}>
+    <svg width={size} height={size} viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: 0, display: 'block' }}>
       <defs>
-        <linearGradient id="pvGrad" x1="0" y1="0" x2="48" y2="48" gradientUnits="userSpaceOnUse">
+        <linearGradient id="pvG1" x1="0" y1="0" x2="48" y2="48" gradientUnits="userSpaceOnUse">
           <stop offset="0%" stopColor="#E8761A"/>
           <stop offset="100%" stopColor="#F59E0B"/>
         </linearGradient>
-        <linearGradient id="pvGrad2" x1="0" y1="0" x2="48" y2="48" gradientUnits="userSpaceOnUse">
+        <linearGradient id="pvG2" x1="0" y1="0" x2="48" y2="48" gradientUnits="userSpaceOnUse">
           <stop offset="0%" stopColor="#3730A3"/>
           <stop offset="100%" stopColor="#6D28D9"/>
         </linearGradient>
-        <linearGradient id="pvGrad3" x1="24" y1="4" x2="24" y2="44" gradientUnits="userSpaceOnUse">
-          <stop offset="0%" stopColor="#FFF7ED"/>
-          <stop offset="100%" stopColor="#FED7AA"/>
-        </linearGradient>
       </defs>
-      {/* Outer shape — book arc */}
-      <rect x="2" y="2" width="44" height="44" rx="12" fill="url(#pvGrad)"/>
-      {/* Inner white book pages */}
-      <rect x="9" y="10" width="13" height="26" rx="3" fill="white" opacity="0.95"/>
+      <rect x="2" y="2" width="44" height="44" rx="11" fill="url(#pvG1)"/>
+      <rect x="9"  y="10" width="13" height="26" rx="3" fill="white" opacity="0.95"/>
       <rect x="26" y="10" width="13" height="26" rx="3" fill="white" opacity="0.85"/>
-      {/* Spine */}
-      <rect x="22" y="9" width="4" height="28" rx="2" fill="url(#pvGrad2)" opacity="0.7"/>
-      {/* Devanagari प character */}
+      <rect x="22" y="9"  width="4"  height="28" rx="2" fill="url(#pvG2)" opacity="0.7"/>
       <text x="15.5" y="29" fontFamily="serif" fontSize="15" fontWeight="900" fill="#3730A3" textAnchor="middle">प</text>
-      {/* Star / knowledge dot above */}
       <circle cx="35" cy="12" r="3.5" fill="white" opacity="0.9"/>
-      <circle cx="35" cy="12" r="1.5" fill="url(#pvGrad2)"/>
+      <circle cx="35" cy="12" r="1.5" fill="url(#pvG2)"/>
     </svg>
   )
 }
@@ -38,14 +28,53 @@ import AuthModal from '../components/auth/AuthModal'
 
 const BOARDS = ['CBSE','ICSE / ISC','Maharashtra Board','Tamil Nadu Board','Karnataka Board','Kerala Board','UP Board','Gujarat Board','Rajasthan Board','West Bengal Board','Telangana Board','NIOS']
 
+const STATS = [
+  { num: '36', label: 'States & UTs' },
+  { num: '35+', label: 'Boards Covered' },
+  { num: '2M+', label: 'Questions Generated' },
+  { num: '500+', label: 'Schools Onboarded' },
+]
+
+const FEATURES = [
+  { icon: '📝', color: '#EEF2FF', label: 'AI Summariser', desc: '10-point chapter summaries with real-world examples. Exam-ready in seconds.' },
+  { icon: '🃏', color: '#FEF3C7', label: 'Smart Flashcards', desc: 'Generate 5–20 Q&A cards per chapter. Flip to test yourself instantly.' },
+  { icon: '🖋️', color: '#D1FAE5', label: 'Question Master', desc: 'Create printable exam papers with answer keys. Mixed or section-wise.' },
+  { icon: '🔊', color: '#FCE7F3', label: 'Audio Lessons', desc: 'Listen to your chapter explained like a teacher — hands-free learning.' },
+  { icon: '📹', color: '#E0F2FE', label: 'AI Video Teacher', desc: 'Ms. Vidya explains chapters with animated slides and examples.' },
+  { icon: '📊', color: '#CCFBF1', label: 'Bulk Evaluation', desc: 'Upload answer sheets. AI grades, scores, and emails reports to parents.' },
+]
+
+const STEPS = [
+  { n: '01', title: 'Choose Your Board', desc: 'Select from CBSE, ICSE or any of 35+ state boards. Pick your class and subject.' },
+  { n: '02', title: 'Load the Chapter', desc: 'Official NCERT & state board chapter lists load instantly. Select one or many.' },
+  { n: '03', title: 'Pick an AI Tool', desc: 'Summarise, flashcard, practice, audio lesson or AI video — one tap.' },
+  { n: '04', title: 'Learn & Evaluate', desc: 'Study, generate exam papers, evaluate answer sheets, and share reports.' },
+]
+
+const TESTIMONIALS = [
+  {
+    quote: 'Parvidya cut my exam paper preparation from 3 hours to under 5 minutes. The AI-generated questions are better than what I was writing manually.',
+    name: 'Mrs. Priya Sharma', role: 'Science Teacher', school: 'Delhi Public School', emoji: '👩‍🏫',
+  },
+  {
+    quote: 'Our Class 10 board results improved by 23% after we introduced Parvidya summaries and flashcards. Students actually enjoy studying now.',
+    name: 'Mr. Rajesh Kumar', role: 'Principal', school: "St. Xavier's School, Mumbai", emoji: '🏫',
+  },
+  {
+    quote: 'The AI tutor answers my questions at midnight, never gets impatient, and uses examples from real life. I got 94% in my boards!',
+    name: 'Ananya Iyer', role: 'Class 12 Student', school: 'Chennai', emoji: '🎒',
+  },
+]
+
 function useFadeIn() {
   const ref = useRef(null)
   useEffect(() => {
-    const obs = new IntersectionObserver(entries => {
-      entries.forEach(e => { if (e.isIntersecting) e.target.classList.add('visible') })
-    }, { threshold: .1 })
+    const obs = new IntersectionObserver(
+      (entries) => entries.forEach(e => { if (e.isIntersecting) e.target.classList.add('lp-visible') }),
+      { threshold: 0.08 }
+    )
     const el = ref.current
-    if (el) { el.querySelectorAll('.fade-in').forEach(x => obs.observe(x)) }
+    if (el) el.querySelectorAll('.lp-fade').forEach(x => obs.observe(x))
     return () => obs.disconnect()
   }, [])
   return ref
@@ -55,214 +84,241 @@ export default function LandingPage() {
   const [modalOpen, setModalOpen] = useState(false)
   const [modalForm, setModalForm] = useState('login')
   const [modalRole, setModalRole] = useState('student')
-  const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
-  const sectionRef = useFadeIn()
+  const [mobileMenu, setMobileMenu] = useState(false)
+  const [scrolled, setScrolled] = useState(false)
+  const pageRef = useFadeIn()
 
   const openModal = (form = 'login', role = 'student') => {
     setModalForm(form); setModalRole(role); setModalOpen(true)
   }
 
+  useEffect(() => {
+    const handler = () => setScrolled(window.scrollY > 20)
+    window.addEventListener('scroll', handler, { passive: true })
+    return () => window.removeEventListener('scroll', handler)
+  }, [])
+
   return (
-    <div id="landing-page" ref={sectionRef}>
-      {/* ── NAV ── */}
-      <nav>
-        <a className="nav-logo" href="#">
-          <ParvidyaLogo size={42} />
+    <div id="lp" ref={pageRef}>
+
+      {/* ════════════════════ NAV ════════════════════ */}
+      <nav className={`lp-nav${scrolled ? ' lp-nav-scrolled' : ''}`}>
+        <a className="lp-nav-brand" href="#">
+          <ParvidyaLogo size={38} />
           <div>
-            <div className="nav-logo-name">Parvidya</div>
-            <div className="nav-tagline">AI Education for Every Indian Classroom</div>
+            <div className="lp-brand-name">Parvidya</div>
+            <div className="lp-brand-sub">AI Education · India</div>
           </div>
         </a>
-        <div className="nav-links">
-          <a className="nav-link" href="#roles">For Schools</a>
-          <a className="nav-link" href="#features">Features</a>
-          <a className="nav-link" href="#how">How it Works</a>
-          <a className="nav-link" href="#boards">Boards</a>
+        <div className="lp-nav-links">
+          <a href="#roles">For Schools</a>
+          <a href="#features">Features</a>
+          <a href="#how">How it Works</a>
+          <a href="#boards">Boards</a>
         </div>
-        <div className="nav-ctas">
-          <button className="btn-outline" onClick={() => openModal('login')}>Sign In</button>
-          <button className="btn-saffron" onClick={() => openModal('register')}>Get Started Free →</button>
+        <div className="lp-nav-actions">
+          <button className="lp-btn-ghost" onClick={() => openModal('login')}>Sign In</button>
+          <button className="lp-btn-primary" onClick={() => openModal('register')}>Get Started Free →</button>
         </div>
-        <button className="menu-toggle" onClick={() => setMobileMenuOpen(true)}>☰</button>
+        <button className="lp-hamburger" onClick={() => setMobileMenu(true)} aria-label="Open menu">
+          <span/><span/><span/>
+        </button>
       </nav>
 
-      {/* Mobile Menu */}
-      <div className={`mobile-menu-overlay ${mobileMenuOpen ? 'open' : ''}`}>
-        <div className="mobile-menu-inner">
-          <button className="mobile-menu-close" onClick={() => setMobileMenuOpen(false)}>✕</button>
-          <div className="mobile-menu-links">
-            <a href="#roles" onClick={() => setMobileMenuOpen(false)}>For Schools</a>
-            <a href="#features" onClick={() => setMobileMenuOpen(false)}>Features</a>
-            <a href="#how" onClick={() => setMobileMenuOpen(false)}>How it Works</a>
-            <a href="#boards" onClick={() => setMobileMenuOpen(false)}>Boards</a>
-            <button className="btn-outline" onClick={() => { setMobileMenuOpen(false); openModal('login') }}>Sign In</button>
-            <button className="btn-saffron" onClick={() => { setMobileMenuOpen(false); openModal('register') }}>Get Started Free →</button>
+      {/* Mobile menu */}
+      {mobileMenu && (
+        <div className="lp-mobile-overlay" onClick={() => setMobileMenu(false)}>
+          <div className="lp-mobile-drawer" onClick={e => e.stopPropagation()}>
+            <div className="lp-mobile-top">
+              <ParvidyaLogo size={32} />
+              <span className="lp-brand-name" style={{ fontSize:18 }}>Parvidya</span>
+              <button className="lp-mobile-close" onClick={() => setMobileMenu(false)}>✕</button>
+            </div>
+            <nav className="lp-mobile-links">
+              {['#roles','#features','#how','#boards'].map((h, i) => (
+                <a key={h} href={h} onClick={() => setMobileMenu(false)}>
+                  {['For Schools','Features','How it Works','Boards'][i]}
+                </a>
+              ))}
+            </nav>
+            <div className="lp-mobile-btns">
+              <button className="lp-btn-ghost" style={{ width:'100%' }} onClick={() => { setMobileMenu(false); openModal('login') }}>Sign In</button>
+              <button className="lp-btn-primary" style={{ width:'100%' }} onClick={() => { setMobileMenu(false); openModal('register') }}>Get Started Free →</button>
+            </div>
           </div>
         </div>
-      </div>
+      )}
 
-      {/* ── HERO ── */}
-      <section className="hero">
-        <div className="hero-bg">
-          <div className="hero-mandala" />
-          <div className="hero-mandala2" />
-          <div className="hero-grid" />
+      {/* ════════════════════ HERO ════════════════════ */}
+      <section className="lp-hero">
+        <div className="lp-hero-bg">
+          <div className="lp-hero-blob lp-hero-blob1" />
+          <div className="lp-hero-blob lp-hero-blob2" />
+          <div className="lp-hero-grid" />
         </div>
-        <div className="hero-inner">
-          <div className="hero-badge"><div className="pulse-dot" />🇮🇳 Made for Indian Education</div>
-          <h1>AI Tutor for<br />Every <em>Indian</em><br />Classroom</h1>
-          <p className="hero-sub">
-            From CBSE to State boards — generate question papers, evaluate answer sheets,
-            create AI audio lessons, and chat with your textbooks. All in one platform.
+        <div className="lp-hero-inner">
+          <div className="lp-hero-badge lp-fade">
+            <span className="lp-badge-dot"/>
+            🇮🇳 Made for 36 Indian States &amp; UTs
+          </div>
+          <h1 className="lp-h1 lp-fade">
+            The AI Teacher<br/>
+            Every <span className="lp-gradient-text">Indian Student</span><br/>
+            Deserves
+          </h1>
+          <p className="lp-hero-sub lp-fade">
+            NCERT to State boards — AI summaries, question papers, answer sheet evaluation, audio lessons and live chat with your textbook. All in one platform.
           </p>
-          <div className="hero-ctas">
-            <button className="btn-hero-primary" onClick={() => openModal('register')}>
+          <div className="lp-hero-ctas lp-fade">
+            <button className="lp-btn-hero-primary" onClick={() => openModal('register')}>
               🚀 Start Learning Free
             </button>
-            <button className="btn-hero-sec" onClick={() => openModal('login')}>
-              Sign In →
+            <button className="lp-btn-hero-sec" onClick={() => openModal('login')}>
+              Already have an account →
             </button>
           </div>
-          <div className="hero-stats">
-            <div className="hstat"><div className="hstat-num">12+</div><div className="hstat-label">Boards Supported</div></div>
-            <div className="hstat"><div className="hstat-num">500+</div><div className="hstat-label">Schools Onboarded</div></div>
-            <div className="hstat"><div className="hstat-num">2M+</div><div className="hstat-label">Questions Generated</div></div>
+          <div className="lp-stats lp-fade">
+            {STATS.map(s => (
+              <div key={s.label} className="lp-stat">
+                <div className="lp-stat-num">{s.num}</div>
+                <div className="lp-stat-label">{s.label}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+        {/* Hero visual — product mockup */}
+        <div className="lp-hero-mockup lp-fade">
+          <div className="lp-mockup-card">
+            <div className="lp-mockup-header">
+              <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+                <ParvidyaLogo size={22} />
+                <span style={{ fontWeight:700, fontSize:13 }}>Curriculum Hub</span>
+              </div>
+              <span style={{ fontSize:11, color:'#94a3b8' }}>CBSE · Class 10</span>
+            </div>
+            <div className="lp-mockup-subject">📖 Science — Chapter 1: Chemical Reactions</div>
+            <div className="lp-mockup-tools">
+              {['📝 Summarise','🃏 Flashcards','❓ Questions','🔊 Audio','📹 Video'].map(t => (
+                <div key={t} className="lp-mockup-tool">{t}</div>
+              ))}
+            </div>
+            <div className="lp-mockup-summary">
+              <div className="lp-mockup-point"><span>1</span>A chemical reaction changes reactants into products with new properties…</div>
+              <div className="lp-mockup-point"><span>2</span>Indicators like litmus paper help identify acids and bases in a solution…</div>
+              <div className="lp-mockup-point lp-mockup-point-muted"><span>3</span>Oxidation involves gain of oxygen or loss of hydrogen…</div>
+            </div>
           </div>
         </div>
       </section>
 
-      {/* ── FEATURE STRIP ── */}
-      <div className="strip">
-        {['🎓 NCERT & State Board Aligned','🔊 AI Audio & Video Lessons','❓ One-Click Question Papers','📊 Bulk AI Evaluation & Marking'].map(item => (
-          <div key={item} className="strip-item">
-            <span className="strip-icon">{item.split(' ')[0]}</span>
-            {item.split(' ').slice(1).join(' ')}
+      {/* ════════════════════ TRUST BAR ════════════════════ */}
+      <div className="lp-trust-bar">
+        {['🎓 NCERT & State Board Aligned', '🔊 AI Audio & Video Lessons', '❓ One-Click Question Papers', '📊 AI Evaluation & Parent Reports', '🇮🇳 All 36 States & UTs'].map(item => (
+          <div key={item} className="lp-trust-item">
+            <span>{item.split(' ')[0]}</span>
+            <span>{item.split(' ').slice(1).join(' ')}</span>
           </div>
         ))}
       </div>
 
-      {/* ── WHO IS IT FOR ── */}
-      <section className="section roles-section" id="roles">
-        <div className="section-inner">
-          <div className="section-label">Who is it for?</div>
-          <h2>Built for Every Role<br />in Indian Education</h2>
-          <p className="section-sub">Whether you're a school administrator, classroom teacher, parent or eager student — Parvidya has tools tailored for you.</p>
-          <div className="roles-grid">
+      {/* ════════════════════ FOR WHOM ════════════════════ */}
+      <section className="lp-section lp-bg-cream" id="roles">
+        <div className="lp-section-inner">
+          <div className="lp-section-eyebrow">WHO IS IT FOR?</div>
+          <h2 className="lp-h2">Built for Every Role<br/>in Indian Education</h2>
+          <p className="lp-section-sub">From classroom teachers to students and parents — Parvidya has tools tailored to your role.</p>
+          <div className="lp-roles-grid">
             {[
-              {
-                cls: 'school', emoji: '🏫', name: 'School / College',
-                desc: 'Save hundreds of hours on examination cycles. Generate papers, automate evaluations, and eliminate human bias in marking.',
-                features: ['Multi-board & multi-class setup','Teacher and student account management','Institution-wide performance analytics','Parent communication system','Bulk evaluation reports'],
-                cta: 'Register School →', role: 'school'
-              },
-              {
-                cls: 'teacher', emoji: '👩‍🏫', name: 'Teacher / Tutor',
-                desc: 'Create lesson plans, generate question papers, evaluate bulk answer sheets with 99.9% accuracy, and email detailed reports to parents instantly.',
-                features: ['Auto-load NCERT & State curricula','AI Voice-Guided Audio Explanations','One-Click Exam Paper Generation','Printable question papers with keys','Interactive Video Lesson creation'],
-                cta: 'Join as Teacher →', role: 'teacher'
-              },
-              {
-                cls: 'student', emoji: '🎒', name: 'Student',
-                desc: 'Study smarter — get AI summaries, practise with flashcards, take quizzes, and chat with your personal AI tutor any time.',
-                features: ['🔊 Listen to AI-generated explanations','📹 Watch AI Teacher Video Lessons','Practice with interactive flashcards','AI study chat tutor for deep-dives','NCERT & Indian State curricula'],
-                cta: 'Join as Student →', role: 'student'
-              },
-              {
-                cls: 'parent', emoji: '👨‍👩‍👧', name: 'Parent',
-                desc: 'Stay informed about your child\'s academic progress with AI-generated performance reports, exam results, and learning gap analysis.',
-                features: ['Receive detailed AI performance reports','Track your child\'s exam scores','Learning gap identification','Direct communication with school','Progress comparison over time'],
-                cta: 'Join as Parent →', role: 'student'
-              }
+              { emoji:'🏫', name:'School / College', color:'#e0e7ff', accent:'#4338ca',
+                features:['Multi-board, multi-class setup','Institution-wide performance analytics','Bulk evaluation with parent reports','Teacher & student account management','AI question banks per subject'],
+                cta:'Register School →', role:'school_admin' },
+              { emoji:'👩‍🏫', name:'Teacher / Tutor', color:'#dcfce7', accent:'#16a34a',
+                features:['NCERT & state curricula auto-loaded','One-click printable exam papers with keys','AI bulk answer sheet evaluation','Detailed parent email reports','Audio & video lesson creation'],
+                cta:'Join as Teacher →', role:'teacher' },
+              { emoji:'🎒', name:'Student', color:'#fef9c3', accent:'#ca8a04',
+                features:['10-point AI chapter summaries','Smart revision flashcards','AI tutor chat — ask anything','Question practice with instant feedback','Audio & video explanations'],
+                cta:'Join as Student →', role:'student' },
+              { emoji:'👨‍👩‍👧', name:'Parent', color:'#fce7f3', accent:'#9d174d',
+                features:['AI performance reports by email','Track exam scores & grades','Learning gap identification','School communication hub','Child progress over time'],
+                cta:'Join as Parent →', role:'parent' },
             ].map((r, i) => (
-              <div key={r.cls} className={`role-card ${r.cls} fade-in`} style={{ animationDelay: `${i * 0.1}s` }}>
-                <span className="role-emoji">{r.emoji}</span>
-                <div className="role-name">{r.name}</div>
-                <p className="role-desc">{r.desc}</p>
-                <ul className="role-features">{r.features.map(f => <li key={f}>{f}</li>)}</ul>
-                <button className="btn-role" onClick={() => openModal('register', r.role)}>{r.cta}</button>
+              <div key={r.name} className="lp-role-card lp-fade" style={{ '--card-color': r.color, '--card-accent': r.accent, animationDelay: `${i * 0.08}s` }}>
+                <div className="lp-role-emoji">{r.emoji}</div>
+                <div className="lp-role-name">{r.name}</div>
+                <ul className="lp-role-features">
+                  {r.features.map(f => <li key={f}>{f}</li>)}
+                </ul>
+                <button className="lp-role-cta" onClick={() => openModal('register', r.role)}>{r.cta}</button>
               </div>
             ))}
           </div>
         </div>
       </section>
 
-      {/* ── TOOLS ── */}
-      <section className="section" id="features">
-        <div className="section-inner">
-          <div className="section-label">AI Tools</div>
-          <h2>Six Powerful Tools,<br />One Platform</h2>
-          <p className="section-sub">Every tool works directly with your curriculum — just select your board, class, and subject.</p>
-          <div className="tools-grid">
-            {[
-              { icon: '📝', bg: 'var(--indigo3)',       name: 'Summarise',           desc: 'Every chapter distilled into 5 key points with real-world Indian examples. Clear, simple, and exam-ready.' },
-              { icon: '🃏', bg: 'var(--saffron-light)', name: 'Flashcards',          desc: '10 Q&A flashcards per chapter covering every important concept. Flip to reveal answers. Perfect for revision.' },
-              { icon: '❓', bg: '#d1fae5',              name: 'Generate Questions',  desc: 'Choose how many objective and subjective questions. Generate printable question papers with school details.' },
-              { icon: '🔊', bg: '#fce7f3',              name: 'AI Audio Lessons',    desc: 'Listen to high-quality audio explanations of complex topics. Teacher-like delivery for eyes-free learning.' },
-              { icon: '📹', bg: '#e0f2fe',              name: 'AI Interactive Video',desc: 'Full-screen interactive lessons with Ms. Vidya — animated teacher with dynamic slides and real-world examples.' },
-              { icon: '📊', bg: '#ccfbf1',              name: 'Bulk AI Evaluation',  desc: 'Upload hundreds of answer sheets at once. AI evaluates, marks, and generates individual student reports.' },
-            ].map((t, i) => (
-              <div key={t.name} className="tool-card fade-in" style={{ animationDelay: `${i * 0.05}s` }}>
-                <div className="tool-icon-wrap" style={{ background: t.bg }}>{t.icon}</div>
-                <div className="tool-name">{t.name}</div>
-                <p className="tool-desc">{t.desc}</p>
+      {/* ════════════════════ FEATURES ════════════════════ */}
+      <section className="lp-section lp-bg-white" id="features">
+        <div className="lp-section-inner">
+          <div className="lp-section-eyebrow">AI TOOLS</div>
+          <h2 className="lp-h2">Six Powerful Tools,<br/>One Platform</h2>
+          <p className="lp-section-sub">Every tool works with your curriculum — select board, class and subject to begin.</p>
+          <div className="lp-features-grid">
+            {FEATURES.map((f, i) => (
+              <div key={f.label} className="lp-feature-card lp-fade" style={{ animationDelay: `${i * 0.06}s` }}>
+                <div className="lp-feature-icon" style={{ background: f.color }}>{f.icon}</div>
+                <div className="lp-feature-name">{f.label}</div>
+                <p className="lp-feature-desc">{f.desc}</p>
               </div>
             ))}
           </div>
         </div>
       </section>
 
-      {/* ── HOW IT WORKS ── */}
-      <section className="section how-section" id="how">
-        <div className="section-inner">
-          <div className="section-label">How It Works</div>
-          <h2>Ready in 4 Steps</h2>
-          <p className="section-sub">No setup required. Just pick your board and start learning.</p>
-          <div className="steps-grid">
-            {[
-              { n: 1, title: 'Select Board & Class',  desc: 'Choose from CBSE, ICSE or any state board. Pick your class from 1 to 12.' },
-              { n: 2, title: 'Pick a Subject',        desc: 'Subjects auto-populate for your board and class. Select one and load the textbook.' },
-              { n: 3, title: 'Choose Chapters',       desc: 'Pick one, multiple, or all chapters from the government textbook.' },
-              { n: 4, title: 'Automate & Evaluate',   desc: 'Generate papers, evaluate answer sheets in bulk, and email performance reports to parents.' },
-            ].map((s, i) => (
-              <div key={s.n} className="step fade-in" style={{ animationDelay: `${i * 0.1}s` }}>
-                <div className="step-num">{s.n}</div>
-                <div className="step-title">{s.title}</div>
-                <p className="step-desc">{s.desc}</p>
+      {/* ════════════════════ HOW IT WORKS ════════════════════ */}
+      <section className="lp-section lp-how-section" id="how">
+        <div className="lp-section-inner">
+          <div className="lp-section-eyebrow lp-eyebrow-light">HOW IT WORKS</div>
+          <h2 className="lp-h2" style={{ color:'#fff' }}>Up and Running<br/>in Four Steps</h2>
+          <p className="lp-section-sub" style={{ color:'rgba(255,255,255,.65)' }}>No setup, no installation. Works on mobile, tablet and desktop.</p>
+          <div className="lp-steps">
+            {STEPS.map((s, i) => (
+              <div key={s.n} className="lp-step lp-fade" style={{ animationDelay: `${i * 0.1}s` }}>
+                <div className="lp-step-num">{s.n}</div>
+                <div className="lp-step-title">{s.title}</div>
+                <p className="lp-step-desc">{s.desc}</p>
               </div>
             ))}
           </div>
         </div>
       </section>
 
-      {/* ── BOARDS ── */}
-      <section className="section boards-section" id="boards">
-        <div className="section-inner">
-          <div className="section-label">Curriculum Boards</div>
-          <h2>Works with All Major<br />Indian Boards</h2>
-          <p className="section-sub">Government textbooks loaded from official sources — always accurate, always current.</p>
-          <div className="boards-wrap">
-            {BOARDS.map(b => <div key={b} className="board-pill">{b}</div>)}
+      {/* ════════════════════ BOARDS ════════════════════ */}
+      <section className="lp-section lp-bg-paper" id="boards">
+        <div className="lp-section-inner">
+          <div className="lp-section-eyebrow">CURRICULUM BOARDS</div>
+          <h2 className="lp-h2">Works with All Major<br/>Indian Boards</h2>
+          <p className="lp-section-sub">Government textbooks from official sources — always accurate, always current.</p>
+          <div className="lp-boards-wrap">
+            {BOARDS.map(b => <div key={b} className="lp-board-pill">{b}</div>)}
           </div>
         </div>
       </section>
 
-      {/* ── TESTIMONIALS ── */}
-      <section className="section" id="testimonials">
-        <div className="section-inner">
-          <div className="section-label">Testimonials</div>
-          <h2>Loved by Teachers<br />and Students</h2>
-          <div className="testi-grid">
-            {[
-              { stars: '★★★★★', quote: '"Parvidya has completely transformed how I prepare for class. I generate a full question paper for any chapter in under 2 minutes. It used to take me an entire evening."', emoji: '👩‍🏫', name: 'Priya Sharma', role: 'Science Teacher, Delhi Public School' },
-              { stars: '★★★★★', quote: '"Our Class 10 board exam results improved by 23% after we started using Parvidya\'s summaries and flashcards. Students actually enjoy studying now."', emoji: '🏫', name: 'Rajesh Kumar', role: 'Principal, St. Xavier\'s School, Mumbai' },
-              { stars: '★★★★★', quote: '"I used to spend hours studying and still feel confused. Now I chat with the AI tutor and it explains everything so simply — like a friend explaining, not a textbook."', emoji: '🎒', name: 'Ananya Iyer', role: 'Class 10 Student, Chennai' },
-            ].map((t, i) => (
-              <div key={t.name} className="testi-card fade-in" style={{ animationDelay: `${i * 0.1}s` }}>
-                <div className="stars">{t.stars}</div>
-                <p className="testi-quote">{t.quote}</p>
-                <div className="testi-author">
-                  <div className="testi-av">{t.emoji}</div>
-                  <div><div className="testi-name">{t.name}</div><div className="testi-role">{t.role}</div></div>
+      {/* ════════════════════ TESTIMONIALS ════════════════════ */}
+      <section className="lp-section lp-bg-white" id="testimonials">
+        <div className="lp-section-inner">
+          <div className="lp-section-eyebrow">TESTIMONIALS</div>
+          <h2 className="lp-h2">Loved by Teachers<br/>and Students Across India</h2>
+          <div className="lp-testi-grid">
+            {TESTIMONIALS.map((t, i) => (
+              <div key={t.name} className="lp-testi-card lp-fade" style={{ animationDelay: `${i * 0.1}s` }}>
+                <div className="lp-stars">★★★★★</div>
+                <p className="lp-testi-quote">"{t.quote}"</p>
+                <div className="lp-testi-author">
+                  <div className="lp-testi-av">{t.emoji}</div>
+                  <div>
+                    <div className="lp-testi-name">{t.name}</div>
+                    <div className="lp-testi-role">{t.role} · {t.school}</div>
+                  </div>
                 </div>
               </div>
             ))}
@@ -270,158 +326,255 @@ export default function LandingPage() {
         </div>
       </section>
 
-      {/* ── FOOTER ── */}
-      <footer>
-        <div className="footer-inner">
-          <div className="footer-top">
-            <div className="footer-col">
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
-                <ParvidyaLogo size={38} />
-                <span style={{ fontFamily: 'var(--serif)', fontSize: 20, color: '#fff' }}>Parvidya</span>
-              </div>
-              <p style={{ fontSize: 13, lineHeight: 1.7 }}>AI-powered education for Indian schools and colleges. Making quality education accessible to every student.</p>
-            </div>
-            <div className="footer-col">
-              <h4>Platform</h4>
-              <ul>
-                {['For Schools','For Teachers','For Students','Pricing'].map(l => <li key={l}><a href="#">{l}</a></li>)}
-              </ul>
-            </div>
-            <div className="footer-col">
-              <h4>Features</h4>
-              <ul>
-                {['AI Summaries','Flashcards','Question Papers','Evaluation'].map(l => <li key={l}><a href="#">{l}</a></li>)}
-              </ul>
-            </div>
-            <div className="footer-col">
-              <h4>Support</h4>
-              <ul>
-                {['Help Center','Contact Us','Privacy Policy','Terms of Use'].map(l => <li key={l}><a href="#">{l}</a></li>)}
-              </ul>
-            </div>
+      {/* ════════════════════ CTA BANNER ════════════════════ */}
+      <section className="lp-cta-banner">
+        <div className="lp-cta-inner">
+          <h2 className="lp-cta-heading">Start Teaching Smarter Today</h2>
+          <p className="lp-cta-sub">Free to start. No credit card required. All Indian boards supported.</p>
+          <div className="lp-cta-btns">
+            <button className="lp-btn-primary lp-btn-xl" onClick={() => openModal('register')}>
+              🚀 Create Free Account
+            </button>
+            <button className="lp-btn-ghost lp-btn-xl" style={{ color:'#fff', borderColor:'rgba(255,255,255,.4)' }}
+              onClick={() => openModal('login')}>
+              Sign In →
+            </button>
           </div>
-          <div className="footer-bottom">
+        </div>
+      </section>
+
+      {/* ════════════════════ FOOTER ════════════════════ */}
+      <footer className="lp-footer">
+        <div className="lp-footer-inner">
+          <div className="lp-footer-top">
+            <div className="lp-footer-brand">
+              <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:14 }}>
+                <ParvidyaLogo size={36} />
+                <span style={{ fontFamily:'var(--serif)', fontSize:20, color:'#fff' }}>Parvidya</span>
+              </div>
+              <p style={{ fontSize:13, lineHeight:1.75, color:'rgba(255,255,255,.45)', maxWidth:260 }}>
+                AI-powered education for every Indian school and student. Making quality learning accessible across all 36 states.
+              </p>
+            </div>
+            {[
+              { heading: 'Platform', links: ['For Schools','For Teachers','For Students','For Parents'] },
+              { heading: 'Features', links: ['AI Summaries','Flashcards','Question Papers','Evaluation','Audio Lessons'] },
+              { heading: 'Support',  links: ['Help Center','Contact Us','Privacy Policy','Terms of Use'] },
+            ].map(col => (
+              <div key={col.heading} className="lp-footer-col">
+                <h4>{col.heading}</h4>
+                <ul>{col.links.map(l => <li key={l}><a href="#">{l}</a></li>)}</ul>
+              </div>
+            ))}
+          </div>
+          <div className="lp-footer-bottom">
             <p>© 2025 Parvidya. Made with ❤️ for Indian Education.</p>
             <p>hello@parvidya.in</p>
           </div>
         </div>
       </footer>
 
-      {/* Auth Modal */}
       <AuthModal isOpen={modalOpen} onClose={() => setModalOpen(false)} defaultForm={modalForm} defaultRole={modalRole} />
 
       <style>{`
-        nav { position:fixed; top:0; left:0; right:0; z-index:100; padding:0 40px; height:70px; display:flex; align-items:center; gap:32px; background:rgba(253,250,245,.92); backdrop-filter:blur(16px); border-bottom:1px solid rgba(232,224,208,.6); }
-        .nav-logo { display:flex; align-items:center; gap:12px; text-decoration:none; }
-        /* .nav-logo-icon replaced by ParvidyaLogo SVG component */
-        .nav-logo-name { font-family:var(--serif); font-size:22px; color:var(--indigo); }
-        .nav-tagline { font-size:11px; color:var(--muted); font-weight:500; letter-spacing:.3px; margin-top:-2px; }
-        .nav-links { display:flex; gap:28px; margin-left:auto; }
-        .nav-link { font-size:14px; font-weight:500; color:var(--muted); text-decoration:none; transition:.2s; }
-        .nav-link:hover { color:var(--saffron); }
-        .nav-ctas { display:flex; gap:10px; margin-left:12px; }
-        .menu-toggle { display:none; background:none; border:none; font-size:28px; color:var(--indigo); cursor:pointer; margin-left:auto; padding:5px; }
-        .mobile-menu-overlay { display:none; position:fixed; inset:0; background:rgba(28,25,23,0.95); z-index:1100; padding:40px; backdrop-filter:blur(10px); }
-        .mobile-menu-overlay.open { display:flex; flex-direction:column; animation:fadeIn 0.3s ease; }
-        .mobile-menu-inner { width:100%; height:100%; display:flex; flex-direction:column; }
-        .mobile-menu-close { align-self:flex-end; background:none; border:none; color:#fff; font-size:40px; cursor:pointer; margin-bottom:40px; }
-        .mobile-menu-links { display:flex; flex-direction:column; gap:25px; }
-        .mobile-menu-links a { color:#fff; text-decoration:none; font-size:24px; font-weight:700; font-family:var(--serif); }
-        .mobile-menu-links .btn-outline, .mobile-menu-links .btn-saffron { width:100%; text-align:center; padding:15px; font-size:16px; }
+        /* ── RESET for landing page ── */
+        #lp * { box-sizing:border-box; }
+        #lp { font-family:var(--sans); color:var(--text); }
 
-        .hero { min-height:100vh; display:flex; align-items:center; position:relative; overflow:hidden; padding:100px 40px 60px; }
-        .hero-bg { position:absolute; inset:0; z-index:0; }
-        .hero-mandala { position:absolute; right:-180px; top:50%; transform:translateY(-50%); width:700px; height:700px; opacity:.06; background:conic-gradient(from 0deg,var(--saffron),var(--indigo),var(--saffron),var(--indigo),var(--saffron),var(--indigo),var(--saffron),var(--indigo),var(--saffron)); border-radius:50%; animation:spin 60s linear infinite; }
-        .hero-mandala2 { position:absolute; left:-120px; bottom:-100px; width:500px; height:500px; opacity:.04; background:conic-gradient(from 0deg,var(--saffron2),var(--indigo2),var(--saffron2),var(--indigo2),var(--saffron2)); border-radius:50%; animation:spin 40s linear infinite reverse; }
-        .hero-grid { position:absolute; inset:0; background-image:linear-gradient(rgba(232,224,208,.4) 1px,transparent 1px),linear-gradient(90deg,rgba(232,224,208,.4) 1px,transparent 1px); background-size:56px 56px; }
-        .hero-inner { position:relative; z-index:1; max-width:700px; }
-        .hero-badge { display:inline-flex; align-items:center; gap:8px; background:linear-gradient(135deg,var(--saffron-light),#ede9fe); border:1px solid rgba(232,118,26,.3); border-radius:50px; padding:7px 18px; font-size:12px; font-weight:700; color:var(--saffron); margin-bottom:32px; letter-spacing:.4px; text-transform:uppercase; }
-        .pulse-dot { width:6px; height:6px; border-radius:50%; background:var(--saffron); animation:pd 2s infinite; }
-        h1 { font-family:var(--serif); font-size:clamp(44px,6vw,80px); line-height:1.05; color:var(--indigo); margin-bottom:24px; }
-        h1 em { font-style:italic; background:linear-gradient(135deg,var(--saffron),var(--saffron2)); -webkit-background-clip:text; -webkit-text-fill-color:transparent; background-clip:text; }
-        .hero-sub { font-size:18px; color:var(--muted); line-height:1.75; margin-bottom:40px; font-weight:400; max-width:560px; }
-        .hero-ctas { display:flex; gap:14px; flex-wrap:wrap; margin-bottom:60px; }
-        .hero-stats { display:flex; gap:48px; flex-wrap:wrap; }
-        .hstat { text-align:left; }
-        .hstat-num { font-family:var(--serif); font-size:38px; color:var(--indigo); line-height:1; }
-        .hstat-label { font-size:13px; color:var(--muted); margin-top:4px; }
+        /* ── Fade-in animation ── */
+        .lp-fade { opacity:0; transform:translateY(24px); transition:opacity .55s ease, transform .55s ease; }
+        .lp-visible { opacity:1; transform:none; }
 
-        .strip { background:linear-gradient(135deg,var(--indigo),var(--indigo2)); padding:18px 40px; display:flex; gap:40px; justify-content:center; flex-wrap:wrap; }
-        .strip-item { display:flex; align-items:center; gap:10px; color:rgba(255,255,255,.85); font-size:13px; font-weight:500; }
+        /* ── NAV ── */
+        .lp-nav {
+          position:fixed; top:0; left:0; right:0; z-index:200;
+          height:66px; display:flex; align-items:center;
+          padding:0 40px; gap:32px;
+          background:rgba(253,250,245,.82);
+          backdrop-filter:blur(18px);
+          border-bottom:1px solid transparent;
+          transition:background .25s, border-color .25s, box-shadow .25s;
+        }
+        .lp-nav-scrolled {
+          background:rgba(253,250,245,.97);
+          border-color:rgba(232,224,208,.8);
+          box-shadow:0 2px 20px rgba(0,0,0,.06);
+        }
+        .lp-nav-brand { display:flex; align-items:center; gap:10px; text-decoration:none; flex-shrink:0; }
+        .lp-brand-name { font-family:var(--serif); font-size:20px; color:var(--indigo); line-height:1.1; }
+        .lp-brand-sub  { font-size:10px; color:var(--muted); letter-spacing:.3px; }
+        .lp-nav-links  { display:flex; gap:28px; margin-left:auto; }
+        .lp-nav-links a { font-size:14px; font-weight:500; color:var(--muted); text-decoration:none; transition:.15s; }
+        .lp-nav-links a:hover { color:var(--saffron); }
+        .lp-nav-actions { display:flex; gap:10px; }
+        .lp-hamburger { display:none; flex-direction:column; gap:5px; background:none; border:none; cursor:pointer; padding:6px; margin-left:auto; }
+        .lp-hamburger span { display:block; width:24px; height:2px; background:var(--indigo); border-radius:2px; }
 
-        .section { padding:96px 40px; }
-        .section-inner { max-width:1200px; margin:0 auto; }
-        .section-label { display:inline-block; background:var(--saffron-light); border:1px solid rgba(232,118,26,.3); border-radius:50px; padding:5px 16px; font-size:11px; font-weight:700; color:var(--saffron); margin-bottom:16px; letter-spacing:.5px; text-transform:uppercase; }
-        h2 { font-family:var(--serif); font-size:clamp(32px,4vw,52px); line-height:1.1; color:var(--indigo); margin-bottom:16px; }
-        .section-sub { font-size:16px; color:var(--muted); line-height:1.75; margin-bottom:0; max-width:560px; }
+        /* Shared button styles */
+        .lp-btn-primary { padding:10px 22px; background:linear-gradient(135deg,var(--saffron),var(--saffron2)); border:none; border-radius:10px; color:#fff; font-family:var(--sans); font-size:13px; font-weight:700; cursor:pointer; transition:.2s; white-space:nowrap; }
+        .lp-btn-primary:hover { transform:translateY(-1px); box-shadow:0 4px 16px rgba(232,118,26,.4); }
+        .lp-btn-ghost { padding:10px 22px; background:transparent; border:1.5px solid var(--warm); border-radius:10px; color:var(--text); font-family:var(--sans); font-size:13px; font-weight:600; cursor:pointer; transition:.2s; white-space:nowrap; }
+        .lp-btn-ghost:hover { background:var(--paper); }
+        .lp-btn-xl { padding:14px 32px; font-size:15px; border-radius:12px; }
 
-        .roles-section { background:var(--cream); }
-        .roles-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:20px; margin-top:48px; }
-        .role-card { border-radius:24px; padding:32px; position:relative; overflow:hidden; border:1px solid var(--warm); }
-        .role-card.school  { background:linear-gradient(160deg,#f0f4ff,#e8e4ff); }
-        .role-card.teacher { background:linear-gradient(160deg,#f0fdf4,#e8f5e9); }
-        .role-card.student { background:linear-gradient(160deg,var(--saffron-light),#fffdf0); }
-        .role-card.parent  { background:linear-gradient(160deg,#fce7f3,#ffe4e6); }
-        .role-emoji { font-size:40px; display:block; margin-bottom:16px; }
-        .role-name { font-family:var(--serif); font-size:22px; color:var(--indigo); margin-bottom:10px; }
-        .role-desc { font-size:13px; color:var(--muted); line-height:1.7; margin-bottom:20px; }
-        .role-features { list-style:none; margin-bottom:24px; display:flex; flex-direction:column; gap:7px; }
-        .role-features li { font-size:12px; color:var(--text); padding-left:16px; position:relative; }
-        .role-features li::before { content:'✓'; position:absolute; left:0; color:var(--green); font-weight:700; }
-        .btn-role { padding:10px 22px; background:var(--indigo); border:none; border-radius:10px; color:#fff; font-family:var(--sans); font-size:13px; font-weight:700; cursor:pointer; transition:.2s; }
-        .btn-role:hover { background:var(--indigo2); transform:translateY(-1px); }
+        /* ── MOBILE MENU ── */
+        .lp-mobile-overlay { position:fixed; inset:0; background:rgba(0,0,0,.55); z-index:1000; backdrop-filter:blur(6px); }
+        .lp-mobile-drawer { position:absolute; top:0; right:0; width:min(320px,90vw); height:100%; background:#fff; padding:24px; display:flex; flex-direction:column; gap:0; animation:slideInRight .25s ease; }
+        @keyframes slideInRight { from{transform:translateX(100%)} to{transform:none} }
+        .lp-mobile-top { display:flex; align-items:center; gap:10px; margin-bottom:32px; }
+        .lp-mobile-close { margin-left:auto; background:none; border:none; font-size:22px; cursor:pointer; color:var(--muted); width:36px; height:36px; display:grid; place-items:center; }
+        .lp-mobile-links { display:flex; flex-direction:column; gap:6px; flex:1; }
+        .lp-mobile-links a { display:block; padding:13px 14px; border-radius:10px; color:var(--text); text-decoration:none; font-size:15px; font-weight:600; transition:.15s; }
+        .lp-mobile-links a:hover { background:var(--paper); color:var(--saffron); }
+        .lp-mobile-btns { display:flex; flex-direction:column; gap:10px; padding-top:20px; border-top:1px solid var(--warm); }
 
-        .tools-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:20px; margin-top:48px; }
-        .tool-card { background:#fff; border-radius:20px; padding:28px 24px; border:1px solid var(--warm); transition:.3s; }
-        .tool-card:hover { transform:translateY(-4px); box-shadow:var(--shadow2); }
-        .tool-icon-wrap { width:52px; height:52px; border-radius:14px; display:grid; place-items:center; font-size:24px; margin-bottom:16px; }
-        .tool-name { font-family:var(--serif); font-size:17px; color:var(--indigo); margin-bottom:8px; }
-        .tool-desc { font-size:13px; color:var(--muted); line-height:1.65; }
+        /* ── HERO ── */
+        .lp-hero { min-height:100vh; display:flex; align-items:center; position:relative; overflow:hidden; padding:90px 40px 60px; gap:60px; }
+        .lp-hero-bg { position:absolute; inset:0; z-index:0; pointer-events:none; }
+        .lp-hero-blob { position:absolute; border-radius:50%; filter:blur(80px); }
+        .lp-hero-blob1 { width:600px; height:600px; right:-150px; top:50%; transform:translateY(-50%); background:radial-gradient(circle,rgba(232,118,26,.12),transparent 70%); }
+        .lp-hero-blob2 { width:400px; height:400px; left:-80px; bottom:-60px; background:radial-gradient(circle,rgba(67,56,202,.1),transparent 70%); }
+        .lp-hero-grid { position:absolute; inset:0; background-image:linear-gradient(rgba(232,224,208,.35) 1px,transparent 1px),linear-gradient(90deg,rgba(232,224,208,.35) 1px,transparent 1px); background-size:52px 52px; }
+        .lp-hero-inner { position:relative; z-index:1; flex:1; max-width:600px; }
+        .lp-hero-badge { display:inline-flex; align-items:center; gap:8px; background:linear-gradient(135deg,#fef9c3,#ede9fe); border:1px solid rgba(232,118,26,.25); border-radius:50px; padding:7px 18px; font-size:12px; font-weight:700; color:var(--saffron); margin-bottom:28px; letter-spacing:.3px; text-transform:uppercase; }
+        .lp-badge-dot { width:7px; height:7px; border-radius:50%; background:var(--saffron); animation:pd 2s infinite; flex-shrink:0; }
+        .lp-h1 { font-family:var(--serif); font-size:clamp(40px,5.5vw,72px); line-height:1.07; color:var(--indigo); margin-bottom:22px; }
+        .lp-gradient-text { background:linear-gradient(135deg,var(--saffron),var(--saffron2)); -webkit-background-clip:text; -webkit-text-fill-color:transparent; background-clip:text; font-style:italic; }
+        .lp-hero-sub { font-size:clamp(15px,1.8vw,19px); color:var(--muted); line-height:1.75; margin-bottom:36px; max-width:520px; }
+        .lp-hero-ctas { display:flex; gap:12px; flex-wrap:wrap; margin-bottom:52px; }
+        .lp-btn-hero-primary { padding:14px 32px; background:linear-gradient(135deg,var(--saffron),var(--saffron2)); border:none; border-radius:12px; color:#fff; font-family:var(--sans); font-size:15px; font-weight:700; cursor:pointer; transition:.2s; box-shadow:0 4px 18px rgba(232,118,26,.35); }
+        .lp-btn-hero-primary:hover { transform:translateY(-2px); box-shadow:0 8px 28px rgba(232,118,26,.45); }
+        .lp-btn-hero-sec { padding:14px 28px; background:transparent; border:1.5px solid var(--warm); border-radius:12px; color:var(--indigo); font-family:var(--sans); font-size:15px; font-weight:600; cursor:pointer; transition:.2s; }
+        .lp-btn-hero-sec:hover { background:var(--paper); border-color:var(--indigo2); }
+        .lp-stats { display:flex; gap:40px; flex-wrap:wrap; }
+        .lp-stat-num { font-family:var(--serif); font-size:clamp(28px,3.5vw,38px); color:var(--indigo); line-height:1; }
+        .lp-stat-label { font-size:12px; color:var(--muted); margin-top:4px; font-weight:500; }
 
-        .how-section { background:linear-gradient(160deg,var(--indigo),var(--indigo2)); position:relative; overflow:hidden; }
-        .how-section h2, .how-section .section-label { color:#fff; }
-        .how-section .section-label { background:rgba(255,255,255,.1); border-color:rgba(255,255,255,.2); color:rgba(255,255,255,.9); }
-        .how-section .section-sub { color:rgba(255,255,255,.65); }
-        .steps-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:2px; margin-top:56px; position:relative; }
-        .step { background:rgba(255,255,255,.06); border-radius:20px; padding:32px 24px; text-align:center; border:1px solid rgba(255,255,255,.08); transition:.3s; }
-        .step:hover { background:rgba(255,255,255,.1); }
-        .step-num { width:56px; height:56px; border-radius:50%; background:linear-gradient(135deg,var(--saffron),var(--saffron2)); font-family:var(--serif); font-size:24px; color:#fff; display:grid; place-items:center; margin:0 auto 18px; box-shadow:0 6px 20px rgba(232,118,26,.4); }
-        .step-title { font-family:var(--serif); font-size:18px; color:#fff; margin-bottom:10px; }
-        .step-desc { font-size:13px; color:rgba(255,255,255,.55); line-height:1.65; }
+        /* Hero mockup */
+        .lp-hero-mockup { position:relative; z-index:1; flex-shrink:0; width:360px; display:none; }
+        .lp-mockup-card { background:#fff; border-radius:20px; padding:22px; border:1px solid var(--warm); box-shadow:0 20px 60px rgba(0,0,0,.1),0 4px 16px rgba(0,0,0,.06); }
+        .lp-mockup-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:14px; padding-bottom:12px; border-bottom:1px solid var(--warm); }
+        .lp-mockup-subject { font-size:13px; font-weight:700; color:var(--indigo); margin-bottom:12px; }
+        .lp-mockup-tools { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:16px; }
+        .lp-mockup-tool { padding:5px 10px; background:var(--paper); border-radius:50px; font-size:11px; font-weight:600; color:var(--text); border:1px solid var(--warm); }
+        .lp-mockup-summary { display:flex; flex-direction:column; gap:8px; }
+        .lp-mockup-point { display:flex; gap:10px; align-items:flex-start; font-size:12px; color:var(--text); line-height:1.55; }
+        .lp-mockup-point span { width:20px; height:20px; border-radius:50%; background:var(--indigo); color:#fff; display:grid; place-items:center; font-size:10px; font-weight:800; flex-shrink:0; }
+        .lp-mockup-point-muted { opacity:.5; }
 
-        .boards-section { background:var(--paper); }
-        .boards-wrap { display:flex; gap:12px; flex-wrap:wrap; margin-top:40px; }
-        .board-pill { padding:11px 24px; border-radius:50px; background:#fff; border:1.5px solid var(--warm); font-size:13px; font-weight:600; color:var(--text); transition:.2s; cursor:default; }
-        .board-pill:hover { border-color:var(--saffron); color:var(--saffron); background:var(--saffron-light); }
+        /* ── TRUST BAR ── */
+        .lp-trust-bar { background:linear-gradient(135deg,var(--indigo),#4338ca); padding:16px 40px; display:flex; gap:32px; justify-content:center; flex-wrap:wrap; overflow:hidden; }
+        .lp-trust-item { display:flex; align-items:center; gap:8px; color:rgba(255,255,255,.8); font-size:13px; font-weight:500; white-space:nowrap; }
 
-        .testi-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:20px; margin-top:56px; }
-        .testi-card { background:var(--paper); border-radius:20px; padding:32px; border:1px solid var(--warm); }
-        .stars { color:var(--saffron2); font-size:14px; margin-bottom:14px; }
-        .testi-quote { font-size:14px; color:var(--text); line-height:1.75; margin-bottom:20px; font-style:italic; }
-        .testi-author { display:flex; align-items:center; gap:12px; }
-        .testi-av { width:44px; height:44px; border-radius:50%; display:grid; place-items:center; font-size:22px; background:var(--warm); flex-shrink:0; }
-        .testi-name { font-size:14px; font-weight:700; color:var(--indigo); }
-        .testi-role { font-size:12px; color:var(--muted); }
+        /* ── SECTIONS ── */
+        .lp-section { padding:96px 40px; }
+        .lp-section-inner { max-width:1200px; margin:0 auto; }
+        .lp-bg-cream  { background:var(--cream); }
+        .lp-bg-white  { background:#fff; }
+        .lp-bg-paper  { background:var(--paper); }
+        .lp-section-eyebrow { display:inline-block; font-size:11px; font-weight:800; letter-spacing:1.2px; color:var(--saffron); text-transform:uppercase; margin-bottom:12px; }
+        .lp-eyebrow-light { color:rgba(255,255,255,.7); }
+        .lp-h2 { font-family:var(--serif); font-size:clamp(30px,4vw,50px); line-height:1.1; color:var(--indigo); margin-bottom:16px; }
+        .lp-section-sub { font-size:16px; color:var(--muted); line-height:1.75; max-width:540px; margin-bottom:0; }
 
-        footer { background:var(--text); color:rgba(255,255,255,.55); padding:64px 40px 32px; }
-        .footer-inner { max-width:1200px; margin:0 auto; }
-        .footer-top { display:grid; grid-template-columns:2fr 1fr 1fr 1fr; gap:48px; margin-bottom:48px; }
-        .footer-col h4 { font-size:12px; font-weight:700; color:#fff; margin-bottom:16px; text-transform:uppercase; letter-spacing:.8px; }
-        .footer-col ul { list-style:none; }
-        .footer-col ul li { margin-bottom:10px; }
-        .footer-col ul li a { font-size:13px; color:rgba(255,255,255,.45); text-decoration:none; transition:.2s; }
-        .footer-col ul li a:hover { color:#fff; }
-        .footer-bottom { border-top:1px solid rgba(255,255,255,.08); padding-top:24px; display:flex; justify-content:space-between; align-items:center; font-size:12px; }
+        /* ── ROLES ── */
+        .lp-roles-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(250px,1fr)); gap:18px; margin-top:48px; }
+        .lp-role-card { background:var(--card-color); border-radius:22px; padding:28px; border:1.5px solid transparent; transition:.25s; cursor:default; display:flex; flex-direction:column; }
+        .lp-role-card:hover { transform:translateY(-4px); box-shadow:0 12px 40px rgba(0,0,0,.1); border-color:var(--card-accent); }
+        .lp-role-emoji { font-size:38px; margin-bottom:14px; }
+        .lp-role-name  { font-family:var(--serif); font-size:21px; color:var(--indigo); margin-bottom:14px; }
+        .lp-role-features { list-style:none; display:flex; flex-direction:column; gap:7px; flex:1; margin-bottom:20px; }
+        .lp-role-features li { font-size:12.5px; color:var(--text); padding-left:18px; position:relative; line-height:1.5; }
+        .lp-role-features li::before { content:'✓'; position:absolute; left:0; color:var(--card-accent,var(--green)); font-weight:800; }
+        .lp-role-cta { padding:10px 20px; background:var(--indigo); border:none; border-radius:10px; color:#fff; font-family:var(--sans); font-size:13px; font-weight:700; cursor:pointer; transition:.2s; align-self:flex-start; }
+        .lp-role-cta:hover { background:var(--indigo2); transform:translateY(-1px); }
 
+        /* ── FEATURES ── */
+        .lp-features-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); gap:20px; margin-top:48px; }
+        .lp-feature-card { background:#fff; border-radius:18px; padding:26px 22px; border:1px solid var(--warm); transition:.25s; }
+        .lp-feature-card:hover { transform:translateY(-5px); box-shadow:0 14px 40px rgba(0,0,0,.1); }
+        .lp-feature-icon { width:52px; height:52px; border-radius:14px; display:grid; place-items:center; font-size:24px; margin-bottom:16px; }
+        .lp-feature-name { font-family:var(--serif); font-size:17px; color:var(--indigo); margin-bottom:8px; }
+        .lp-feature-desc { font-size:13px; color:var(--muted); line-height:1.65; }
+
+        /* ── HOW ── */
+        .lp-how-section { background:linear-gradient(155deg,var(--indigo) 0%,#4338ca 100%); position:relative; overflow:hidden; }
+        .lp-how-section::before { content:''; position:absolute; inset:0; background:url("data:image/svg+xml,%3Csvg width='60' height='60' xmlns='http://www.w3.org/2000/svg'%3E%3Ccircle cx='30' cy='30' r='1' fill='rgba(255,255,255,.06)'/%3E%3C/svg%3E"); }
+        .lp-steps { display:grid; grid-template-columns:repeat(4,1fr); gap:4px; margin-top:52px; position:relative; }
+        .lp-step { background:rgba(255,255,255,.07); border-radius:18px; padding:28px 22px; text-align:center; border:1px solid rgba(255,255,255,.1); transition:.25s; }
+        .lp-step:hover { background:rgba(255,255,255,.12); }
+        .lp-step-num { font-family:var(--serif); font-size:32px; color:var(--saffron); margin-bottom:14px; display:block; }
+        .lp-step-title { font-family:var(--serif); font-size:18px; color:#fff; margin-bottom:10px; }
+        .lp-step-desc { font-size:13px; color:rgba(255,255,255,.55); line-height:1.65; }
+
+        /* ── BOARDS ── */
+        .lp-boards-wrap { display:flex; gap:10px; flex-wrap:wrap; margin-top:36px; }
+        .lp-board-pill { padding:10px 22px; border-radius:50px; background:#fff; border:1.5px solid var(--warm); font-size:13px; font-weight:600; color:var(--text); transition:.2s; cursor:default; }
+        .lp-board-pill:hover { border-color:var(--saffron); color:var(--saffron); background:var(--saffron-light); }
+
+        /* ── TESTIMONIALS ── */
+        .lp-testi-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:20px; margin-top:48px; }
+        .lp-testi-card { background:var(--paper); border-radius:20px; padding:28px; border:1px solid var(--warm); transition:.25s; }
+        .lp-testi-card:hover { transform:translateY(-3px); box-shadow:var(--shadow2); }
+        .lp-stars { color:var(--saffron2); font-size:15px; margin-bottom:12px; letter-spacing:2px; }
+        .lp-testi-quote { font-size:14px; color:var(--text); line-height:1.75; margin-bottom:18px; font-style:italic; }
+        .lp-testi-author { display:flex; align-items:center; gap:12px; }
+        .lp-testi-av { width:42px; height:42px; border-radius:50%; background:var(--warm); display:grid; place-items:center; font-size:20px; flex-shrink:0; }
+        .lp-testi-name { font-size:14px; font-weight:700; color:var(--indigo); }
+        .lp-testi-role { font-size:11px; color:var(--muted); margin-top:2px; }
+
+        /* ── CTA BANNER ── */
+        .lp-cta-banner { background:linear-gradient(135deg,var(--saffron),var(--saffron2)); padding:80px 40px; text-align:center; }
+        .lp-cta-inner  { max-width:680px; margin:0 auto; }
+        .lp-cta-heading { font-family:var(--serif); font-size:clamp(28px,4vw,44px); color:#fff; margin-bottom:14px; line-height:1.1; }
+        .lp-cta-sub { font-size:16px; color:rgba(255,255,255,.8); margin-bottom:36px; line-height:1.65; }
+        .lp-cta-btns { display:flex; gap:14px; justify-content:center; flex-wrap:wrap; }
+
+        /* ── FOOTER ── */
+        .lp-footer { background:var(--text); padding:64px 40px 32px; }
+        .lp-footer-inner { max-width:1200px; margin:0 auto; }
+        .lp-footer-top { display:grid; grid-template-columns:2fr 1fr 1fr 1fr; gap:48px; margin-bottom:48px; }
+        .lp-footer-brand { }
+        .lp-footer-col h4 { font-size:11px; font-weight:800; color:#fff; margin-bottom:16px; text-transform:uppercase; letter-spacing:1px; }
+        .lp-footer-col ul { list-style:none; }
+        .lp-footer-col ul li { margin-bottom:10px; }
+        .lp-footer-col ul li a { font-size:13px; color:rgba(255,255,255,.4); text-decoration:none; transition:.2s; }
+        .lp-footer-col ul li a:hover { color:#fff; }
+        .lp-footer-bottom { border-top:1px solid rgba(255,255,255,.08); padding-top:24px; display:flex; justify-content:space-between; align-items:center; font-size:12px; color:rgba(255,255,255,.35); flex-wrap:wrap; gap:8px; }
+
+        /* ── RESPONSIVE — 1100px: show mockup ── */
+        @media(min-width:1100px) {
+          .lp-hero-mockup { display:block; }
+        }
+
+        /* ── RESPONSIVE — 900px ── */
         @media(max-width:900px) {
-          .roles-grid, .testi-grid { grid-template-columns:1fr; }
-          .steps-grid { grid-template-columns:1fr 1fr; }
-          .footer-top { grid-template-columns:1fr 1fr; }
-          nav { padding:0 20px; }
-          .nav-links, .nav-ctas { display:none; }
-          .menu-toggle { display:block; }
-          .hero { padding:100px 20px 60px; }
-          .section { padding:64px 20px; }
+          .lp-nav { padding:0 20px; }
+          .lp-nav-links, .lp-nav-actions { display:none; }
+          .lp-hamburger { display:flex; }
+          .lp-hero { padding:90px 20px 52px; flex-direction:column; gap:0; }
+          .lp-section { padding:64px 20px; }
+          .lp-trust-bar { padding:16px 20px; gap:16px; }
+          .lp-roles-grid { grid-template-columns:1fr 1fr; }
+          .lp-testi-grid { grid-template-columns:1fr; }
+          .lp-steps { grid-template-columns:1fr 1fr; gap:12px; }
+          .lp-footer-top { grid-template-columns:1fr 1fr; gap:32px; }
+          .lp-stats { gap:24px; }
+          .lp-cta-banner { padding:60px 20px; }
+        }
+
+        /* ── RESPONSIVE — 600px ── */
+        @media(max-width:600px) {
+          .lp-hero { padding:82px 16px 48px; }
+          .lp-roles-grid { grid-template-columns:1fr; }
+          .lp-features-grid { grid-template-columns:1fr 1fr; }
+          .lp-steps { grid-template-columns:1fr; }
+          .lp-footer-top { grid-template-columns:1fr; gap:28px; }
+          .lp-hero-ctas { flex-direction:column; }
+          .lp-btn-hero-primary, .lp-btn-hero-sec { width:100%; text-align:center; }
+          .lp-cta-btns { flex-direction:column; align-items:center; }
+          .lp-section { padding:52px 16px; }
+          .lp-trust-bar { justify-content:flex-start; }
         }
       `}</style>
     </div>

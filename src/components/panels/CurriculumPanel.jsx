@@ -15,34 +15,21 @@ const CLASSES = Array.from({ length: 12 }, (_, i) => i + 1)
 function AudioSection({ label, text, globalSpeaking, onSpeakStart, onSpeakEnd }) {
   const isMine = globalSpeaking === label
   return (
-    <div style={{
-      display: 'flex', gap: 14, alignItems: 'flex-start',
-      padding: '14px 16px',
-      background: isMine ? '#ede9fe' : 'var(--paper)',
-      borderRadius: 12, border: `1.5px solid ${isMine ? 'var(--indigo2)' : '#e8e0d0'}`,
-      transition: '.2s', marginBottom: 12
-    }}>
+    <div className={`audio-section${isMine ? ' active' : ''}`}>
       <button
+        className="audio-section-btn"
+        style={{ background: isMine ? 'var(--indigo)' : 'linear-gradient(135deg,var(--saffron),var(--saffron2))' }}
         onClick={() => {
           if (isMine) { stopSpeech(); onSpeakEnd() }
           else { onSpeakStart(label); speakText(text, () => onSpeakEnd()) }
         }}
-        style={{
-          flexShrink: 0, padding: '8px 16px', borderRadius: 50,
-          background: isMine
-            ? 'var(--indigo)'
-            : 'linear-gradient(135deg,var(--saffron),var(--saffron2))',
-          border: 'none', color: '#fff', fontSize: 12, fontWeight: 700,
-          cursor: 'pointer', fontFamily: 'var(--sans)', whiteSpace: 'nowrap',
-          display: 'flex', alignItems: 'center', gap: 6
-        }}
       >
-        {isMine ? '⏹ Stop' : <><span>🔊</span>{label}</>}
+        {isMine ? '⏹ Stop' : <><span>🔊</span><span>{label}</span></>}
       </button>
-      <div>
-        <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 4 }}>{label}</div>
-        <p style={{ fontSize: 13, lineHeight: 1.7, color: 'var(--text)', margin: 0 }}>
-          {text?.substring(0, 160)}{text?.length > 160 ? '…' : ''}
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div className="audio-section-label">{label}</div>
+        <p className="audio-section-text">
+          {text?.substring(0, 200)}{text?.length > 200 ? '…' : ''}
         </p>
       </div>
     </div>
@@ -537,62 +524,77 @@ export default function CurriculumPanel({ showToast }) {
 
       </div>
 
-      {/* VIDEO OVERLAY */}
+      {/* VIDEO OVERLAY — mobile safe: close button always sticky at top */}
       {videoOpen && (
         <div className="video-overlay open">
-          <button onClick={closeVideo} style={{ position:'absolute', top:24, right:32, background:'rgba(255,255,255,.15)', border:'1px solid rgba(255,255,255,.25)', color:'#fff', fontSize:18, width:40, height:40, borderRadius:'50%', cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center' }}>✕</button>
-          <div className="video-container">
-            <div className="teacher-avatar-box">
-              <div className="avatar-icon" style={{ fontSize:90, animation: videoPlaying ? 'gentle-bob 2s ease-in-out infinite' : 'none' }}>👩‍🏫</div>
-              <div style={{ color:'#fff', fontFamily:'var(--serif)', fontSize:18, marginTop:8 }}>Ms. Vidya</div>
-              <div style={{ color:'rgba(255,255,255,.5)', fontSize:12 }}>AI Teacher</div>
-              {videoPlaying && (
-                <div style={{ display:'flex', gap:4, marginTop:12 }}>
-                  {[0,1,2].map(i => (
-                    <div key={i} style={{ width:6, height:6, borderRadius:'50%', background:'var(--saffron)', animation:`speakPulse .6s ${i*0.2}s infinite alternate` }}/>
-                  ))}
-                </div>
-              )}
-            </div>
-            <div className="slide-stage" style={{ position:'relative' }}>
-              {videoScript[currentSeg] && (
-                <div className="slide-active">
-                  {videoScript[currentSeg].visual && (
-                    <div style={{ background:'rgba(255,255,255,.08)', borderRadius:12, padding:'14px 18px', marginBottom:18, border:'1px solid rgba(255,255,255,.12)', fontFamily:'var(--mono)', fontSize:14, color:'#e2e8f0', whiteSpace:'pre-wrap', lineHeight:1.7 }}>
-                      {videoScript[currentSeg].visual}
-                    </div>
-                  )}
-                  <div className="slide-title" style={{ fontSize:22, marginBottom:12 }}>{videoScript[currentSeg].segment || `Scene ${currentSeg+1}`}</div>
-                  <div className="slide-text" style={{ fontSize:16 }}>{videoScript[currentSeg].text}</div>
-                </div>
-              )}
-              <div style={{ position:'absolute', bottom:20, right:20, display:'flex', gap:10 }}>
-                {!videoPlaying
-                  ? <button className="btn-saffron" onClick={playVideo} style={{ padding:'10px 22px' }}>▶ Play</button>
-                  : <button className="btn-outline" style={{ color:'#fff', borderColor:'rgba(255,255,255,.3)', padding:'10px 22px' }} onClick={stopVideo}>⏹ Stop</button>}
+
+          {/* ── Sticky close row — visible on ALL screen sizes ── */}
+          <div className="video-close-btn">
+            <button onClick={closeVideo} aria-label="Close video">✕</button>
+          </div>
+
+          <div className="video-content-wrap">
+            <div className="video-container">
+
+              {/* Teacher avatar */}
+              <div className="teacher-avatar-box">
+                <div className="avatar-icon">👩‍🏫</div>
+                <div style={{ color:'#fff', fontFamily:'var(--serif)', fontSize:16, marginTop:4 }}>Ms. Vidya</div>
+                <div style={{ color:'rgba(255,255,255,.5)', fontSize:11 }}>AI Teacher</div>
+                {videoPlaying && (
+                  <div style={{ display:'flex', gap:4, marginTop:10 }}>
+                    {[0,1,2].map(i => (
+                      <div key={i} style={{ width:6, height:6, borderRadius:'50%', background:'var(--saffron)', animation:`speakPulse .6s ${i*0.2}s infinite alternate` }}/>
+                    ))}
+                  </div>
+                )}
               </div>
+
+              {/* Slide stage */}
+              <div className="slide-stage">
+                {videoScript[currentSeg] && (
+                  <div className="slide-active">
+                    {videoScript[currentSeg].visual && (
+                      <div style={{ background:'rgba(255,255,255,.08)', borderRadius:10, padding:'12px 16px', marginBottom:16, border:'1px solid rgba(255,255,255,.12)', fontFamily:'var(--mono)', fontSize:13, color:'#e2e8f0', whiteSpace:'pre-wrap', lineHeight:1.65, wordBreak:'break-word' }}>
+                        {videoScript[currentSeg].visual}
+                      </div>
+                    )}
+                    <div className="slide-title">{videoScript[currentSeg].segment || `Scene ${currentSeg+1}`}</div>
+                    <div className="slide-text">{videoScript[currentSeg].text}</div>
+                  </div>
+                )}
+                {/* Play/Stop controls inside slide */}
+                <div style={{ marginTop:20, display:'flex', gap:10 }}>
+                  {!videoPlaying
+                    ? <button className="btn-saffron" onClick={playVideo} style={{ padding:'9px 22px' }}>▶ Play</button>
+                    : <button onClick={stopVideo} style={{ padding:'9px 22px', background:'rgba(255,255,255,.15)', border:'1.5px solid rgba(255,255,255,.3)', color:'#fff', borderRadius:10, cursor:'pointer', fontWeight:700, fontFamily:'var(--sans)', fontSize:13 }}>⏹ Stop</button>
+                  }
+                </div>
+              </div>
+
             </div>
-          </div>
-          <div style={{ marginTop:20, display:'flex', gap:8, flexWrap:'wrap', justifyContent:'center' }}>
-            {videoScript.map((seg,i) => (
-              <button key={i} title={seg.segment||`Scene ${i+1}`} onClick={() => { stopVideo(); setCurrentSeg(i) }}
-                style={{ width: i===currentSeg ? 24 : 8, height:8, borderRadius:4, background: i===currentSeg ? 'var(--saffron)' : 'rgba(255,255,255,.3)', border:'none', cursor:'pointer', transition:'.3s', padding:0 }}/>
-            ))}
-          </div>
-          {videoScript[currentSeg] && (
-            <div style={{ marginTop:10, color:'rgba(255,255,255,.5)', fontSize:12 }}>
-              Scene {currentSeg+1} of {videoScript.length} — {videoScript[currentSeg].segment}
+
+            {/* Scene scrubber */}
+            <div className="video-scrubber">
+              {videoScript.map((seg,i) => (
+                <button key={i} title={seg.segment || `Scene ${i+1}`}
+                  onClick={() => { stopVideo(); setCurrentSeg(i) }}
+                  style={{ width: i===currentSeg ? 24 : 8, height:8, borderRadius:4,
+                    background: i===currentSeg ? 'var(--saffron)' : 'rgba(255,255,255,.3)',
+                    border:'none', cursor:'pointer', transition:'.3s', padding:0, flexShrink:0 }}/>
+              ))}
             </div>
-          )}
+
+            {videoScript[currentSeg] && (
+              <div style={{ marginTop:8, color:'rgba(255,255,255,.45)', fontSize:11, textAlign:'center' }}>
+                Scene {currentSeg+1} of {videoScript.length} — {videoScript[currentSeg].segment}
+              </div>
+            )}
+          </div>
         </div>
       )}
 
-      <style>{`
-        @keyframes speakPulse {
-          0%   { transform: scaleY(0.6); opacity: .6; }
-          100% { transform: scaleY(1.4); opacity: 1; }
-        }
-      `}</style>
+      {/* speakPulse keyframe is defined in index.css */}
     </div>
   )
 }
