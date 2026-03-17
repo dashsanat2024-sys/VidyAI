@@ -678,16 +678,52 @@ def _vision_extract_pdf(pdf_path: str) -> Dict[int, str]:
     return all_answers
 
 def _parse_answer_text(text: str) -> Dict[int, str]:
+    """
+    Extract answers from text using stateful parsing.
+    Handles cases where the answer might be on the line below the question number.
+    """
     answers: Dict[int, str] = {}
-    for line in text.splitlines():
+    current_qid = None
+    
+    lines = text.splitlines()
+    for i, line in enumerate(lines):
         ln = line.strip()
-        if not ln:
-            continue
-        for pat in [r"Q(?:uestion)?\s*(\d+)\s*[:\-]\s*(.+)", r"(\d+)\s*[\)\.\-:]\s*(.+)"]:
+        if not ln: continue
+
+        # 1. Check for Question headers: "Q1:", "1.", "Question 2 -"
+        q_header_pat = [r"^Q(?:uestion)?\s*(\d+)\s*[:\-.]?\s*(.*)", r"^(\d+)\s*[\)\.\-:]\s*(.*)"]
+        matched_q = False
+        for pat in q_header_pat:
             m = re.match(pat, ln, flags=re.IGNORECASE)
             if m:
-                answers[int(m.group(1))] = m.group(2).strip()
+                current_qid = int(m.group(1))
+                content = m.group(2).strip()
+                if content:
+                    # Clean up "Answer:" if it's on the same line
+                    content = re.sub(r"^(?:Ans(?:wer)?\s*[:\-])\s*", "", content, flags=re.IGNORECASE)
+                    answers[current_qid] = content
+                matched_q = True
                 break
+        
+        if matched_q: continue
+
+        # 2. If we have a current_qid, look for "Answer:" on subsequent lines
+        if current_qid is not None:
+            ans_pat = r"^(?:Ans(?:wer)?\s*[:\-]?\s*)(.*)"
+            m_ans = re.match(ans_pat, ln, flags=re.IGNORECASE)
+            if m_ans:
+                ans_text = m_ans.group(1).strip()
+                if ans_text:
+                    answers[current_qid] = ans_text
+                elif i + 1 < len(lines):
+                    # Answer is on the next line
+                    answers[current_qid] = lines[i+1].strip()
+                continue
+            
+            # If line is just "____" or very short and we don't have an answer yet,
+            # or it looks like a continuation, we could append, but let's stick to explicit "Answer:" for now
+            # as requested by user.
+
     return answers
 
 def _vision_extract_base64(b64: str, ext: str = "jpeg") -> Dict[int, str]:
@@ -714,7 +750,10 @@ def _vision_extract_base64(b64: str, ext: str = "jpeg") -> Dict[int, str]:
                 {"type": "image_url", "image_url": {"url": f"data:image/{ext};base64,{b64}", "detail": "high"}}
             ]}]
         )
-        raw = json.loads(resp.choices[0].message.content)
+        content = resp.choices[0].message.content
+        print(f"[EVAL] Vision raw extracted: {content}") # CRITICAL logging for debugging
+        
+        raw = json.loads(content)
         extracted = {}
         for k, v in raw.get("answers", {}).items():
             # Robust extraction of digits from question keys like "Q1" or "Question 1"
