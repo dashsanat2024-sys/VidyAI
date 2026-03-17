@@ -297,6 +297,104 @@ function buildParentEmailHTML({ evaluation, examMeta, schoolName }) {
 </div>`
 }
 
+// ── Components for individual results (Fixes illegal hook usage in loops) ───
+function EvaluationResultItem({ evaluation, examMeta, schoolName, teacherName, emailSending, sendReportEmail }) {
+  const [email, setEmail] = useState(evaluation.parent_email || '')
+  const r = evaluation.result || {}
+  const g = getGrade(r.percentage || 0)
+
+  return (
+    <div className="card" style={{ padding: 24, marginBottom: 14, borderLeft: `6px solid ${g.color}` }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16, flexWrap: 'wrap', gap: 10 }}>
+        <div>
+          <div style={{ fontWeight: 800, fontSize: 16, color: 'var(--indigo)' }}>{evaluation.student_name || 'Student'}</div>
+          <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 2 }}>
+            Roll: {r.roll_no || '—'} • Exam: {evaluation.exam_id} • Eval ID: {evaluation.evaluation_id}
+          </div>
+        </div>
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+          <button onClick={() => printParentReport({ evaluation, examMeta, schoolName, teacherName })}
+            style={{ padding: '8px 16px', fontSize: 12, fontWeight: 700, fontFamily: 'var(--sans)', background: 'var(--indigo)', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer' }}>
+            🖨 Print Report
+          </button>
+        </div>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: 12, marginBottom: 16 }}>
+        <div style={{ textAlign: 'center', padding: 16, background: g.bg, borderRadius: 10, border: `1.5px solid ${g.color}` }}>
+          <div style={{ fontSize: 28, fontWeight: 900, color: g.color }}>{g.grade}</div>
+          <div style={{ fontSize: 11, color: g.color, fontWeight: 700 }}>{g.label}</div>
+        </div>
+        <div style={{ textAlign: 'center', padding: 16, background: '#f8fafc', borderRadius: 10, border: '1px solid #e2e8f0' }}>
+          <div style={{ fontSize: 22, fontWeight: 800 }}>{r.total_awarded ?? 0}<span style={{ fontSize: 13, color: 'var(--muted)' }}>/{r.total_possible ?? 0}</span></div>
+          <div style={{ fontSize: 11, color: 'var(--muted)', fontWeight: 700 }}>Marks</div>
+        </div>
+        <div style={{ textAlign: 'center', padding: 16, background: '#f8fafc', borderRadius: 10, border: '1px solid #e2e8f0' }}>
+          <div style={{ fontSize: 22, fontWeight: 800, color: g.color }}>{r.percentage ?? 0}%</div>
+          <div style={{ fontSize: 11, color: 'var(--muted)', fontWeight: 700 }}>Percentage</div>
+        </div>
+        <div style={{ textAlign: 'center', padding: 16, background: r.is_pass ? '#d1fae5' : '#fee2e2', borderRadius: 10, border: `1px solid ${r.is_pass ? '#065f46' : '#991b1b'}` }}>
+          <div style={{ fontSize: 22, fontWeight: 900, color: r.is_pass ? '#065f46' : '#991b1b' }}>{r.is_pass ? '✓' : '✗'}</div>
+          <div style={{ fontSize: 11, color: r.is_pass ? '#065f46' : '#991b1b', fontWeight: 800 }}>{r.is_pass ? 'PASS' : 'FAIL'}</div>
+        </div>
+      </div>
+
+      {r.improvement_prediction && (
+        <div style={{ padding: '12px 16px', background: '#fffbeb', borderLeft: '4px solid #f59e0b', borderRadius: '0 8px 8px 0', fontSize: 13, marginBottom: 16 }}>
+          <strong>AI Note:</strong> {r.improvement_prediction}
+        </div>
+      )}
+
+      <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', padding: '14px 16px', background: 'var(--paper)', borderRadius: 10 }}>
+        <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--indigo)', whiteSpace: 'nowrap' }}>📧 Send to Parent:</span>
+        <input className="fi" type="email" placeholder="parent@email.com" value={email} onChange={e => setEmail(e.target.value)} style={{ flex: 1, minWidth: 200 }} />
+        <button onClick={() => sendReportEmail(evaluation, email)} disabled={emailSending[evaluation.evaluation_id]}
+          style={{ padding: '10px 20px', fontSize: 13, fontWeight: 700, fontFamily: 'var(--sans)', background: 'var(--green)', color: '#fff', border: 'none', borderRadius: 9, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+          {emailSending[evaluation.evaluation_id] ? <><span className="spin" />Sending…</> : '📧 Send Report'}
+        </button>
+      </div>
+    </div>
+  )
+}
+
+function BulkResultRow({ ev, i, examMeta, schoolName, teacherName, emailSending, sendReportEmail, setActiveReport }) {
+  const [email, setEmail] = useState(ev.parent_email || '')
+  const r = ev.result || {}
+  const g = getGrade(r.percentage || 0)
+
+  return (
+    <tr style={{ background: i % 2 === 0 ? '#fff' : '#f8fafc', cursor: 'pointer' }}
+      onClick={e => { if (e.target.tagName !== 'INPUT' && e.target.tagName !== 'BUTTON') setActiveReport(ev) }}>
+      <td style={{ padding: '10px 12px', fontWeight: 700 }}>{i + 1}</td>
+      <td style={{ padding: '10px 12px', fontWeight: 600 }}>{ev.student_name || '—'}</td>
+      <td style={{ padding: '10px 12px' }}>{r.roll_no || '—'}</td>
+      <td style={{ padding: '10px 12px', fontWeight: 700 }}>{r.total_awarded ?? 0}/{r.total_possible ?? 0}</td>
+      <td style={{ padding: '10px 12px', fontWeight: 800, color: g.color }}>{r.percentage ?? 0}%</td>
+      <td style={{ padding: '10px 12px' }}>
+        <span style={{ padding: '2px 10px', borderRadius: 50, fontSize: 11, fontWeight: 800, background: g.bg, color: g.color }}>{g.grade}</span>
+      </td>
+      <td style={{ padding: '10px 12px', fontWeight: 700, color: r.is_pass ? 'var(--green)' : 'var(--red)' }}>
+        {r.is_pass ? '✓ Pass' : '✗ Fail'}
+      </td>
+      <td style={{ padding: '8px 12px' }}>
+        <button onClick={e => { e.stopPropagation(); printParentReport({ evaluation: ev, examMeta, schoolName, teacherName }) }}
+          style={{ padding: '4px 10px', fontSize: 11, fontWeight: 700, fontFamily: 'var(--sans)', background: 'var(--indigo3)', color: 'var(--indigo)', border: '1px solid var(--indigo2)', borderRadius: 6, cursor: 'pointer' }}>
+          🖨 Print
+        </button>
+      </td>
+      <td style={{ padding: '8px 12px' }}>
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+          <input className="fi" type="email" placeholder="parent@email.com" value={email} onChange={e2 => setEmail(e2.target.value)} onClick={e => e.stopPropagation()} style={{ padding: '4px 10px', fontSize: 11, width: 160 }} />
+          <button onClick={e => { e.stopPropagation(); sendReportEmail(ev, email) }} disabled={emailSending[ev.evaluation_id]}
+            style={{ padding: '4px 10px', fontSize: 11, fontWeight: 700, fontFamily: 'var(--sans)', background: 'var(--green)', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+            {emailSending[ev.evaluation_id] ? '…' : '📧 Send'}
+          </button>
+        </div>
+      </td>
+    </tr>
+  )
+}
+
 // ── Multi-student class report ────────────────────────────────────────────────
 function printClassReport({ evaluations, examMeta, schoolName }) {
   const win = window.open('', '_blank')
@@ -734,52 +832,18 @@ export default function EvalPanel({ showToast }) {
                   </tr>
                 </thead>
                 <tbody>
-                  {(bulkResults.evaluations || []).map((ev, i) => {
-                    const r = ev.result || {}
-                    const g = getGrade(r.percentage || 0)
-                    const [email, setEmail] = useState(ev.parent_email || '')
-                    return (
-                      <tr key={i} style={{ background: i % 2 === 0 ? '#fff' : '#f8fafc', cursor: 'pointer' }}
-                        onClick={e => { if (e.target.tagName !== 'INPUT' && e.target.tagName !== 'BUTTON') setActiveReport(ev) }}>
-                        <td style={{ padding: '10px 12px', fontWeight: 700 }}>{i + 1}</td>
-                        <td style={{ padding: '10px 12px', fontWeight: 600 }}>{ev.student_name || '—'}</td>
-                        <td style={{ padding: '10px 12px' }}>{r.roll_no || '—'}</td>
-                        <td style={{ padding: '10px 12px', fontWeight: 700 }}>{r.total_awarded ?? 0}/{r.total_possible ?? 0}</td>
-                        <td style={{ padding: '10px 12px', fontWeight: 800, color: g.color }}>{r.percentage ?? 0}%</td>
-                        <td style={{ padding: '10px 12px' }}>
-                          <span style={{ padding: '2px 10px', borderRadius: 50, fontSize: 11, fontWeight: 800, background: g.bg, color: g.color }}>{g.grade}</span>
-                        </td>
-                        <td style={{ padding: '10px 12px', fontWeight: 700, color: r.is_pass ? 'var(--green)' : 'var(--red)' }}>
-                          {r.is_pass ? '✓ Pass' : '✗ Fail'}
-                        </td>
-                        <td style={{ padding: '8px 12px' }}>
-                          <button onClick={e => { e.stopPropagation(); printParentReport({ evaluation: ev, examMeta, schoolName, teacherName }) }}
-                            style={{ padding: '4px 10px', fontSize: 11, fontWeight: 700, fontFamily: 'var(--sans)', background: 'var(--indigo3)', color: 'var(--indigo)', border: '1px solid var(--indigo2)', borderRadius: 6, cursor: 'pointer' }}>
-                            🖨 Print
-                          </button>
-                        </td>
-                        <td style={{ padding: '8px 12px' }}>
-                          <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                            <input
-                              className="fi"
-                              type="email"
-                              placeholder="parent@email.com"
-                              value={email}
-                              onChange={e2 => setEmail(e2.target.value)}
-                              onClick={e => e.stopPropagation()}
-                              style={{ padding: '4px 10px', fontSize: 11, width: 160 }}
-                            />
-                            <button
-                              onClick={e => { e.stopPropagation(); sendReportEmail(ev, email) }}
-                              disabled={emailSending[ev.evaluation_id]}
-                              style={{ padding: '4px 10px', fontSize: 11, fontWeight: 700, fontFamily: 'var(--sans)', background: 'var(--green)', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', whiteSpace: 'nowrap' }}>
-                              {emailSending[ev.evaluation_id] ? '…' : '📧 Send'}
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    )
-                  })}
+                  {(bulkResults.evaluations || []).map((ev, i) => (
+                    <BulkResultRow
+                      key={ev.evaluation_id || i}
+                      ev={ev} i={i}
+                      examMeta={examMeta}
+                      schoolName={schoolName}
+                      teacherName={teacherName}
+                      emailSending={emailSending}
+                      sendReportEmail={sendReportEmail}
+                      setActiveReport={setActiveReport}
+                    />
+                  ))}
                 </tbody>
               </table>
             </div>
@@ -789,74 +853,17 @@ export default function EvalPanel({ showToast }) {
         {/* ── SINGLE EVALUATION RESULT ──────────────────────────────────── */}
         {evaluations.length > 0 && !bulkResults && (
           <div style={{ marginBottom: 18 }}>
-            {evaluations.map((ev, i) => {
-              const r = ev.result || {}
-              const g = getGrade(r.percentage || 0)
-              const [email, setEmail] = useState(ev.parent_email || parentEmail)
-              return (
-                <div key={i} className="card" style={{ padding: 24, marginBottom: 14, borderLeft: `6px solid ${g.color}` }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16, flexWrap: 'wrap', gap: 10 }}>
-                    <div>
-                      <div style={{ fontWeight: 800, fontSize: 16, color: 'var(--indigo)' }}>{ev.student_name || 'Student'}</div>
-                      <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 2 }}>
-                        Roll: {r.roll_no || '—'} • Exam: {ev.exam_id} • Eval ID: {ev.evaluation_id}
-                      </div>
-                    </div>
-                    <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-                      <button onClick={() => printParentReport({ evaluation: ev, examMeta, schoolName, teacherName })}
-                        style={{ padding: '8px 16px', fontSize: 12, fontWeight: 700, fontFamily: 'var(--sans)', background: 'var(--indigo)', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer' }}>
-                        🖨 Print Report
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Score row */}
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: 12, marginBottom: 16 }}>
-                    <div style={{ textAlign: 'center', padding: 16, background: g.bg, borderRadius: 10, border: `1.5px solid ${g.color}` }}>
-                      <div style={{ fontSize: 28, fontWeight: 900, color: g.color }}>{g.grade}</div>
-                      <div style={{ fontSize: 11, color: g.color, fontWeight: 700 }}>{g.label}</div>
-                    </div>
-                    <div style={{ textAlign: 'center', padding: 16, background: '#f8fafc', borderRadius: 10, border: '1px solid #e2e8f0' }}>
-                      <div style={{ fontSize: 22, fontWeight: 800 }}>{r.total_awarded ?? 0}<span style={{ fontSize: 13, color: 'var(--muted)' }}>/{r.total_possible ?? 0}</span></div>
-                      <div style={{ fontSize: 11, color: 'var(--muted)', fontWeight: 700 }}>Marks</div>
-                    </div>
-                    <div style={{ textAlign: 'center', padding: 16, background: '#f8fafc', borderRadius: 10, border: '1px solid #e2e8f0' }}>
-                      <div style={{ fontSize: 22, fontWeight: 800, color: g.color }}>{r.percentage ?? 0}%</div>
-                      <div style={{ fontSize: 11, color: 'var(--muted)', fontWeight: 700 }}>Percentage</div>
-                    </div>
-                    <div style={{ textAlign: 'center', padding: 16, background: r.is_pass ? '#d1fae5' : '#fee2e2', borderRadius: 10, border: `1px solid ${r.is_pass ? '#065f46' : '#991b1b'}` }}>
-                      <div style={{ fontSize: 22, fontWeight: 900, color: r.is_pass ? '#065f46' : '#991b1b' }}>{r.is_pass ? '✓' : '✗'}</div>
-                      <div style={{ fontSize: 11, color: r.is_pass ? '#065f46' : '#991b1b', fontWeight: 800 }}>{r.is_pass ? 'PASS' : 'FAIL'}</div>
-                    </div>
-                  </div>
-
-                  {r.improvement_prediction && (
-                    <div style={{ padding: '12px 16px', background: '#fffbeb', borderLeft: '4px solid #f59e0b', borderRadius: '0 8px 8px 0', fontSize: 13, marginBottom: 16 }}>
-                      <strong>AI Note:</strong> {r.improvement_prediction}
-                    </div>
-                  )}
-
-                  {/* Email to parent */}
-                  <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', padding: '14px 16px', background: 'var(--paper)', borderRadius: 10 }}>
-                    <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--indigo)', whiteSpace: 'nowrap' }}>📧 Send to Parent:</span>
-                    <input
-                      className="fi"
-                      type="email"
-                      placeholder="parent@email.com"
-                      value={email}
-                      onChange={e => setEmail(e.target.value)}
-                      style={{ flex: 1, minWidth: 200 }}
-                    />
-                    <button
-                      onClick={() => sendReportEmail(ev, email)}
-                      disabled={emailSending[ev.evaluation_id]}
-                      style={{ padding: '10px 20px', fontSize: 13, fontWeight: 700, fontFamily: 'var(--sans)', background: 'var(--green)', color: '#fff', border: 'none', borderRadius: 9, cursor: 'pointer', whiteSpace: 'nowrap' }}>
-                      {emailSending[ev.evaluation_id] ? <><span className="spin" />Sending…</> : '📧 Send Report'}
-                    </button>
-                  </div>
-                </div>
-              )
-            })}
+            {evaluations.map((ev, i) => (
+              <EvaluationResultItem
+                key={ev.evaluation_id || i}
+                evaluation={ev}
+                examMeta={examMeta}
+                schoolName={schoolName}
+                teacherName={teacherName}
+                emailSending={emailSending}
+                sendReportEmail={sendReportEmail}
+              />
+            ))}
           </div>
         )}
 

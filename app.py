@@ -637,7 +637,7 @@ def _vision_extract_pdf(pdf_path: str) -> Dict[int, str]:
     """
     Convert each page of a PDF to an image and run GPT-4o Vision OCR.
     Merges answers from all pages (later pages override earlier on same Q#).
-    Uses pdf2image with poppler — available on both local and Vercel.
+    Uses pdf2image with poppler — note: poppler is often missing on Vercel.
     """
     all_answers: Dict[int, str] = {}
     try:
@@ -645,14 +645,10 @@ def _vision_extract_pdf(pdf_path: str) -> Dict[int, str]:
         # Render at 200 DPI — good quality without huge file sizes
         images = convert_from_path(pdf_path, dpi=200, fmt="jpeg")
     except Exception as e:
-        print(f"[EVAL] pdf2image failed: {e}. Attempting single-page vision as JPEG.")
-        # Last resort: pass the raw PDF bytes encoded as a JPEG guess
-        try:
-            with open(pdf_path, "rb") as f:
-                b64 = base64.b64encode(f.read()).decode()
-            return _vision_extract_base64(b64, "jpeg")
-        except Exception:
-            return {}
+        print(f"[EVAL] pdf2image/poppler failure: {e}")
+        # If we are on Vercel or missing poppler, we can't process scanned PDFs.
+        # We return an empty dict which triggers the helpful error message in the calling function.
+        return {}
 
     for page_idx, img in enumerate(images):
         try:
@@ -661,7 +657,8 @@ def _vision_extract_pdf(pdf_path: str) -> Dict[int, str]:
             img.save(buf, format="JPEG", quality=85)
             b64 = base64.b64encode(buf.getvalue()).decode()
             page_answers = _vision_extract_base64(b64, "jpeg")
-            all_answers.update(page_answers)   # later pages win on same question
+            if isinstance(page_answers, dict):
+                all_answers.update(page_answers)
         except Exception as e:
             print(f"[EVAL] Vision OCR failed on page {page_idx+1}: {e}")
 
