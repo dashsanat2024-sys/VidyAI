@@ -75,7 +75,7 @@ for _d in [DATA_F.parent, UPL_DIR, DB_DIR, EXAMS_DIR, EVAL_DIR, BULK_DIR]:
 ALLOWED = {"pdf","txt","md","mp3","mp4","wav","m4a","jpg","jpeg","png","webp"}
 
 # ── Flask ─────────────────────────────────────────────────────────────────────
-app = Flask(__name__, static_folder="../vidyai-react/dist", static_url_path="")
+app = Flask(__name__, static_folder="dist", static_url_path="")
 CORS(app, resources={r"/api/*": {"origins": "*"}})
 app.config["MAX_CONTENT_LENGTH"] = 100 * 1024 * 1024
 
