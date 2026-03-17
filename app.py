@@ -283,10 +283,14 @@ def _grade(p: float)-> str:
 def _normalize(t)   -> str: return re.sub(r"\s+", " ", str(t or "").strip().lower())
 
 def _normalize_mcq(t) -> str:
-    """Extract standard MCQ letter (A, B, C, D) from messy student input."""
+    """Extract standard MCQ letter (A, B, C, D) from messy student input or AI extracted text."""
     raw = _normalize(t)
     if not raw: return ""
     # Look for a single letter A-D, possibly surrounded by punctuation or words
+    # Priority: start of string or explicitly 'option A' etc.
+    m = re.search(r"(?:^|\s|\W)([a-d])(?:\W|\s|$)", raw)
+    if m: return m.group(1).upper()
+    # Fallback to any single letter in the string
     m = re.search(r"([a-d])", raw)
     if m: return m.group(1).upper()
     return raw.upper()
@@ -691,9 +695,12 @@ def _vision_extract_base64(b64: str, ext: str = "jpeg") -> Dict[int, str]:
     client = _oai.OpenAI(api_key=OPENAI_API_KEY)
     prompt = (
         "You are an expert exam evaluator. Extract all question-answer pairs from this student's answer sheet.\n"
-        "1. Identify the question number (even if handwritten or partial like 'Q1' or '1)').\n"
-        "2. Extract the student's written response accurately.\n"
-        "3. For MCQs, extract the letter (e.g., 'A') or the full choice text.\n"
+        "1. Identify the question number (e.g., '1', 'Q2', '3)').\n"
+        "2. Locate the student's answer. Look for:\n"
+        "   - Text written explicitly after labels like 'Answer:' or 'Ans:'.\n"
+        "   - Handwritten ticks (✓), circles, or underlines on specific MCQ options (A, B, C, D).\n"
+        "   - Written text in blank '____' spaces.\n"
+        "3. For MCQs, return the letter (e.g., 'A') if they circled/ticked an option.\n"
         "4. Omit only completely unreadable or blank sections.\n"
         "Return EXCLUSIVELY a JSON object: {\"answers\": {\"Q_NUMBER\": \"EXTRACTED_ANSWER\"}}"
     )
