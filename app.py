@@ -281,6 +281,15 @@ def _safe(u: dict)  -> dict: return {k: v for k, v in u.items() if k not in ("pw
 def _grade(p: float)-> str:
     return "A+" if p>=90 else "A" if p>=80 else "B" if p>=70 else "C" if p>=60 else "D" if p>=50 else "F"
 def _normalize(t)   -> str: return re.sub(r"\s+", " ", str(t or "").strip().lower())
+
+def _normalize_mcq(t) -> str:
+    """Extract standard MCQ letter (A, B, C, D) from messy student input."""
+    raw = _normalize(t)
+    if not raw: return ""
+    # Look for a single letter A-D, possibly surrounded by punctuation or words
+    m = re.search(r"([a-d])", raw)
+    if m: return m.group(1).upper()
+    return raw.upper()
 def _dtype(ext: str)-> str:
     return {"pdf":"PDF","txt":"Text","md":"Text","mp3":"Audio","wav":"Audio",
             "m4a":"Audio","mp4":"Video","jpg":"Image","jpeg":"Image","png":"Image"}.get(ext, "File")
@@ -532,8 +541,8 @@ def _evaluate_answers(exam: dict, submitted: Dict[int, str], roll_no: str = "") 
         total_possible += max_m
 
         if qtype == "objective":
-            valid   = [_normalize(a) for a in q.get("valid_answers", []) if str(a).strip()]
-            correct = _normalize(student) in valid
+            valid   = [_normalize_mcq(a) for a in q.get("valid_answers", []) if str(a).strip()]
+            correct = _normalize_mcq(student) in valid
             awarded = max_m if correct else 0.0
             total_awarded += awarded
             evals.append({
@@ -681,14 +690,17 @@ def _vision_extract_base64(b64: str, ext: str = "jpeg") -> Dict[int, str]:
     """Call GPT-4o Vision to extract Q→answer pairs from a base64-encoded image."""
     client = _oai.OpenAI(api_key=OPENAI_API_KEY)
     prompt = (
-        'You are reading a student answer sheet. '
-        'Extract each question number and the student\'s written answer. '
-        'Return ONLY valid JSON: {"answers":{"1":"student answer","2":"student answer"}}. '
-        'Omit blank or unreadable questions. Use the question number as the key.'
+        "You are an expert exam evaluator. Extract all question-answer pairs from this student's answer sheet.\n"
+        "1. Identify the question number (even if handwritten or partial like 'Q1' or '1)').\n"
+        "2. Extract the student's written response accurately.\n"
+        "3. For MCQs, extract the letter (e.g., 'A') or the full choice text.\n"
+        "4. Omit only completely unreadable or blank sections.\n"
+        "Return EXCLUSIVELY a JSON object: {\"answers\": {\"Q_NUMBER\": \"EXTRACTED_ANSWER\"}}"
     )
     try:
+        # Use high-fidelity model for accuracy
         resp = client.chat.completions.create(
-            model=OPENAI_MINI, temperature=0,
+            model=OPENAI_MODEL, temperature=0,
             response_format={"type": "json_object"},
             messages=[{"role": "user", "content": [
                 {"type": "text", "text": prompt},
@@ -696,8 +708,13 @@ def _vision_extract_base64(b64: str, ext: str = "jpeg") -> Dict[int, str]:
             ]}]
         )
         raw = json.loads(resp.choices[0].message.content)
-        return {int(k): str(v).strip() for k, v in raw.get("answers", {}).items()
-                if str(k).isdigit() and str(v).strip()}
+        extracted = {}
+        for k, v in raw.get("answers", {}).items():
+            # Robust extraction of digits from question keys like "Q1" or "Question 1"
+            q_digits = "".join(filter(str.isdigit, str(k)))
+            if q_digits and str(v).strip():
+                extracted[int(q_digits)] = str(v).strip()
+        return extracted
     except Exception as e:
         print(f"[EVAL] Vision OCR API error: {e}")
         return {}
