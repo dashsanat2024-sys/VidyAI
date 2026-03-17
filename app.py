@@ -75,7 +75,7 @@ for _d in [DATA_F.parent, UPL_DIR, DB_DIR, EXAMS_DIR, EVAL_DIR, BULK_DIR]:
 ALLOWED = {"pdf","txt","md","mp3","mp4","wav","m4a","jpg","jpeg","png","webp"}
 
 # ── Flask ─────────────────────────────────────────────────────────────────────
-app = Flask(__name__, static_folder="dist", static_url_path="")
+app = Flask(__name__, static_folder="../vidyai-react/dist", static_url_path="")
 CORS(app, resources={r"/api/*": {"origins": "*"}})
 app.config["MAX_CONTENT_LENGTH"] = 100 * 1024 * 1024
 
@@ -587,11 +587,25 @@ def _evaluate_answers(exam: dict, submitted: Dict[int, str], roll_no: str = "") 
     }
 
 def _extract_answers(path: str):
-    """Extract student answers from an answer sheet file."""
+    """
+    Extract student answers from an answer sheet file.
+
+    Strategy:
+      1. TXT / MD  → regex parse directly
+      2. PDF       → try text extraction first (fast, free)
+                   → if text layer is empty or no answers found,
+                     automatically fall back to Vision OCR
+                     (handles scanned / handwritten PDFs)
+      3. Image     → Vision OCR directly
+    """
     ext = Path(path).suffix.lower()
+
     if ext in {".txt", ".md"}:
         return _parse_answer_text(Path(path).read_text(encoding="utf-8", errors="ignore")), "parsed_text"
+
     if ext == ".pdf":
+        # ── Step 1: try text-layer extraction ─────────────────────────────
+        text = ""
         try:
             from langchain_community.document_loaders import PyPDFLoader
             pages = PyPDFLoader(path).load()
@@ -599,12 +613,59 @@ def _extract_answers(path: str):
         except ImportError:
             import pypdf
             reader = pypdf.PdfReader(path)
-            text   = "\n".join(p.extract_text() for p in reader.pages)
+            text   = "\n".join((p.extract_text() or "") for p in reader.pages)
+        except Exception as _te:
+            print(f"[EVAL] PDF text extraction error: {_te}")
+
         ans = _parse_answer_text(text)
-        return (ans, "parsed_pdf") if ans else ({}, "pdf_unreadable")
+        if ans:
+            return ans, "parsed_pdf"
+
+        # ── Step 2: text layer empty / no answers found ─────────────────
+        # This is a scanned or handwritten PDF.  Convert to images and run
+        # Vision OCR on each page, then merge all extracted answers.
+        print(f"[EVAL] PDF text extraction yielded no answers — falling back to Vision OCR: {path}")
+        return _vision_extract_pdf(path), "vision_ocr_pdf"
+
     if ext in {".png", ".jpg", ".jpeg", ".webp"}:
         return _vision_extract(path), "vision_ocr"
+
     return {}, "unsupported_type"
+
+
+def _vision_extract_pdf(pdf_path: str) -> Dict[int, str]:
+    """
+    Convert each page of a PDF to an image and run GPT-4o Vision OCR.
+    Merges answers from all pages (later pages override earlier on same Q#).
+    Uses pdf2image with poppler — available on both local and Vercel.
+    """
+    all_answers: Dict[int, str] = {}
+    try:
+        from pdf2image import convert_from_path
+        # Render at 200 DPI — good quality without huge file sizes
+        images = convert_from_path(pdf_path, dpi=200, fmt="jpeg")
+    except Exception as e:
+        print(f"[EVAL] pdf2image failed: {e}. Attempting single-page vision as JPEG.")
+        # Last resort: pass the raw PDF bytes encoded as a JPEG guess
+        try:
+            with open(pdf_path, "rb") as f:
+                b64 = base64.b64encode(f.read()).decode()
+            return _vision_extract_base64(b64, "jpeg")
+        except Exception:
+            return {}
+
+    for page_idx, img in enumerate(images):
+        try:
+            import io
+            buf = io.BytesIO()
+            img.save(buf, format="JPEG", quality=85)
+            b64 = base64.b64encode(buf.getvalue()).decode()
+            page_answers = _vision_extract_base64(b64, "jpeg")
+            all_answers.update(page_answers)   # later pages win on same question
+        except Exception as e:
+            print(f"[EVAL] Vision OCR failed on page {page_idx+1}: {e}")
+
+    return all_answers
 
 def _parse_answer_text(text: str) -> Dict[int, str]:
     answers: Dict[int, str] = {}
@@ -619,25 +680,38 @@ def _parse_answer_text(text: str) -> Dict[int, str]:
                 break
     return answers
 
-def _vision_extract(image_path: str) -> Dict[int, str]:
+def _vision_extract_base64(b64: str, ext: str = "jpeg") -> Dict[int, str]:
+    """Call GPT-4o Vision to extract Q→answer pairs from a base64-encoded image."""
     client = _oai.OpenAI(api_key=OPENAI_API_KEY)
-    ext    = Path(image_path).suffix.lower().replace(".", "") or "png"
+    prompt = (
+        'You are reading a student answer sheet. '
+        'Extract each question number and the student\'s written answer. '
+        'Return ONLY valid JSON: {"answers":{"1":"student answer","2":"student answer"}}. '
+        'Omit blank or unreadable questions. Use the question number as the key.'
+    )
+    try:
+        resp = client.chat.completions.create(
+            model=OPENAI_MINI, temperature=0,
+            response_format={"type": "json_object"},
+            messages=[{"role": "user", "content": [
+                {"type": "text", "text": prompt},
+                {"type": "image_url", "image_url": {"url": f"data:image/{ext};base64,{b64}", "detail": "high"}}
+            ]}]
+        )
+        raw = json.loads(resp.choices[0].message.content)
+        return {int(k): str(v).strip() for k, v in raw.get("answers", {}).items()
+                if str(k).isdigit() and str(v).strip()}
+    except Exception as e:
+        print(f"[EVAL] Vision OCR API error: {e}")
+        return {}
+
+
+def _vision_extract(image_path: str) -> Dict[int, str]:
+    """Extract answers from an image file using GPT-4o Vision."""
+    ext = Path(image_path).suffix.lower().replace(".", "") or "jpeg"
     with open(image_path, "rb") as f:
         b64 = base64.b64encode(f.read()).decode()
-    prompt = ('Extract student answers from this answer sheet. '
-              'Return JSON only: {"answers":{"1":"...","2":"..."}}. '
-              'Omit unreadable questions.')
-    resp = client.chat.completions.create(
-        model=OPENAI_MINI, temperature=0,
-        response_format={"type": "json_object"},
-        messages=[{"role": "user", "content": [
-            {"type": "text", "text": prompt},
-            {"type": "image_url", "image_url": {"url": f"data:image/{ext};base64,{b64}"}}
-        ]}]
-    )
-    raw = json.loads(resp.choices[0].message.content)
-    return {int(k): str(v).strip() for k, v in raw.get("answers", {}).items()
-            if str(k).isdigit() and str(v).strip()}
+    return _vision_extract_base64(b64, ext)
 
 def _run_audit(exam: dict, evaluation: dict) -> dict:
     diffs, obj_ok, subj_ok = [], 0, 0
@@ -2247,7 +2321,13 @@ def evaluate_sheet():
 
     answers, mode = _extract_answers(str(path))
     if not answers:
-        return jsonify({"error": f"Could not extract answers (mode: {mode})"}), 400
+        # Provide a clear, actionable error message rather than a generic one
+        msg = (
+            "Could not read any answers from the uploaded file. "
+            "If this is a scanned document, ensure it is clear and not rotated. "
+            "You can also upload a photo (JPG/PNG) of the answer sheet directly."
+        )
+        return jsonify({"error": msg, "extraction_mode": mode}), 400
 
     result  = _evaluate_answers(e, answers, roll_no)
     eval_id = uuid.uuid4().hex[:10]

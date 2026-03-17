@@ -71,36 +71,58 @@ function _pickVoice() {
   return ukFemale || anyUK || auVoice || anyFemale || anyEng || voices[0]
 }
 
+// ── Active utterance tracking ─────────────────────────────────────────────────
+// We track whether a stop was explicitly requested so that the onEnd/onerror
+// callback chain does NOT trigger the next-segment advance when the user presses
+// Stop or clears the chat. Without this, calling cancel() fires onerror with
+// reason "interrupted", which previously propagated to onEnd → playSegment(n+1).
+let _stopRequested = false
+
 export function speakText(text, onEnd) {
   if (!window.speechSynthesis || !text?.trim()) {
     if (onEnd) onEnd()
     return
   }
 
-  // Always cancel any ongoing speech first
+  // Mark that we are NOT stopping — this is a new requested playback
+  _stopRequested = false
+
+  // Cancel any ongoing speech first
   window.speechSynthesis.cancel()
   _clearKeepAlive()
 
   // Small delay after cancel — required on Safari/macOS to avoid getting stuck
   setTimeout(() => {
+    // If stopSpeech() was called during our 120ms delay, bail out without
+    // calling onEnd. This prevents the video auto-advance on fast Stop clicks.
+    if (_stopRequested) return
+
     const utterance = new SpeechSynthesisUtterance(text.trim())
     utterance.rate  = 0.92
     utterance.pitch = 1.05
     utterance.volume = 1.0
 
     let ended = false
-    const finish = () => {
+    const finish = (interrupted = false) => {
       if (ended) return
       ended = true
       _clearKeepAlive()
-      if (onEnd) onEnd()
+      // CRITICAL: Only call onEnd if this was a natural finish.
+      // If the user clicked Stop (or cleared chat), _stopRequested is true
+      // and we must NOT advance to the next segment / re-enable the button.
+      if (!interrupted && !_stopRequested && onEnd) onEnd()
     }
 
-    utterance.onend   = finish
+    utterance.onend   = () => finish(false)
     utterance.onerror = (e) => {
-      // 'interrupted' is not a real error — it means cancel() was called
-      if (e.error !== 'interrupted') console.warn('[TTS] error:', e.error)
-      finish()
+      // 'interrupted' means cancel() was called — this is NOT an error,
+      // it is the expected result of pressing Stop. Do not advance.
+      if (e.error === 'interrupted') {
+        finish(true)   // interrupted=true → onEnd is suppressed
+      } else {
+        console.warn('[TTS] error:', e.error)
+        finish(false)  // real error → still finish normally
+      }
     }
 
     const speak = () => {
@@ -128,6 +150,8 @@ export function speakText(text, onEnd) {
 }
 
 export function stopSpeech() {
+  // Set the flag BEFORE cancel() so the onerror/onend handlers see it
+  _stopRequested = true
   _clearKeepAlive()
   if (window.speechSynthesis) {
     window.speechSynthesis.cancel()

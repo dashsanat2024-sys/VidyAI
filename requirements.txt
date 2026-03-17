@@ -18,6 +18,8 @@ langchain-community>=0.2.0      # PyPDFLoader (eval answer extraction)
 
 # ── PDF Processing ────────────────────────────────────────────────────────────
 pypdf>=4.0.0
+pdf2image>=1.17.0               # Convert scanned PDF pages -> images for Vision OCR
+Pillow>=10.0.0                  # Image processing required by pdf2image
 
 # ── MongoDB — Primary Database ────────────────────────────────────────────────
 pymongo[srv]>=4.6.0             # [srv] = SRV DNS support for Atlas

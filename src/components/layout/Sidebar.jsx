@@ -1,7 +1,6 @@
 import { useAuth } from '../../context/AuthContext'
 import { useApp } from '../../context/AppContext'
 
-// UK Curriculum removed from all roles per requirement 1
 const NAV_GROUPS = {
   student: [
     {
@@ -139,25 +138,40 @@ export default function Sidebar({ isOpen, onClose }) {
   return (
     <>
       <aside className={`sidebar ${isOpen ? 'open' : ''}`}>
+
+        {/* ── Brand Header ── */}
         <div className="sb-header">
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <svg width="32" height="32" viewBox="0 0 48 48" fill="none" style={{ flexShrink:0 }}>
-              <defs>
-                <linearGradient id="sbG1" x1="0" y1="0" x2="48" y2="48" gradientUnits="userSpaceOnUse"><stop offset="0%" stopColor="#E8761A"/><stop offset="100%" stopColor="#F59E0B"/></linearGradient>
-                <linearGradient id="sbG2" x1="0" y1="0" x2="48" y2="48" gradientUnits="userSpaceOnUse"><stop offset="0%" stopColor="#3730A3"/><stop offset="100%" stopColor="#6D28D9"/></linearGradient>
-              </defs>
-              <rect x="2" y="2" width="44" height="44" rx="12" fill="url(#sbG1)"/>
-              <rect x="9" y="10" width="13" height="26" rx="3" fill="white" opacity="0.95"/>
-              <rect x="26" y="10" width="13" height="26" rx="3" fill="white" opacity="0.85"/>
-              <rect x="22" y="9" width="4" height="28" rx="2" fill="url(#sbG2)" opacity="0.7"/>
-              <text x="15.5" y="29" fontFamily="serif" fontSize="15" fontWeight="900" fill="#3730A3" textAnchor="middle">प</text>
-              <circle cx="35" cy="12" r="3.5" fill="white" opacity="0.9"/>
-              <circle cx="35" cy="12" r="1.5" fill="url(#sbG2)"/>
-            </svg>
-            <span style={{ fontFamily:'var(--serif)', fontSize:18, color:'#fff' }}>Parvidya</span>
+          {/* Full horizontal logo — white version on dark background */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            {/* PNG logo — use white-friendly version on dark sidebar */}
+            <img
+              src="/paarthivi-icon.png"
+              alt="Paarthivi"
+              style={{
+                width: 36, height: 36,
+                objectFit: 'contain',
+                filter: 'brightness(0) invert(1)',  /* makes the coloured logo white */
+                flexShrink: 0,
+              }}
+            />
+            <div>
+              <div style={{
+                fontFamily: 'var(--sans)', fontSize: 16, fontWeight: 800,
+                color: '#fff', letterSpacing: '.3px', lineHeight: 1.1,
+              }}>
+                Paarthivi
+              </div>
+              <div style={{
+                fontSize: 9, fontWeight: 600, color: 'rgba(167,139,250,.8)',
+                letterSpacing: '.6px', textTransform: 'uppercase', marginTop: 1,
+              }}>
+                Smart Learning
+              </div>
+            </div>
           </div>
         </div>
 
+        {/* ── Navigation ── */}
         <nav className="sb-nav">
           {groups.map(group => (
             <div key={group.label}>
@@ -174,6 +188,7 @@ export default function Sidebar({ isOpen, onClose }) {
           ))}
         </nav>
 
+        {/* ── User footer ── */}
         <div className="sb-footer">
           <div className="sb-user">
             <div className="sb-av">{me?.name?.[0]?.toUpperCase() || 'U'}</div>
@@ -183,7 +198,7 @@ export default function Sidebar({ isOpen, onClose }) {
             </div>
           </div>
           <button className="btn-outline"
-            style={{ width:'100%', color:'#fff', borderColor:'rgba(255,255,255,.2)', fontSize:12 }}
+            style={{ width:'100%', color:'rgba(255,255,255,.8)', borderColor:'rgba(255,255,255,.2)', fontSize:12 }}
             onClick={logout}>
             Sign Out
           </button>

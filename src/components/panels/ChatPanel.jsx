@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
 import { useAuth } from '../../context/AuthContext'
 import { useApp } from '../../context/AppContext'
-import { apiPost, apiPostForm, speakText } from '../../utils/api'
+import { apiPost, apiPostForm, speakText, stopSpeech } from '../../utils/api'
 
 function Message({ role, text, sources }) {
   return (
@@ -32,6 +32,12 @@ export default function ChatPanel({ showToast }) {
   useEffect(() => {
     if (activeSyllabus?.id) setSelectedSyl(activeSyllabus.id)
   }, [activeSyllabus])
+
+  // Stop any in-progress speech when this panel is unmounted or user
+  // navigates away — prevents ghost audio after switching panels.
+  useEffect(() => {
+    return () => { stopSpeech(); setSpeaking(false) }
+  }, [])
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -98,6 +104,8 @@ export default function ChatPanel({ showToast }) {
   }
 
   const handleSpeak = () => {
+    // If already speaking, toggle it off
+    if (speaking) { stopSpeech(); setSpeaking(false); return }
     const last = [...messages].reverse().find(m => m.role === 'bot')
     if (!last) { showToast('No AI response to read', 'warning'); return }
     setSpeaking(true)
@@ -142,7 +150,7 @@ export default function ChatPanel({ showToast }) {
           <button className="btn-outline" onClick={handleSpeak} disabled={speaking} style={{ whiteSpace: 'nowrap' }}>
             {speaking ? '🔊 Speaking…' : '🔊 Listen'}
           </button>
-          <button className="btn-outline" onClick={() => setMessages([])} style={{ whiteSpace: 'nowrap' }}>
+          <button className="btn-outline" onClick={() => { stopSpeech(); setSpeaking(false); setMessages([]) }} style={{ whiteSpace: 'nowrap' }}>
             🗑 Clear Chat
           </button>
           <input ref={fileRef} type="file" accept=".pdf,.txt,.md,.mp3,.mp4,.wav,.m4a" style={{ display: 'none' }} onChange={handleFileUpload} />

@@ -78,6 +78,11 @@ export default function CurriculumPanel({ showToast }) {
   const [flashcardCount, setFlashcardCount] = useState(10)
   const [showFcConfig,   setShowFcConfig]   = useState(false)
 
+  // Summarise config — shown when selective chapters chosen
+  const [showSumConfig,  setShowSumConfig]  = useState(false)
+  const [sumMode,        setSumMode]        = useState('auto')   // 'auto' | 'custom'
+  const [customPoints,   setCustomPoints]   = useState({})       // { [chapter]: n }
+
   const [globalSpeaking, setGlobalSpeaking] = useState(null)
   const [summarySpeak,   setSummarySpeak]   = useState(false)
 
@@ -101,6 +106,11 @@ export default function CurriculumPanel({ showToast }) {
     setSubject(subs[0] || '')
     resetChapters()
   }, [board, classNum])
+
+  // Stop all speech / video when navigating away from this panel
+  useEffect(() => {
+    return () => { stopSpeech(); setGlobalSpeaking(null); setSummarySpeak(false); setVideoPlaying(false) }
+  }, [])
 
   const resetChapters = () => {
     setChapters([]); setSelChapters([]); setPdfUrl(null); setSyllabus(null)
@@ -168,19 +178,97 @@ export default function CurriculumPanel({ showToast }) {
 
   const toggleChapter = c => setSelChapters(prev => prev.includes(c) ? prev.filter(x => x !== c) : [...prev, c])
 
-  const runTool = async (toolMode) => {
+  // Helper: distribute N points across M chapters as evenly as possible
+  // Returns { [chapter]: pointCount }
+  const distributePoints = (chs, total = 10) => {
+    const base  = Math.floor(total / chs.length)
+    const extra = total % chs.length
+    return Object.fromEntries(chs.map((ch, i) => [ch, base + (i < extra ? 1 : 0)]))
+  }
+
+  const runTool = async (toolMode, overridePoints = null) => {
     if (!syllabus)            { showToast('Please load chapters first', 'warning'); return }
     if (!selChapters.length)  { showToast('Select at least one chapter', 'warning'); return }
 
-    // For flashcards, show config picker first if not yet shown
+    // ── Flashcard config picker ──────────────────────────────────────────────
     if (toolMode === 'flashcards' && !showFcConfig && result?.type !== 'flashcards') {
       setShowFcConfig(true)
       return
     }
     setShowFcConfig(false)
+    setShowSumConfig(false)  // close adjuster panel on every new run
 
     setActiveMode(toolMode); setToolLoading(true); setResult(null); stopSpeechAll()
+
     try {
+      // ──────────────────────────────────────────────────────────────────────
+      // SUMMARISE — three cases:
+      //  A) All chapters selected   → one combined call, 10 pts total
+      //  B) Single chapter selected → one call, 10 pts
+      //  C) Selective subset (2+)   → auto-distribute 10 pts across chapters
+      //     (1 call per chapter); an inline adjuster appears AFTER results so
+      //     the user can tweak and regenerate — NO blocking pre-flight screen.
+      // ──────────────────────────────────────────────────────────────────────
+      if (toolMode === 'summarise') {
+        const allSelected = selChapters.length === chapters.length
+        const singleChap  = selChapters.length === 1
+
+        // ── Case A / B : combined or single ───────────────────────────────
+        if (allSelected || singleChap) {
+          const label = allSelected
+            ? `${subject} — All ${selChapters.length} Chapters`
+            : `${subject} — ${selChapters[0]}`
+          const res  = await apiPost('/curriculum/summarise', {
+            syllabus_id: syllabus.id, board: board?.shortName,
+            class: `Class ${classNum}`, subject,
+            chapters: selChapters, topic: label, point_count: 10,
+          }, token)
+          const data = await res.json()
+          if (!res.ok) throw new Error(data.error || 'Summarise failed')
+          setResult({ type: 'summarise', data: {
+            multiChapter: false,
+            summary:      data.summary || '',
+            allChapters:  allSelected,
+          }})
+          setToolLoading(false)
+          return
+        }
+
+        // ── Case C : selective subset ─────────────────────────────────────
+        // Use overridePoints if the user clicked "Regenerate" from the adjuster,
+        // otherwise auto-distribute 10 points evenly across selected chapters.
+        const pts = overridePoints || distributePoints(selChapters, 10)
+
+        // Sync the adjuster inputs to show what was used (so it reflects reality)
+        if (!overridePoints) {
+          setCustomPoints(pts)
+          setSumMode('auto')
+        }
+
+        const summaries = []
+        for (let i = 0; i < selChapters.length; i++) {
+          const chapter = selChapters[i]
+          const n       = Math.max(1, pts[chapter] || 2)
+          const res     = await apiPost('/curriculum/summarise', {
+            syllabus_id: syllabus.id, board: board?.shortName,
+            class: `Class ${classNum}`, subject,
+            chapters: [chapter], topic: `${subject} — ${chapter}`, point_count: n,
+          }, token)
+          const data = await res.json()
+          if (!res.ok) throw new Error(data.error || 'Summarise failed')
+          summaries.push({ chapter, summary: data.summary || '', pointCount: n })
+        }
+        const totalPts = Object.values(pts).reduce((a, b) => a + Number(b), 0)
+        setResult({ type: 'summarise', data: {
+          multiChapter: true, summaries,
+          totalPoints:  totalPts,
+          pointsUsed:   pts,
+        }})
+        setToolLoading(false)
+        return
+      }
+
+      // ── All other tools ──────────────────────────────────────────────────
       const res  = await apiPost(`/curriculum/${toolMode}`, {
         syllabus_id: syllabus.id, board: board?.shortName,
         class: `Class ${classNum}`, subject, chapters: selChapters,
@@ -378,55 +466,219 @@ export default function CurriculumPanel({ showToast }) {
 
         {/* RESULT: SUMMARISE */}
         {!toolLoading && result?.type === 'summarise' && (() => {
-          const raw = result.data.summary || ''
-          // Parse into numbered lines; each line may start with "1." or "1)"
-          const lines = raw
+          // Helper: parse one raw summary string into clean numbered lines
+          const parseLines = (raw = '') => raw
             .split('\n')
             .map(l => l.trim())
             .filter(l => l.length > 0)
             .map(l => l.replace(/^\d+[\.\)]\s*/, '').trim())
             .filter(l => l.length > 0)
-          return (
-            <div className="card" style={{ padding:28 }}>
-              <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:20 }}>
-                <div>
-                  <h4 style={{ fontFamily:'var(--serif)', color:'var(--indigo)', margin:0 }}>📝 Chapter Summary</h4>
-                  <p style={{ color:'var(--muted)', fontSize:12, margin:'4px 0 0' }}>
-                    {syllabus?.name} — {selChapters.length} chapter{selChapters.length!==1?'s':''} covered
-                  </p>
-                </div>
-                <div style={{ display:'flex', gap:8 }}>
-                  <button className="btn-outline" onClick={toggleSummarySpeak}
-                    style={{ fontSize:12, padding:'6px 16px', display:'flex', alignItems:'center', gap:6,
-                      background: summarySpeak ? 'var(--indigo)' : 'transparent',
-                      color: summarySpeak ? '#fff' : 'var(--text)',
-                      borderColor: summarySpeak ? 'var(--indigo)' : 'var(--warm)' }}>
-                    {summarySpeak ? '⏹ Stop' : '🔊 Listen'}
-                  </button>
-                  {pdfUrl && (
-                    <button onClick={openPdf} className="btn-outline" style={{ fontSize:12, padding:'6px 16px' }}>
-                      📄 Full PDF
-                    </button>
-                  )}
-                </div>
-              </div>
 
-              {/* Numbered explanation lines */}
-              <div style={{ display:'flex', flexDirection:'column', gap:12 }}>
-                {lines.map((line, idx) => (
-                  <div key={idx} style={{ display:'flex', gap:14, alignItems:'flex-start', padding:'12px 16px', background: idx % 2 === 0 ? '#f8fafc' : '#fff', borderRadius:10, border:'1px solid #f1f5f9' }}>
-                    <span style={{ width:28, height:28, borderRadius:'50%', background:'linear-gradient(135deg,var(--indigo),var(--indigo2))', color:'#fff', display:'grid', placeItems:'center', fontSize:12, fontWeight:800, flexShrink:0 }}>
-                      {idx + 1}
-                    </span>
-                    <p style={{ margin:0, fontSize:14, lineHeight:1.75, color:'var(--text)' }}>{line}</p>
-                  </div>
-                ))}
-              </div>
-
-              {/* If we have fewer than expected lines, show raw text too */}
+          const SummaryLines = ({ lines, raw }) => (
+            <div style={{ display:'flex', flexDirection:'column', gap:12 }}>
+              {lines.map((line, idx) => (
+                <div key={idx} style={{ display:'flex', gap:14, alignItems:'flex-start', padding:'12px 16px', background: idx % 2 === 0 ? '#f8fafc' : '#fff', borderRadius:10, border:'1px solid #f1f5f9' }}>
+                  <span style={{ width:28, height:28, borderRadius:'50%', background:'linear-gradient(135deg,var(--indigo),var(--indigo2))', color:'#fff', display:'grid', placeItems:'center', fontSize:12, fontWeight:800, flexShrink:0 }}>
+                    {idx + 1}
+                  </span>
+                  <p style={{ margin:0, fontSize:14, lineHeight:1.75, color:'var(--text)' }}>{line}</p>
+                </div>
+              ))}
               {lines.length === 0 && (
                 <div style={{ lineHeight:1.85, fontSize:14, color:'var(--text)', whiteSpace:'pre-wrap' }}>{raw}</div>
               )}
+            </div>
+          )
+
+          // ── Single chapter OR all-chapters combined ────────────────────────
+          if (!result.data.multiChapter) {
+            const raw        = result.data.summary || ''
+            const lines      = parseLines(raw)
+            const allChaps   = result.data.allChapters
+            return (
+              <div className="card" style={{ padding:28 }}>
+                <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:20 }}>
+                  <div>
+                    <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:4 }}>
+                      <h4 style={{ fontFamily:'var(--serif)', color:'var(--indigo)', margin:0 }}>📝 Chapter Summary</h4>
+                      {allChaps && (
+                        <span style={{ background:'var(--green)', color:'#fff', fontSize:11, fontWeight:700, padding:'2px 10px', borderRadius:50 }}>
+                          All {selChapters.length} chapters · 10 points
+                        </span>
+                      )}
+                    </div>
+                    <p style={{ color:'var(--muted)', fontSize:12, margin:0 }}>
+                      {allChaps
+                        ? `${syllabus?.name} — complete subject overview`
+                        : `${syllabus?.name} — ${selChapters[0]}`}
+                    </p>
+                  </div>
+                  <div style={{ display:'flex', gap:8 }}>
+                    <button className="btn-outline" onClick={toggleSummarySpeak}
+                      style={{ fontSize:12, padding:'6px 16px', display:'flex', alignItems:'center', gap:6,
+                        background: summarySpeak ? 'var(--indigo)' : 'transparent',
+                        color: summarySpeak ? '#fff' : 'var(--text)',
+                        borderColor: summarySpeak ? 'var(--indigo)' : 'var(--warm)' }}>
+                      {summarySpeak ? '⏹ Stop' : '🔊 Listen'}
+                    </button>
+                    {pdfUrl && (
+                      <button onClick={openPdf} className="btn-outline" style={{ fontSize:12, padding:'6px 16px' }}>
+                        📄 Full PDF
+                      </button>
+                    )}
+                  </div>
+                </div>
+                <SummaryLines lines={lines} raw={raw} />
+              </div>
+            )
+          }
+
+          // ── Multiple chapters: one card per chapter + inline adjuster ────────
+          const { summaries, totalPoints, pointsUsed } = result.data
+          return (
+            <div style={{ display:'flex', flexDirection:'column', gap:20 }}>
+
+              {/* Header row */}
+              <div style={{ display:'flex', alignItems:'center', gap:10, flexWrap:'wrap' }}>
+                <h4 style={{ fontFamily:'var(--serif)', color:'var(--indigo)', margin:0 }}>📝 Chapter Summaries</h4>
+                <span style={{ background:'var(--indigo3)', color:'var(--indigo)', fontSize:12, fontWeight:700, padding:'3px 10px', borderRadius:50 }}>
+                  {summaries.length} chapters
+                </span>
+                <span style={{ background:'var(--saffron-light)', color:'var(--saffron)', fontSize:12, fontWeight:700, padding:'3px 10px', borderRadius:50 }}>
+                  {totalPoints || 10} pts total
+                </span>
+                {pdfUrl && (
+                  <button onClick={openPdf} className="btn-outline" style={{ fontSize:12, padding:'5px 14px', marginLeft:'auto' }}>
+                    📄 Full PDF
+                  </button>
+                )}
+              </div>
+
+              {/* Per-chapter result cards */}
+              {summaries.map(({ chapter, summary, pointCount }, ci) => {
+                const lines   = parseLines(summary)
+                const speakId = `__summ_${ci}__`
+                const isSpeaking = globalSpeaking === speakId
+                return (
+                  <div key={ci} className="card" style={{ padding:24 }}>
+                    <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:16, paddingBottom:12, borderBottom:'1px solid #f1f5f9' }}>
+                      <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+                        <span style={{ width:30, height:30, borderRadius:8, background:'linear-gradient(135deg,var(--saffron),var(--saffron2))', color:'#fff', display:'grid', placeItems:'center', fontSize:14, fontWeight:800, flexShrink:0 }}>
+                          {ci + 1}
+                        </span>
+                        <div>
+                          <div style={{ fontFamily:'var(--serif)', fontSize:15, color:'var(--indigo)', fontWeight:700 }}>{chapter}</div>
+                          <div style={{ fontSize:11, color:'var(--muted)', marginTop:1 }}>
+                            {lines.length} point{lines.length !== 1 ? 's' : ''}
+                            {pointCount ? ` · requested ${pointCount}` : ''}
+                          </div>
+                        </div>
+                      </div>
+                      <button className="btn-outline"
+                        onClick={() => {
+                          if (isSpeaking) { stopSpeech(); setGlobalSpeaking(null) }
+                          else { stopSpeech(); setGlobalSpeaking(speakId); speakText(summary, () => setGlobalSpeaking(null)) }
+                        }}
+                        style={{ fontSize:11, padding:'5px 14px', display:'flex', alignItems:'center', gap:5,
+                          background: isSpeaking ? 'var(--indigo)' : 'transparent',
+                          color: isSpeaking ? '#fff' : 'var(--text)',
+                          borderColor: isSpeaking ? 'var(--indigo)' : 'var(--warm)' }}>
+                        {isSpeaking ? '⏹ Stop' : '🔊 Listen'}
+                      </button>
+                    </div>
+                    <SummaryLines lines={lines} raw={summary} />
+                  </div>
+                )
+              })}
+
+              {/* ── Inline point adjuster — always visible below results ──────── */}
+              {/* User can tweak points per chapter and regenerate without losing  */}
+              {/* the current results until they explicitly click Regenerate.      */}
+              <div className="card" style={{ padding:22, border:'1.5px solid var(--indigo2)', background:'var(--indigo3)' }}>
+                <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:14 }}>
+                  <div>
+                    <div style={{ fontWeight:700, color:'var(--indigo)', fontSize:14 }}>⚙️ Adjust Points per Chapter</div>
+                    <div style={{ fontSize:12, color:'var(--muted)', marginTop:2 }}>
+                      Change how many summary points each chapter gets, then regenerate.
+                    </div>
+                  </div>
+                  {/* Mode pills */}
+                  <div style={{ display:'flex', gap:6, flexShrink:0 }}>
+                    {['auto','custom'].map(m => (
+                      <button key={m}
+                        onClick={() => {
+                          setSumMode(m)
+                          if (m === 'auto') setCustomPoints(distributePoints(selChapters, 10))
+                        }}
+                        style={{ padding:'5px 14px', borderRadius:50, fontSize:12, fontWeight:700, cursor:'pointer', fontFamily:'var(--sans)', transition:'.15s',
+                          background: sumMode === m ? 'var(--indigo)' : '#fff',
+                          color:      sumMode === m ? '#fff' : 'var(--muted)',
+                          border:     sumMode === m ? '1.5px solid var(--indigo)' : '1.5px solid var(--warm)' }}>
+                        {m === 'auto' ? '⚡ Auto' : '✏️ Custom'}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Auto preview — chips showing current distribution */}
+                {sumMode === 'auto' && (
+                  <div style={{ display:'flex', flexWrap:'wrap', gap:8, marginBottom:14 }}>
+                    {selChapters.map(ch => {
+                      const autoVal = distributePoints(selChapters, 10)[ch] || 0
+                      return (
+                        <div key={ch} style={{ padding:'5px 12px', borderRadius:50, background:'rgba(67,56,202,.1)', border:'1px solid rgba(67,56,202,.2)', fontSize:12, color:'var(--indigo)', fontWeight:600, maxWidth:220, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
+                          {ch} <span style={{ color:'var(--saffron)', fontWeight:800 }}>→ {autoVal} pt{autoVal !== 1 ? 's' : ''}</span>
+                        </div>
+                      )
+                    })}
+                    <div style={{ padding:'5px 12px', borderRadius:50, background:'var(--indigo)', color:'#fff', fontSize:12, fontWeight:700 }}>
+                      Total: 10 pts ✓
+                    </div>
+                  </div>
+                )}
+
+                {/* Custom steppers */}
+                {sumMode === 'custom' && (() => {
+                  const totalAsgn = Object.values(customPoints).reduce((a,b) => a + Number(b), 0)
+                  const isOver  = totalAsgn > 10
+                  const isUnder = totalAsgn < 10
+                  return (
+                    <div style={{ display:'flex', flexDirection:'column', gap:10, marginBottom:14 }}>
+                      {selChapters.map(ch => (
+                        <div key={ch} style={{ display:'flex', alignItems:'center', gap:12, padding:'9px 12px', background:'#fff', borderRadius:10, border:'1px solid var(--warm)' }}>
+                          <div style={{ flex:1, fontSize:13, fontWeight:600, color:'var(--text)', minWidth:0, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{ch}</div>
+                          <div style={{ display:'flex', alignItems:'center', gap:8, flexShrink:0 }}>
+                            <button onClick={() => setCustomPoints(p => ({ ...p, [ch]: Math.max(1, (p[ch]||2) - 1) }))}
+                              style={{ width:28, height:28, borderRadius:'50%', border:'1.5px solid var(--warm)', background:'var(--paper)', fontWeight:800, fontSize:16, cursor:'pointer', display:'grid', placeItems:'center', color:'var(--text)', fontFamily:'var(--sans)' }}>−</button>
+                            <span style={{ width:28, textAlign:'center', fontWeight:800, fontSize:15, color: (customPoints[ch]||2) > 3 ? 'var(--green)' : 'var(--text)' }}>
+                              {customPoints[ch] || 2}
+                            </span>
+                            <button onClick={() => setCustomPoints(p => ({ ...p, [ch]: Math.min(10, (p[ch]||2) + 1) }))}
+                              style={{ width:28, height:28, borderRadius:'50%', border:'1.5px solid var(--warm)', background:'var(--paper)', fontWeight:800, fontSize:16, cursor:'pointer', display:'grid', placeItems:'center', color:'var(--text)', fontFamily:'var(--sans)' }}>+</button>
+                            <span style={{ fontSize:11, color:'var(--muted)' }}>pts</span>
+                          </div>
+                        </div>
+                      ))}
+                      <div style={{ display:'flex', justifyContent:'flex-end', alignItems:'center', gap:6 }}>
+                        <span style={{ fontSize:12, color:'var(--muted)' }}>Total:</span>
+                        <span style={{ fontSize:14, fontWeight:800, color: isOver ? 'var(--red)' : isUnder ? '#92400e' : 'var(--green)' }}>
+                          {totalAsgn}/10 {isOver ? '⚠ over' : isUnder ? '— add more' : '✓'}
+                        </span>
+                      </div>
+                    </div>
+                  )
+                })()}
+
+                <button className="btn-saffron"
+                  onClick={() => {
+                    const pts = sumMode === 'auto' ? distributePoints(selChapters, 10) : customPoints
+                    runTool('summarise', pts)
+                  }}
+                  style={{ padding:'10px 24px', fontSize:13, display:'flex', alignItems:'center', gap:8 }}>
+                  🔄 Regenerate with {sumMode === 'auto' ? 'Auto Distribution' : 'Custom Points'}
+                </button>
+              </div>
+
             </div>
           )
         })()}
