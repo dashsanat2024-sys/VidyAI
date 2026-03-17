@@ -680,7 +680,7 @@ def _vision_extract_pdf(pdf_path: str) -> Dict[int, str]:
 def _parse_answer_text(text: str) -> Dict[int, str]:
     """
     Extract answers from text using stateful parsing.
-    Handles cases where the answer might be on the line below the question number.
+    Handles 'Answer: 12' or choice text after multi-line options.
     """
     answers: Dict[int, str] = {}
     current_qid = None
@@ -698,16 +698,21 @@ def _parse_answer_text(text: str) -> Dict[int, str]:
             if m:
                 current_qid = int(m.group(1))
                 content = m.group(2).strip()
+                # If there's content, check if it's a short answer or just the question text
                 if content:
-                    # Clean up "Answer:" if it's on the same line
-                    content = re.sub(r"^(?:Ans(?:wer)?\s*[:\-])\s*", "", content, flags=re.IGNORECASE)
-                    answers[current_qid] = content
+                    # If it contains "Answer:" or is very short (like "A" or "12"), keep it
+                    ans_match = re.search(r"(?:Ans(?:wer)?\s*[:\-]\s*)(.*)", content, flags=re.IGNORECASE)
+                    if ans_match:
+                        answers[current_qid] = ans_match.group(1).strip()
+                    elif len(content) < 20 and not content.endswith('?'):
+                        # Likely a short answer on the same line
+                        answers[current_qid] = content
                 matched_q = True
                 break
         
         if matched_q: continue
 
-        # 2. If we have a current_qid, look for "Answer:" on subsequent lines
+        # 2. If we have a current_qid, look for "Answer:" or specific choice text
         if current_qid is not None:
             ans_pat = r"^(?:Ans(?:wer)?\s*[:\-]?\s*)(.*)"
             m_ans = re.match(ans_pat, ln, flags=re.IGNORECASE)
@@ -720,9 +725,14 @@ def _parse_answer_text(text: str) -> Dict[int, str]:
                     answers[current_qid] = lines[i+1].strip()
                 continue
             
-            # If line is just "____" or very short and we don't have an answer yet,
-            # or it looks like a continuation, we could append, but let's stick to explicit "Answer:" for now
-            # as requested by user.
+            # 3. Handle cases where student just writes the choice text after options
+            # If the current line is short and doesn't look like a new question
+            if not re.match(r"^(?:Q\d+|\d+[\)\.:])", ln, flags=re.IGNORECASE) and len(ln) < 15:
+                # If we don't have an answer yet, this might be it
+                if current_qid not in answers:
+                    # But only if it's not a list of options (A) B) C) D))
+                    if not re.search(r"[a-d]\s*[)\.]", ln, flags=re.IGNORECASE):
+                        answers[current_qid] = ln
 
     return answers
 
@@ -731,13 +741,14 @@ def _vision_extract_base64(b64: str, ext: str = "jpeg") -> Dict[int, str]:
     client = _oai.OpenAI(api_key=OPENAI_API_KEY)
     prompt = (
         "You are an expert exam evaluator. Extract all question-answer pairs from this student's answer sheet.\n"
-        "1. Identify the question number (e.g., '1', 'Q2', '3)').\n"
-        "2. Locate the student's answer. Look for:\n"
-        "   - Text written explicitly after labels like 'Answer:' or 'Ans:'.\n"
-        "   - Handwritten ticks (✓), circles, or underlines on specific MCQ options (A, B, C, D).\n"
-        "   - Written text in blank '____' spaces.\n"
-        "3. For MCQs, return the letter (e.g., 'A') if they circled/ticked an option.\n"
-        "4. Omit only completely unreadable or blank sections.\n"
+        "### CRITICAL RULES:\n"
+        "1. DO NOT include the question text or the multiple choice options (A, B, C, D) in the output.\n"
+        "2. Identify the question number (e.g., '1', 'Q2').\n"
+        "3. Extract ONLY the student's final answer. Look specifically for:\n"
+        "   - Text written after 'Answer:', 'Ans:', or in the '____' space.\n"
+        "   - Ticks (✓), circles, or underlines on specific options.\n"
+        "4. If a student chooses an option, return the option letter (e.g., 'C') or the specific value (e.g., '12').\n"
+        "5. Omit blank or unreadable sections.\n"
         "Return EXCLUSIVELY a JSON object: {\"answers\": {\"Q_NUMBER\": \"EXTRACTED_ANSWER\"}}"
     )
     try:
