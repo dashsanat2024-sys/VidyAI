@@ -12,7 +12,7 @@ Run locally:  python app.py
 API base:     http://localhost:5001/api/...
 """
 
-import os, json, re, uuid, hashlib, random, base64, shutil, smtplib
+import os, json, re, uuid, hashlib, random, base64, shutil, smtplib, traceback
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from datetime import datetime
@@ -305,6 +305,22 @@ def _question_valid_answers(q: dict) -> List[str]:
         if ans:
             vals = [x.strip() for x in re.split(r"[,\n;/|]", ans) if x.strip()]
     return [str(v).strip() for v in vals if str(v).strip()]
+
+
+def _coerce_qid(value) -> Optional[int]:
+    """Best-effort question-id coercion from formats like 1, '1', 'Q1'."""
+    try:
+        if isinstance(value, int):
+            return value
+        s = str(value or "").strip()
+        if not s:
+            return None
+        if s.isdigit():
+            return int(s)
+        digits = "".join(ch for ch in s if ch.isdigit())
+        return int(digits) if digits else None
+    except Exception:
+        return None
 
 
 def _strip_answer_prefix(text: str) -> str:
@@ -616,7 +632,10 @@ def _evaluate_answers(exam: dict, submitted: Dict[int, str], roll_no: str = "") 
     """Grade submitted answers against an exam's answer key."""
     evals, total_awarded, total_possible = [], 0.0, 0.0
     for q in exam.get("questions", []):
-        qid = int(q["id"])
+        qid = _coerce_qid(q.get("id"))
+        if qid is None:
+            print(f"[EVAL] Skipping question with invalid id: {q.get('id')}")
+            continue
         qtype = q.get("type", "objective")
         max_m = _question_marks(q)
         student = str(submitted.get(qid, "")).strip()
@@ -704,9 +723,8 @@ def _build_extraction_debug(exam: dict, submitted: Dict[int, str], result: dict 
 
     rows = []
     for q in exam.get("questions", []):
-        try:
-            qid = int(q.get("id"))
-        except Exception:
+        qid = _coerce_qid(q.get("id"))
+        if qid is None:
             continue
         qtype = str(q.get("type", "objective"))
         student_raw = str(submitted.get(qid, "")).strip()
@@ -772,6 +790,10 @@ def _extract_answers(path: str, exam: dict = None):
 def _vision_extract_pdf(pdf_path: str, exam: dict = None) -> Dict[int, str]:
     """Read embedded images from scanned PDFs and OCR them via vision model."""
     all_answers: Dict[int, str] = {}
+    if not OPENAI_API_KEY:
+        print("[EVAL] Vision OCR skipped: OPENAI_API_KEY not configured")
+        return {}
+
     try:
         import pypdf
         reader = pypdf.PdfReader(pdf_path)
@@ -780,7 +802,13 @@ def _vision_extract_pdf(pdf_path: str, exam: dict = None) -> Dict[int, str]:
         return {}
 
     for page_idx, page in enumerate(reader.pages):
-        for img in getattr(page, "images", []):
+        try:
+            images = list(getattr(page, "images", []) or [])
+        except Exception as e:
+            print(f"[EVAL] Failed to read images from PDF page {page_idx+1}: {e}")
+            continue
+
+        for img in images:
             try:
                 b64 = base64.b64encode(img.data).decode()
                 ext = Path(getattr(img, "name", "")).suffix.lower().replace(".", "") or "jpeg"
@@ -2360,30 +2388,35 @@ def evaluate_sheet():
     path = UPL_DIR / f"{datetime.utcnow().strftime('%Y%m%dT%H%M%S')}_{fn}"
     f.save(str(path))
 
-    answers, mode = _extract_answers(str(path), exam=e)
-    if not answers:
-        # Provide a clear, actionable error message rather than a generic one
-        msg = (
-            "Could not read any answers from the uploaded file. "
-            "If this is a scanned document, ensure it is clear and not rotated. "
-            "You can also upload a photo (JPG/PNG) of the answer sheet directly."
-        )
-        return jsonify({"error": msg, "extraction_mode": mode}), 400
+    try:
+        answers, mode = _extract_answers(str(path), exam=e)
+        if not answers:
+            # Provide a clear, actionable error message rather than a generic one
+            msg = (
+                "Could not read any answers from the uploaded file. "
+                "If this is a scanned document, ensure it is clear and not rotated. "
+                "You can also upload a photo (JPG/PNG) of the answer sheet directly."
+            )
+            return jsonify({"error": msg, "extraction_mode": mode}), 400
 
-    result  = _evaluate_answers(e, answers, roll_no)
-    extraction_debug = _build_extraction_debug(e, answers, result=result, extraction_mode=mode)
-    eval_id = uuid.uuid4().hex[:10]
-    payload = {
-        "evaluation_id": eval_id, "exam_id": exam_id, "created_at": _now(),
-        "student_name": student_name, "roll_no": roll_no,
-        "parent_email": parent_email, "file_name": fn,
-        "extraction_mode": mode, "submitted_answers": answers, "result": result, "extraction_debug": extraction_debug
-    }
-    evaluations_registry[eval_id] = payload
-    if not IS_VERCEL:
-        _save_json(EVAL_DIR / f"{eval_id}.json", payload)
-    _save_evals()
-    return jsonify(payload)
+        result  = _evaluate_answers(e, answers, roll_no)
+        extraction_debug = _build_extraction_debug(e, answers, result=result, extraction_mode=mode)
+        eval_id = uuid.uuid4().hex[:10]
+        payload = {
+            "evaluation_id": eval_id, "exam_id": exam_id, "created_at": _now(),
+            "student_name": student_name, "roll_no": roll_no,
+            "parent_email": parent_email, "file_name": fn,
+            "extraction_mode": mode, "submitted_answers": answers, "result": result, "extraction_debug": extraction_debug
+        }
+        evaluations_registry[eval_id] = payload
+        if not IS_VERCEL:
+            _save_json(EVAL_DIR / f"{eval_id}.json", payload)
+        _save_evals()
+        return jsonify(payload)
+    except Exception as ex:
+        print(f"[EVAL] /api/evaluate fatal error: {ex}")
+        traceback.print_exc()
+        return jsonify({"error": "Evaluation failed due to server processing error. Please retry with a clearer scan or image."}), 500
 
 
 @app.post("/api/evaluate/multi-student")
