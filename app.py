@@ -820,46 +820,128 @@ def _extract_answers(path: str, exam_questions: list = None):
             except Exception as _gpt_txt_err:
                 print(f"[PDF-TEXT-GPT] {_gpt_txt_err}")
 
-        # ── Path B: Scanned/handwritten PDF ──────────────────────────────────
-        # Convert each page to a high-res image and run Vision OCR.
-        # Use GPT-4o (not mini) for superior handwriting recognition.
+        # ── Path B: Scanned / handwritten PDF ────────────────────────────────
+        # Key insight: the page contains BOTH printed question-paper text AND
+        # the student's handwriting. A single whole-page prompt causes GPT to
+        # read the dominant printed text and miss the handwriting.
+        #
+        # Solution — two-stage extraction:
+        #   Stage 1: Send the page image together with the printed text layer
+        #            and ask GPT to report ONLY text that is NOT in the printed
+        #            layer (i.e., pure handwritten additions).
+        #   Stage 2: If Stage 1 returns nothing useful, fall back to per-question
+        #            targeted extraction asking specifically about each answer blank.
         if IS_BLANK_PAPER:
-            print(f"[PDF-OCR] Detected printed question paper with blank Answer: lines — using vision OCR")
+            print("[PDF-OCR] Printed question paper detected — using handwriting-diff OCR")
 
-        ocr_prompt = _build_ocr_prompt(exam_questions)
         try:
             from pdf2image import convert_from_path
             import io as _io
-            images = convert_from_path(path, dpi=250)   # higher DPI for handwriting
+            images = convert_from_path(path, dpi=300)
             combined: Dict[int, str] = {}
             client = _oai.OpenAI(api_key=OPENAI_API_KEY)
+
             for img in images:
                 buf = _io.BytesIO()
                 img.save(buf, format="PNG")
                 img_b64 = base64.b64encode(buf.getvalue()).decode()
+
+                # ── Stage 1: diff-based extraction ───────────────────────────
+                # Provide the printed text so GPT knows what to IGNORE,
+                # then asks only for content the student added by hand.
+                printed_layer = raw_text[:4000] if raw_text.strip() else ""
+                obj_qs  = [q for q in exam_questions if q.get("type","objective") == "objective"]
+                subj_qs = [q for q in exam_questions if q.get("type","objective") != "objective"]
+                obj_ids  = ", ".join(str(q["id"]) for q in obj_qs)  or "none"
+                subj_ids = ", ".join(str(q["id"]) for q in subj_qs) or "none"
+
+                q_ref = "\n".join(
+                    f"Q{q['id']}: {str(q.get('question',''))[:70]}"
+                    for q in sorted(exam_questions, key=lambda x: int(x.get("id",0)))
+                ) if exam_questions else ""
+
+                diff_prompt = (
+                    "You are analysing a scanned student answer sheet.\n"
+                    "The sheet is a PRINTED question paper that the student has filled in by hand.\n\n"
+                    "PRINTED TEXT already on the paper (ignore all of this):\n"
+                    "---\n" + (printed_layer if printed_layer else "(not available)") + "\n---\n\n"
+                    "QUESTION REFERENCE:\n" + (q_ref if q_ref else "(not provided)") + "\n\n"
+                    "YOUR TASK — find and read ONLY the student's handwritten additions:\n"
+                    f"• Objective questions {obj_ids}: student circles or writes ONE letter (A/B/C/D) "
+                    "in the blank after 'Answer:'. Read that letter.\n"
+                    f"• Subjective questions {subj_ids}: student writes sentences in the blank space "
+                    "below the question. Read that handwritten text.\n\n"
+                    "CRITICAL: Do NOT return any text that appears in the PRINTED TEXT section above.\n"
+                    "If a student left a question blank, omit it.\n\n"
+                    "Return ONLY valid JSON:\n"
+                    + '{"answers": {"1":"A","2":"B","7":"student wrote this","8":"student wrote this"}}' 
+                )
+
                 resp = client.chat.completions.create(
-                    model=OPENAI_MODEL,    # use GPT-4o for handwriting OCR quality
+                    model=OPENAI_MODEL,
                     temperature=0,
                     response_format={"type": "json_object"},
                     messages=[{"role": "user", "content": [
-                        {"type": "text",      "text": ocr_prompt},
+                        {"type": "text",      "text": diff_prompt},
                         {"type": "image_url", "image_url": {
                             "url":    f"data:image/png;base64,{img_b64}",
-                            "detail": "high"   # high detail for handwriting
+                            "detail": "high"
                         }}
                     ]}]
                 )
-                raw_ocr = json.loads(resp.choices[0].message.content)
-                page_ans = _validate_ocr_answers(
-                    raw_ocr.get("answers", {}), exam_questions
-                )
+                stage1 = json.loads(resp.choices[0].message.content)
+                page_ans = _validate_ocr_answers(stage1.get("answers", {}), exam_questions)
+                print(f"[PDF-OCR] Stage-1 extracted: {list(page_ans.keys())}")
+
+                # ── Stage 2: per-question targeted pass for any missing Qs ──
+                answered = set(page_ans.keys())
+                missing  = [q for q in exam_questions if int(q.get("id",0)) not in answered]
+
+                if missing:
+                    missing_lines = "\n".join(
+                        f"Q{q['id']} [{'MCQ' if q.get('type','objective')=='objective' else 'Written'}]: "
+                        f"{str(q.get('question',''))[:70]}"
+                        for q in missing
+                    )
+                    targeted_prompt = (
+                        "You are reading a scanned handwritten exam answer sheet.\n\n"
+                        "I need you to find the student's handwritten answer for EACH of these "
+                        "specific questions. Look carefully — the answers may be small, faint, "
+                        "or written in cursive.\n\n"
+                        "Questions to find answers for:\n" + missing_lines + "\n\n"
+                        "For MCQ questions: look for a circled or written letter A, B, C, or D "
+                        "in the blank line labelled 'Answer:' below the options.\n"
+                        "For written questions: look for handwritten sentences in the blank "
+                        "space below the question text.\n\n"
+                        "If genuinely blank/unanswered, omit that question.\n"
+                        "Return ONLY valid JSON: {\"answers\": {\"7\": \"...\", \"8\": \"...\"}}"
+                    )
+                    resp2 = client.chat.completions.create(
+                        model=OPENAI_MODEL,
+                        temperature=0,
+                        response_format={"type": "json_object"},
+                        messages=[{"role": "user", "content": [
+                            {"type": "text",      "text": targeted_prompt},
+                            {"type": "image_url", "image_url": {
+                                "url":    f"data:image/png;base64,{img_b64}",
+                                "detail": "high"
+                            }}
+                        ]}]
+                    )
+                    stage2 = json.loads(resp2.choices[0].message.content)
+                    stage2_ans = _validate_ocr_answers(stage2.get("answers", {}), exam_questions)
+                    print(f"[PDF-OCR] Stage-2 filled in: {list(stage2_ans.keys())}")
+                    page_ans.update(stage2_ans)
+
                 combined.update(page_ans)
+
             if combined:
                 return combined, "vision_ocr_pdf"
+
         except Exception as _pdf2img_err:
             print(f"[PDF-OCR] pdf2image failed: {_pdf2img_err}")
 
-        # ── Path C: pdf2image unavailable — GPT text fallback ────────────────
+        # ── Path C: pdf2image unavailable — text-only GPT fallback ───────────
         if raw_text.strip():
             try:
                 client = _oai.OpenAI(api_key=OPENAI_API_KEY)
@@ -867,9 +949,10 @@ def _extract_answers(path: str, exam_questions: list = None):
                     model=OPENAI_MINI, temperature=0,
                     response_format={"type": "json_object"},
                     messages=[{"role": "user", "content": (
-                        ocr_prompt +
-                        "\n\nRaw text extracted from the scanned PDF (OCR quality may be low — "
-                        "look for handwritten answer fragments near each Answer: line):\n\n" +
+                        _build_ocr_prompt(exam_questions) +
+                        "\n\nThe following raw text was extracted from the PDF. It is the PRINTED "
+                        "question paper template — look for any student-typed answers that appear "
+                        "AFTER each 'Answer:' label (ignore blank underscores):\n\n" +
                         raw_text[:4000]
                     )}]
                 )
@@ -883,8 +966,52 @@ def _extract_answers(path: str, exam_questions: list = None):
         return {}, "pdf_unreadable"
 
     if ext in {".png", ".jpg", ".jpeg", ".webp"}:
-        ocr_prompt = _build_ocr_prompt(exam_questions)
-        return _vision_extract(path, ocr_prompt), "vision_ocr"
+        # For direct image uploads, use two-stage extraction (same as scanned PDF)
+        try:
+            import io as _io
+            from PIL import Image as _PIL
+            with open(path, "rb") as _f:
+                img_b64 = base64.b64encode(_f.read()).decode()
+            ext_clean = ext.replace(".", "") or "png"
+
+            client = _oai.OpenAI(api_key=OPENAI_API_KEY)
+            obj_qs  = [q for q in exam_questions if q.get("type","objective") == "objective"]
+            subj_qs = [q for q in exam_questions if q.get("type","objective") != "objective"]
+            obj_ids  = ", ".join(str(q["id"]) for q in obj_qs)  or "none"
+            subj_ids = ", ".join(str(q["id"]) for q in subj_qs) or "none"
+            q_ref = "\n".join(
+                f"Q{q['id']}: {str(q.get('question',''))[:70]}"
+                for q in sorted(exam_questions, key=lambda x: int(x.get("id",0)))
+            ) if exam_questions else ""
+
+            diff_prompt = (
+                "You are analysing a scanned student answer sheet.\n"
+                "The sheet is a printed question paper that the student has filled in by hand.\n\n"
+                "QUESTION REFERENCE (printed text to ignore):\n" + (q_ref or "(not provided)") + "\n\n"
+                "YOUR TASK: find ONLY the student's handwritten additions.\n"
+                f"• Objective questions {obj_ids}: student circles/writes A/B/C/D in the 'Answer:' blank.\n"
+                f"• Subjective questions {subj_ids}: student writes sentences in blank space below question.\n"
+                "Do NOT return any printed question text. If blank, omit.\n"
+                "Return ONLY valid JSON: {\"answers\": {\"1\":\"A\",\"7\":\"student wrote...\"}}"
+            )
+            resp = client.chat.completions.create(
+                model=OPENAI_MODEL, temperature=0,
+                response_format={"type": "json_object"},
+                messages=[{"role": "user", "content": [
+                    {"type": "text", "text": diff_prompt},
+                    {"type": "image_url", "image_url": {
+                        "url": f"data:image/{ext_clean};base64,{img_b64}", "detail": "high"
+                    }}
+                ]}]
+            )
+            raw = json.loads(resp.choices[0].message.content)
+            ans = _validate_ocr_answers(raw.get("answers", {}), exam_questions)
+            if ans:
+                return ans, "vision_ocr"
+        except Exception as _img_err:
+            print(f"[IMG-OCR] {_img_err}")
+        # Fallback to simple vision extract
+        return _vision_extract(path, _build_ocr_prompt(exam_questions)), "vision_ocr"
 
     return {}, "unsupported_type"
 
