@@ -702,6 +702,66 @@ def _build_ocr_prompt(exam_questions: list) -> str:
         "If no student answers are visible, return: {\"answers\": {}}"
     )
 
+def _validate_ocr_answers(raw_answers: dict, exam_questions: list) -> Dict[int, str]:
+    """
+    Post-process raw OCR answers dict to reject noise:
+    - Values that look like question text fragments (long sentences ending in ?)
+    - Values that contain question-paper header phrases
+    - Values that are garbled OCR of section headers or marks annotations
+    - Keys that don't correspond to actual exam question IDs
+    Valid question IDs from the exam; anything outside is noise.
+    """
+    valid_ids = {int(q.get("id", 0)) for q in exam_questions} if exam_questions else None
+
+    NOISE_PATTERNS = re.compile(
+        r"(?:section\s+[AB]|objective\s+questions?|subjective\s+questions?|"
+        r"general\s+instructions?|total\s+marks|roll\s+number|student\s+name|"
+        r"marks?\s+obtained|date:|answer\s+sheet|vidyai|cbse|icse|marks?\])",
+        re.IGNORECASE
+    )
+    # MCQ answer: should be a single letter A-D (possibly with punctuation)
+    MCQ_IDS = {int(q["id"]) for q in exam_questions
+               if q.get("type", "objective") == "objective"} if exam_questions else set()
+
+    result: Dict[int, str] = {}
+    for k, v in raw_answers.items():
+        try:
+            qid = int(str(k).strip())
+        except ValueError:
+            continue
+        val = str(v).strip()
+        if not val:
+            continue
+
+        # Reject if question ID not in exam
+        if valid_ids and qid not in valid_ids:
+            continue
+
+        # For MCQ questions: value must BE a single letter A-D (≤5 chars total).
+        # If the OCR returned a long string for an MCQ, it grabbed question text
+        # — reject it entirely rather than fish a letter out of garbage.
+        if qid in MCQ_IDS:
+            stripped = re.sub(r"[^A-Da-d]", "", val)
+            if len(val.strip()) <= 5 and len(stripped) == 1:
+                result[qid] = stripped.upper()
+            # else: long string or no clear letter — skip (noise or blank)
+            continue
+
+        # For subjective: reject obvious noise
+        if NOISE_PATTERNS.search(val):
+            print(f"[OCR-VALIDATE] Rejected Q{qid} noise: {val[:60]}")
+            continue
+        if val.endswith("?") and len(val) > 40:
+            print(f"[OCR-VALIDATE] Rejected Q{qid} question-text: {val[:60]}")
+            continue
+        if len(val) < 3:
+            continue
+
+        result[qid] = val
+
+    return result
+
+
 def _extract_answers(path: str, exam_questions: list = None):
     """Extract student answers from an answer sheet file."""
     exam_questions = exam_questions or []
@@ -711,38 +771,45 @@ def _extract_answers(path: str, exam_questions: list = None):
         return _parse_answer_text(Path(path).read_text(encoding="utf-8", errors="ignore")), "parsed_text"
 
     if ext == ".pdf":
-        # 1. Try text-based extraction (digital/typed PDFs)
-        text = ""
+        # ── Detect whether this is a typed digital submission or a
+        #    printed+handwritten scan. Key signal: if the extracted text
+        #    contains blank "Answer: ___" lines, it's the printed question paper
+        #    with no typed answers — skip text extraction and go straight to vision.
+        raw_text = ""
         try:
             from langchain_community.document_loaders import PyPDFLoader
             pages = PyPDFLoader(path).load()
-            text  = "\n".join(p.page_content for p in pages if p.page_content)
+            raw_text = "\n".join(p.page_content for p in pages if p.page_content)
         except ImportError:
             try:
-                import pypdf
-                reader = pypdf.PdfReader(path)
-                text   = "\n".join((p.extract_text() or "") for p in reader.pages)
+                import pypdf as _pypdf2
+                _r2 = _pypdf2.PdfReader(path)
+                raw_text = "\n".join((p.extract_text() or "") for p in _r2.pages)
             except Exception:
                 pass
         except Exception:
             pass
-        if text.strip():
-            ans = _parse_answer_text(text)
+
+        IS_BLANK_PAPER = bool(raw_text and re.search(
+            r"Answer\s*:\s*_{3,}", raw_text, re.IGNORECASE
+        ))
+
+        # ── Path A: Typed/digital answer submission ───────────────────────────
+        if raw_text.strip() and not IS_BLANK_PAPER:
+            ans = _parse_answer_text(raw_text)
             if ans:
                 return ans, "parsed_pdf"
-            # Regex found nothing — let GPT parse the raw text with structural knowledge
+            # Regex missed — let GPT parse the raw text
             try:
-                ocr_prompt_text = _build_ocr_prompt(exam_questions)
                 client = _oai.OpenAI(api_key=OPENAI_API_KEY)
                 gpt_resp = client.chat.completions.create(
                     model=OPENAI_MINI, temperature=0,
                     response_format={"type": "json_object"},
                     messages=[{"role": "user", "content": (
-                        ocr_prompt_text +
-                        "\n\nThe following is raw text extracted from the PDF answer sheet "
-                        "(it contains both printed question text and the student's filled-in answers). "
-                        "Extract only the student answers from the Answer: lines:\n\n" +
-                        text[:5000]
+                        _build_ocr_prompt(exam_questions) +
+                        "\n\nRaw text from the PDF (contains both question text and "
+                        "student answers — extract ONLY the student answers):\n\n" +
+                        raw_text[:5000]
                     )}]
                 )
                 raw_gpt = json.loads(gpt_resp.choices[0].message.content)
@@ -752,12 +819,18 @@ def _extract_answers(path: str, exam_questions: list = None):
                     return gpt_ans, "gpt_text_parse"
             except Exception as _gpt_txt_err:
                 print(f"[PDF-TEXT-GPT] {_gpt_txt_err}")
-        # 2. Scanned PDF — convert pages to images, run Vision OCR on each
+
+        # ── Path B: Scanned/handwritten PDF ──────────────────────────────────
+        # Convert each page to a high-res image and run Vision OCR.
+        # Use GPT-4o (not mini) for superior handwriting recognition.
+        if IS_BLANK_PAPER:
+            print(f"[PDF-OCR] Detected printed question paper with blank Answer: lines — using vision OCR")
+
         ocr_prompt = _build_ocr_prompt(exam_questions)
         try:
             from pdf2image import convert_from_path
             import io as _io
-            images = convert_from_path(path, dpi=200)
+            images = convert_from_path(path, dpi=250)   # higher DPI for handwriting
             combined: Dict[int, str] = {}
             client = _oai.OpenAI(api_key=OPENAI_API_KEY)
             for img in images:
@@ -765,44 +838,48 @@ def _extract_answers(path: str, exam_questions: list = None):
                 img.save(buf, format="PNG")
                 img_b64 = base64.b64encode(buf.getvalue()).decode()
                 resp = client.chat.completions.create(
-                    model=OPENAI_MINI, temperature=0,
+                    model=OPENAI_MODEL,    # use GPT-4o for handwriting OCR quality
+                    temperature=0,
                     response_format={"type": "json_object"},
                     messages=[{"role": "user", "content": [
-                        {"type": "text", "text": ocr_prompt},
-                        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_b64}"}}
+                        {"type": "text",      "text": ocr_prompt},
+                        {"type": "image_url", "image_url": {
+                            "url":    f"data:image/png;base64,{img_b64}",
+                            "detail": "high"   # high detail for handwriting
+                        }}
                     ]}]
                 )
                 raw_ocr = json.loads(resp.choices[0].message.content)
-                page_ans = {int(k): str(v).strip() for k, v in raw_ocr.get("answers", {}).items()
-                            if str(k).isdigit() and str(v).strip()}
+                page_ans = _validate_ocr_answers(
+                    raw_ocr.get("answers", {}), exam_questions
+                )
                 combined.update(page_ans)
             if combined:
                 return combined, "vision_ocr_pdf"
         except Exception as _pdf2img_err:
             print(f"[PDF-OCR] pdf2image failed: {_pdf2img_err}")
-        # 3. Last resort: GPT-4o vision on raw text if pdf2image unavailable
-        try:
-            import pypdf, io as _io
-            reader = pypdf.PdfReader(path)
-            all_text = "\n".join((p.extract_text() or "") for p in reader.pages)
-            if all_text.strip():
+
+        # ── Path C: pdf2image unavailable — GPT text fallback ────────────────
+        if raw_text.strip():
+            try:
                 client = _oai.OpenAI(api_key=OPENAI_API_KEY)
-                fallback_prompt = (
-                    ocr_prompt + "\n\nRaw text extracted from PDF (may include both "
-                    "question and answer text — extract ONLY the answer portions):\n" + all_text[:4000]
-                )
                 resp = client.chat.completions.create(
                     model=OPENAI_MINI, temperature=0,
                     response_format={"type": "json_object"},
-                    messages=[{"role": "user", "content": fallback_prompt}]
+                    messages=[{"role": "user", "content": (
+                        ocr_prompt +
+                        "\n\nRaw text extracted from the scanned PDF (OCR quality may be low — "
+                        "look for handwritten answer fragments near each Answer: line):\n\n" +
+                        raw_text[:4000]
+                    )}]
                 )
                 raw = json.loads(resp.choices[0].message.content)
-                ans = {int(k): str(v).strip() for k, v in raw.get("answers", {}).items()
-                       if str(k).isdigit() and str(v).strip()}
+                ans = _validate_ocr_answers(raw.get("answers", {}), exam_questions)
                 if ans:
                     return ans, "llm_text_extract"
-        except Exception as _fb_err:
-            print(f"[PDF-OCR] Text fallback failed: {_fb_err}")
+            except Exception as _fb_err:
+                print(f"[PDF-OCR] Text fallback failed: {_fb_err}")
+
         return {}, "pdf_unreadable"
 
     if ext in {".png", ".jpg", ".jpeg", ".webp"}:
