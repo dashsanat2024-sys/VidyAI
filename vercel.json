@@ -25,6 +25,10 @@
       "dest": "app.py"
     },
     {
+      "src": "/sw\\.js",
+      "dest": "dist/sw.js"
+    },
+    {
       "src": "/assets/(.*)",
       "dest": "dist/assets/$1"
     },
