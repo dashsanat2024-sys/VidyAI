@@ -312,18 +312,36 @@ def _objective_is_correct(q: dict, student_answer: str) -> bool:
     valid_raw = _question_valid_answers(q)
     valid_norm = set(_normalize(v) for v in valid_raw if str(v).strip())
 
+    # Expand valid_norm: if a valid answer is a letter key (e.g. "A"),
+    # also add the option text (e.g. "5"); if it is option text, also add the key.
     for ans in list(valid_raw):
         key = str(ans).strip().upper()
         if key in options:
             valid_norm.add(_normalize(options[key]))
             valid_norm.add(_normalize(key))
+        else:
+            # answer stored as text — find its matching option letter
+            for k, v in options.items():
+                if _normalize(v) == _normalize(ans):
+                    valid_norm.add(_normalize(k))
 
     ans_field = str(q.get("answer", "")).strip()
     if ans_field:
         valid_norm.add(_normalize(ans_field))
         key = ans_field.upper()
         if key in options:
+            # answer is a letter key → also accept the text value
             valid_norm.add(_normalize(options[key]))
+        else:
+            # answer is text → also accept the corresponding letter key
+            for k, v in options.items():
+                if _normalize(v) == _normalize(ans_field):
+                    valid_norm.add(_normalize(k))
+
+    # Extra bridge: if student submitted a letter, also compare its text to valid_norm
+    student_upper = student.strip().upper()
+    if student_upper in options:
+        valid_norm.add(_normalize(options[student_upper]))
 
     return bool(student_norm and student_norm in valid_norm)
 def _dtype(ext: str)-> str:
@@ -2744,20 +2762,42 @@ def evaluate_practice():
 
     # Deterministic check for objective questions
     if q_type == "objective":
-        # Use existing logic to see if it's correct
-        is_correct = _objective_is_correct({"options": options, "answer": model_ans}, stud_ans)
+        # Build a rich question dict so _objective_is_correct can bridge
+        # letter keys ↔ option text (e.g. student picks "A", model stores "5").
+        q_dict = {
+            "options":       options or {},
+            "answer":        model_ans,
+            # Also populate valid_answers with both the raw value AND any
+            # option text that matches, so all comparison paths are covered.
+            "valid_answers": [model_ans],
+        }
+        is_correct = _objective_is_correct(q_dict, stud_ans)
+
+        # Build a human-readable correct answer label (prefer "A (5)" style)
+        correct_label = model_ans
+        if options:
+            # If model_ans is a letter key, show "A (text)"
+            if model_ans.strip().upper() in options:
+                correct_label = f"{model_ans.upper()} — {options[model_ans.strip().upper()]}"
+            else:
+                # If model_ans is option text, find its letter
+                for k, v in options.items():
+                    if _normalize(v) == _normalize(model_ans):
+                        correct_label = f"{k} — {v}"
+                        break
+
         if is_correct:
             return jsonify({
                 "score": 10,
                 "is_correct": True,
-                "feedback": f"Correct! The answer is indeed {model_ans}.",
+                "feedback": f"Correct! The answer is {correct_label}.",
                 "improvements": ""
             })
         else:
             return jsonify({
                 "score": 0,
                 "is_correct": False,
-                "feedback": f"Incorrect. The correct answer is {model_ans}.",
+                "feedback": f"Incorrect. The correct answer is {correct_label}.",
                 "improvements": "Review this topic in your textbook."
             })
 
