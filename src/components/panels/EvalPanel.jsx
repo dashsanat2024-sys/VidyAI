@@ -345,6 +345,39 @@ function EvaluationResultItem({ evaluation, examMeta, schoolName, teacherName, e
         </div>
       )}
 
+      {evaluation.extraction_debug?.questions?.length > 0 && (
+        <details style={{ marginBottom: 16, background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 10, padding: '10px 12px' }}>
+          <summary style={{ cursor: 'pointer', fontSize: 12, fontWeight: 800, color: 'var(--indigo)' }}>
+            Extraction Debug ({evaluation.extraction_debug.mode || 'unknown'}) • Parsed {evaluation.extraction_debug.parsed_answers_count || 0}/{evaluation.extraction_debug.expected_questions_count || 0}
+          </summary>
+          <div style={{ overflowX: 'auto', marginTop: 10 }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12, background: '#fff', border: '1px solid #e2e8f0' }}>
+              <thead style={{ background: '#f1f5f9' }}>
+                <tr>
+                  {['Q', 'Type', 'Student Ans', 'Expected', 'Match', 'Score'].map(h => (
+                    <th key={h} style={{ padding: '8px 10px', textAlign: 'left', fontWeight: 700 }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {evaluation.extraction_debug.questions.map((q, idx) => (
+                  <tr key={`${q.question_id}-${idx}`} style={{ borderTop: '1px solid #eef2f7' }}>
+                    <td style={{ padding: '8px 10px' }}>Q{q.question_id}</td>
+                    <td style={{ padding: '8px 10px', textTransform: 'capitalize' }}>{q.type}</td>
+                    <td style={{ padding: '8px 10px' }}>{q.submitted_answer || '—'}</td>
+                    <td style={{ padding: '8px 10px' }}>{(q.expected_answers || []).join(', ') || '—'}</td>
+                    <td style={{ padding: '8px 10px', fontWeight: 700, color: q.type === 'objective' ? (q.objective_match ? 'var(--green)' : 'var(--red)') : 'var(--muted)' }}>
+                      {q.type === 'objective' ? (q.objective_match ? 'MATCH' : 'MISMATCH') : 'SUBJECTIVE'}
+                    </td>
+                    <td style={{ padding: '8px 10px' }}>{q.awarded_marks ?? 0}/{q.max_marks ?? 0}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </details>
+      )}
+
       <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', padding: '14px 16px', background: 'var(--paper)', borderRadius: 10 }}>
         <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--indigo)', whiteSpace: 'nowrap' }}>📧 Send to Parent:</span>
         <input className="fi" type="email" placeholder="parent@email.com" value={email} onChange={e => setEmail(e.target.value)} style={{ flex: 1, minWidth: 200 }} />

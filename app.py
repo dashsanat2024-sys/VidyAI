@@ -283,17 +283,95 @@ def _grade(p: float)-> str:
 def _normalize(t)   -> str: return re.sub(r"\s+", " ", str(t or "").strip().lower())
 
 def _normalize_mcq(t) -> str:
-    """Extract standard MCQ letter (A, B, C, D) from messy student input or AI extracted text."""
+    """Normalize only true MCQ-style answers; avoid random letter picks from question text."""
     raw = _normalize(t)
-    if not raw: return ""
-    # Look for a single letter A-D, possibly surrounded by punctuation or words
-    # Priority: start of string or explicitly 'option A' etc.
-    m = re.search(r"(?:^|\s|\W)([a-d])(?:\W|\s|$)", raw)
-    if m: return m.group(1).upper()
-    # Fallback to any single letter in the string
-    m = re.search(r"([a-d])", raw)
-    if m: return m.group(1).upper()
+    if not raw:
+        return ""
+    m = re.match(r"^(?:option\s*)?[\(\[\{]?\s*([a-d])\s*[\)\]\}]?$", raw, flags=re.IGNORECASE)
+    if m:
+        return m.group(1).upper()
+    if raw in {"a", "b", "c", "d"}:
+        return raw.upper()
     return raw.upper()
+
+def _question_marks(q: dict) -> float:
+    return float(q.get("weightage", q.get("marks", 1)))
+
+
+def _question_valid_answers(q: dict) -> List[str]:
+    vals = q.get("valid_answers", [])
+    if not vals:
+        ans = str(q.get("answer", "")).strip()
+        if ans:
+            vals = [x.strip() for x in re.split(r"[,\n;/|]", ans) if x.strip()]
+    return [str(v).strip() for v in vals if str(v).strip()]
+
+
+def _strip_answer_prefix(text: str) -> str:
+    return re.sub(r"^(?:ans(?:wer)?|response|student\s*ans(?:wer)?)\s*[:\-]\s*", "", str(text or "").strip(), flags=re.IGNORECASE).strip()
+
+
+def _looks_like_question_text(text: str, question_hint: str = "") -> bool:
+    t = str(text or "").strip()
+    if not t:
+        return True
+    n = _normalize(t)
+    if question_hint and n == _normalize(question_hint):
+        return True
+    if "?" in t:
+        return True
+    if re.search(r"\b(what|which|why|how|when|where|define|explain|describe|choose|select)\b", n):
+        return True
+    if re.match(r"^[A-D][\)\.\:\-]\s+\S+", t):
+        return True
+    return False
+
+
+def _is_candidate_answer(text: str, question_hint: str = "") -> bool:
+    t = _strip_answer_prefix(text)
+    if not t:
+        return False
+    if _looks_like_question_text(t, question_hint):
+        return False
+    return True
+
+
+def _coerce_mcq_answer(student_answer: str, options: Dict[str, str]) -> str:
+    s = _normalize(_strip_answer_prefix(student_answer))
+    if not s:
+        return ""
+    m = re.match(r"^(?:option\s*)?[\(\[\{]?\s*([a-d])\s*[\)\]\}]?$", s, flags=re.IGNORECASE)
+    if m:
+        return m.group(1).upper()
+    for k, v in (options or {}).items():
+        if _normalize(v) == s:
+            return str(k).strip().upper()
+    return student_answer.strip()
+
+
+def _objective_is_correct(q: dict, student_answer: str) -> bool:
+    options = q.get("options") or {}
+    student = _coerce_mcq_answer(student_answer, options)
+    student_norm = _normalize(student)
+    valid_raw = _question_valid_answers(q)
+    valid_norm = set(_normalize(v) for v in valid_raw if str(v).strip())
+
+    for ans in list(valid_raw):
+        key = str(ans).strip().upper()
+        if key in options:
+            valid_norm.add(_normalize(options[key]))
+            valid_norm.add(_normalize(key))
+
+    ans_field = str(q.get("answer", "")).strip()
+    if ans_field:
+        valid_norm.add(_normalize(ans_field))
+        key = ans_field.upper()
+        if key in options:
+            valid_norm.add(_normalize(options[key]))
+
+    return bool(student_norm and student_norm in valid_norm)
+
+
 def _dtype(ext: str)-> str:
     return {"pdf":"PDF","txt":"Text","md":"Text","mp3":"Audio","wav":"Audio",
             "m4a":"Audio","mp4":"Video","jpg":"Image","jpeg":"Image","png":"Image"}.get(ext, "File")
@@ -538,46 +616,57 @@ def _evaluate_answers(exam: dict, submitted: Dict[int, str], roll_no: str = "") 
     """Grade submitted answers against an exam's answer key."""
     evals, total_awarded, total_possible = [], 0.0, 0.0
     for q in exam.get("questions", []):
-        qid    = int(q["id"])
-        qtype  = q.get("type", "objective")
-        max_m  = float(q.get("weightage", q.get("marks", 1)))
+        qid = int(q["id"])
+        qtype = q.get("type", "objective")
+        max_m = _question_marks(q)
         student = str(submitted.get(qid, "")).strip()
         total_possible += max_m
 
         if qtype == "objective":
-            valid   = [_normalize_mcq(a) for a in q.get("valid_answers", []) if str(a).strip()]
-            correct = _normalize_mcq(student) in valid
+            correct = _objective_is_correct(q, student)
             awarded = max_m if correct else 0.0
             total_awarded += awarded
             evals.append({
-                "question_id": qid, "type": "objective", "student_answer": student,
-                "valid_answers": q.get("valid_answers", []), "is_correct": correct,
-                "awarded_marks": awarded, "max_marks": max_m,
-                "feedback": "Correct ✓" if correct else "Incorrect ✗"
+                "question_id": qid,
+                "question": q.get("question", ""),
+                "type": "objective",
+                "student_answer": student,
+                "valid_answers": _question_valid_answers(q),
+                "is_correct": correct,
+                "awarded_marks": awarded,
+                "max_marks": max_m,
+                "feedback": "Correct ✓" if correct else "Incorrect ✗",
             })
-        else:
-            prompt = SUBJECTIVE_GRADING_PROMPT.format(
-                question=q.get("question", ""), max_marks=max_m,
-                valid_answers=json.dumps(q.get("valid_answers", [])),
-                key_points=json.dumps(q.get("answer_key_points", [])),
-                rubric=q.get("evaluation_rubric", ""), student_answer=student
-            )
-            try:
-                grade = _llm_json(prompt, temperature=0)
-            except Exception:
-                grade = {}
-            awarded = max(0.0, min(max_m, float(grade.get("awarded_marks", 0))))
-            total_awarded += awarded
-            evals.append({
-                "question_id": qid, "type": "subjective", "student_answer": student,
-                "valid_answers": q.get("valid_answers", []),
-                "answer_key_points": q.get("answer_key_points", []),
-                "awarded_marks": awarded, "max_marks": max_m,
-                "feedback": grade.get("feedback", ""),
-                "missing_points": grade.get("missing_points", []),
-                "strengths": grade.get("strengths", []),
-                "confidence": grade.get("confidence", None),
-            })
+            continue
+
+        prompt = SUBJECTIVE_GRADING_PROMPT.format(
+            question=q.get("question", ""),
+            max_marks=max_m,
+            valid_answers=json.dumps(_question_valid_answers(q)),
+            key_points=json.dumps(q.get("answer_key_points", [])),
+            rubric=q.get("evaluation_rubric", q.get("evaluation_criteria", "")),
+            student_answer=student,
+        )
+        try:
+            grade = _llm_json(prompt, temperature=0)
+        except Exception:
+            grade = {}
+        awarded = max(0.0, min(max_m, float(grade.get("awarded_marks", 0))))
+        total_awarded += awarded
+        evals.append({
+            "question_id": qid,
+            "question": q.get("question", ""),
+            "type": "subjective",
+            "student_answer": student,
+            "valid_answers": _question_valid_answers(q),
+            "answer_key_points": q.get("answer_key_points", []),
+            "awarded_marks": awarded,
+            "max_marks": max_m,
+            "feedback": grade.get("feedback", ""),
+            "missing_points": grade.get("missing_points", []),
+            "strengths": grade.get("strengths", []),
+            "confidence": grade.get("confidence", None),
+        })
 
     pct = round((total_awarded / total_possible) * 100, 2) if total_possible else 0.0
     improvement = ""
@@ -586,7 +675,7 @@ def _evaluate_answers(exam: dict, submitted: Dict[int, str], roll_no: str = "") 
             fb = " | ".join(e.get("feedback", "") for e in evals if e.get("type") == "subjective")
             improvement = _llm_text(
                 f"Based on this feedback: '{fb}', give one short encouraging sentence about what the student needs to improve.",
-                mini=True
+                mini=True,
             ).strip()
         except Exception:
             improvement = "Keep practising subjective responses."
@@ -594,149 +683,178 @@ def _evaluate_answers(exam: dict, submitted: Dict[int, str], roll_no: str = "") 
         improvement = "Excellent work! Maintain this standard."
 
     return {
-        "roll_no": roll_no, "total_possible": total_possible, "total_awarded": total_awarded,
-        "percentage": pct, "grade": _grade(pct), "is_pass": pct >= 40.0,
-        "improvement_prediction": improvement, "question_wise": evals
+        "roll_no": roll_no,
+        "total_possible": total_possible,
+        "total_awarded": total_awarded,
+        "percentage": pct,
+        "grade": _grade(pct),
+        "is_pass": pct >= 40.0,
+        "improvement_prediction": improvement,
+        "question_wise": evals,
     }
 
-def _extract_answers(path: str):
-    """
-    Extract student answers from an answer sheet file.
+def _build_extraction_debug(exam: dict, submitted: Dict[int, str], result: dict = None, extraction_mode: str = "") -> dict:
+    result_map = {}
+    if result:
+        for item in result.get("question_wise", []):
+            try:
+                result_map[int(item.get("question_id"))] = item
+            except Exception:
+                continue
 
-    Strategy:
-      1. TXT / MD  → regex parse directly
-      2. PDF       → try text extraction first (fast, free)
-                   → if text layer is empty or no answers found,
-                     automatically fall back to Vision OCR
-                     (handles scanned / handwritten PDFs)
-      3. Image     → Vision OCR directly
-    """
+    rows = []
+    for q in exam.get("questions", []):
+        try:
+            qid = int(q.get("id"))
+        except Exception:
+            continue
+        qtype = str(q.get("type", "objective"))
+        student_raw = str(submitted.get(qid, "")).strip()
+        student_norm = _normalize(_coerce_mcq_answer(student_raw, q.get("options") or {})) if qtype == "objective" else _normalize(student_raw)
+        expected = _question_valid_answers(q)
+        row = {
+            "question_id": qid,
+            "type": qtype,
+            "question": q.get("question", ""),
+            "submitted_answer": student_raw,
+            "submitted_answer_normalized": student_norm,
+            "expected_answers": expected,
+            "max_marks": _question_marks(q),
+        }
+        if qtype == "objective":
+            row["objective_match"] = _objective_is_correct(q, student_raw)
+        if qid in result_map:
+            row["awarded_marks"] = float(result_map[qid].get("awarded_marks", 0))
+            row["feedback"] = result_map[qid].get("feedback", "")
+        rows.append(row)
+
+    return {
+        "mode": extraction_mode,
+        "parsed_answers_count": len([v for v in submitted.values() if str(v).strip()]),
+        "expected_questions_count": len(exam.get("questions", [])),
+        "questions": rows,
+    }
+
+def _extract_answers(path: str, exam: dict = None):
+    """Extract student answers from text/PDF/image sheets."""
     ext = Path(path).suffix.lower()
 
     if ext in {".txt", ".md"}:
-        return _parse_answer_text(Path(path).read_text(encoding="utf-8", errors="ignore")), "parsed_text"
+        text = Path(path).read_text(encoding="utf-8", errors="ignore")
+        return _parse_answer_text(text, exam=exam), "parsed_text"
 
     if ext == ".pdf":
-        # ── Step 1: try text-layer extraction ─────────────────────────────
         text = ""
         try:
             from langchain_community.document_loaders import PyPDFLoader
             pages = PyPDFLoader(path).load()
-            text  = "\n".join(p.page_content for p in pages)
+            text = "\n".join(p.page_content for p in pages)
         except ImportError:
             import pypdf
             reader = pypdf.PdfReader(path)
-            text   = "\n".join((p.extract_text() or "") for p in reader.pages)
+            text = "\n".join((p.extract_text() or "") for p in reader.pages)
         except Exception as _te:
             print(f"[EVAL] PDF text extraction error: {_te}")
 
-        ans = _parse_answer_text(text)
+        ans = _parse_answer_text(text, exam=exam)
         if ans:
             return ans, "parsed_pdf"
 
-        # ── Step 2: text layer empty / no answers found ─────────────────
-        # This is a scanned or handwritten PDF.  Convert to images and run
-        # Vision OCR on each page, then merge all extracted answers.
         print(f"[EVAL] PDF text extraction yielded no answers — falling back to Vision OCR: {path}")
-        return _vision_extract_pdf(path), "vision_ocr_pdf"
+        ocr = _vision_extract_pdf(path, exam=exam)
+        return (ocr, "vision_ocr_pdf") if ocr else ({}, "pdf_unreadable")
 
     if ext in {".png", ".jpg", ".jpeg", ".webp"}:
-        return _vision_extract(path), "vision_ocr"
+        return _vision_extract(path, exam=exam), "vision_ocr"
 
     return {}, "unsupported_type"
 
-
-def _vision_extract_pdf(pdf_path: str) -> Dict[int, str]:
-    """
-    Convert each page of a PDF to an image and run GPT-4o Vision OCR.
-    Merges answers from all pages (later pages override earlier on same Q#).
-    Uses pdf2image with poppler — note: poppler is often missing on Vercel.
-    """
+def _vision_extract_pdf(pdf_path: str, exam: dict = None) -> Dict[int, str]:
+    """Read embedded images from scanned PDFs and OCR them via vision model."""
     all_answers: Dict[int, str] = {}
     try:
-        from pdf2image import convert_from_path
-        # Render at 200 DPI — good quality without huge file sizes
-        images = convert_from_path(pdf_path, dpi=200, fmt="jpeg")
+        import pypdf
+        reader = pypdf.PdfReader(pdf_path)
     except Exception as e:
-        print(f"[EVAL] pdf2image/poppler failure: {e}")
-        # If we are on Vercel or missing poppler, we can't process scanned PDFs.
-        # We return an empty dict which triggers the helpful error message in the calling function.
+        print(f"[EVAL] pypdf image read failure: {e}")
         return {}
 
-    for page_idx, img in enumerate(images):
-        try:
-            import io
-            buf = io.BytesIO()
-            img.save(buf, format="JPEG", quality=85)
-            b64 = base64.b64encode(buf.getvalue()).decode()
-            page_answers = _vision_extract_base64(b64, "jpeg")
-            if isinstance(page_answers, dict):
-                all_answers.update(page_answers)
-        except Exception as e:
-            print(f"[EVAL] Vision OCR failed on page {page_idx+1}: {e}")
+    for page_idx, page in enumerate(reader.pages):
+        for img in getattr(page, "images", []):
+            try:
+                b64 = base64.b64encode(img.data).decode()
+                ext = Path(getattr(img, "name", "")).suffix.lower().replace(".", "") or "jpeg"
+                page_answers = _vision_extract_base64(b64, ext=ext, exam=exam)
+                if isinstance(page_answers, dict):
+                    all_answers.update(page_answers)
+            except Exception as e:
+                print(f"[EVAL] Vision OCR failed on page {page_idx+1}: {e}")
 
     return all_answers
 
-def _parse_answer_text(text: str) -> Dict[int, str]:
-    """
-    Extract answers from text using stateful parsing.
-    Handles 'Answer: 12' or choice text after multi-line options.
-    """
+def _parse_answer_text(text: str, exam: dict = None) -> Dict[int, str]:
+    """Exam-aware parser that avoids treating question text/options as student answers."""
     answers: Dict[int, str] = {}
+    q_hints: Dict[int, str] = {}
+    if exam:
+        for q in exam.get("questions", []):
+            try:
+                q_hints[int(q.get("id"))] = str(q.get("question", ""))
+            except Exception:
+                pass
+
     current_qid = None
-    
-    lines = text.splitlines()
-    for i, line in enumerate(lines):
-        ln = line.strip()
-        if not ln: continue
+    q_line_pat = re.compile(r"^(?:q(?:uestion)?\s*)?(\d{1,3})\s*[\)\].:\-]\s*(.*)$", flags=re.IGNORECASE)
+    ans_with_q_pat = re.compile(r"^(?:ans(?:wer)?|response)\s*(?:for\s*)?(?:q(?:uestion)?\s*)?(\d{1,3})\s*[:\-]\s*(.*)$", flags=re.IGNORECASE)
+    ans_line_pat = re.compile(r"^(?:ans(?:wer)?|response|student\s*ans(?:wer)?)\s*[:\-]\s*(.*)$", flags=re.IGNORECASE)
+    option_line_pat = re.compile(r"^[A-D][\)\.\:\-]\s+\S+", flags=re.IGNORECASE)
 
-        # 1. Check for Question headers: "Q1:", "1.", "Question 2 -"
-        q_header_pat = [r"^Q(?:uestion)?\s*(\d+)\s*[:\-.]?\s*(.*)", r"^(\d+)\s*[\)\.\-:]\s*(.*)"]
-        matched_q = False
-        for pat in q_header_pat:
-            m = re.match(pat, ln, flags=re.IGNORECASE)
-            if m:
-                current_qid = int(m.group(1))
-                content = m.group(2).strip()
-                # If there's content, check if it's a short answer or just the question text
-                if content:
-                    # If it contains "Answer:" or is very short (like "A" or "12"), keep it
-                    ans_match = re.search(r"(?:Ans(?:wer)?\s*[:\-]\s*)(.*)", content, flags=re.IGNORECASE)
-                    if ans_match:
-                        answers[current_qid] = ans_match.group(1).strip()
-                    elif len(content) < 20 and not content.endswith('?'):
-                        # Likely a short answer on the same line
-                        answers[current_qid] = content
-                matched_q = True
-                break
-        
-        if matched_q: continue
+    for raw in text.splitlines():
+        ln = re.sub(r"\s+", " ", str(raw or "")).strip()
+        if not ln:
+            continue
+        if option_line_pat.match(ln):
+            continue
 
-        # 2. If we have a current_qid, look for "Answer:" or specific choice text
+        m_explicit = ans_with_q_pat.match(ln)
+        if m_explicit:
+            qid = int(m_explicit.group(1))
+            cand = _strip_answer_prefix(m_explicit.group(2))
+            hint = q_hints.get(qid, "")
+            if _is_candidate_answer(cand, hint):
+                answers[qid] = cand
+            current_qid = qid
+            continue
+
+        m_q = q_line_pat.match(ln)
+        if m_q:
+            qid = int(m_q.group(1))
+            tail = _strip_answer_prefix(m_q.group(2))
+            hint = q_hints.get(qid, "")
+            current_qid = qid
+            if _is_candidate_answer(tail, hint):
+                answers[qid] = tail
+            continue
+
         if current_qid is not None:
-            ans_pat = r"^(?:Ans(?:wer)?\s*[:\-]?\s*)(.*)"
-            m_ans = re.match(ans_pat, ln, flags=re.IGNORECASE)
+            m_ans = ans_line_pat.match(ln)
             if m_ans:
-                ans_text = m_ans.group(1).strip()
-                if ans_text:
-                    answers[current_qid] = ans_text
-                elif i + 1 < len(lines):
-                    # Answer is on the next line
-                    answers[current_qid] = lines[i+1].strip()
+                cand = _strip_answer_prefix(m_ans.group(1))
+                hint = q_hints.get(current_qid, "")
+                if _is_candidate_answer(cand, hint):
+                    answers[current_qid] = cand
                 continue
-            
-            # 3. Handle cases where student just writes the choice text after options
-            # If the current line is short and doesn't look like a new question
-            if not re.match(r"^(?:Q\d+|\d+[\)\.:])", ln, flags=re.IGNORECASE) and len(ln) < 15:
-                # If we don't have an answer yet, this might be it
-                if current_qid not in answers:
-                    # But only if it's not a list of options (A) B) C) D))
-                    if not re.search(r"[a-d]\s*[)\.]", ln, flags=re.IGNORECASE):
-                        answers[current_qid] = ln
 
-    return answers
+            if current_qid in answers:
+                if not _looks_like_question_text(ln, q_hints.get(current_qid, "")):
+                    answers[current_qid] = f"{answers[current_qid]} {ln}".strip()
+            else:
+                if re.match(r"^(?:option\s*)?[A-D]$", ln, flags=re.IGNORECASE):
+                    answers[current_qid] = ln.strip().upper().replace("OPTION ", "")
 
-def _vision_extract_base64(b64: str, ext: str = "jpeg") -> Dict[int, str]:
+    return {int(k): str(v).strip() for k, v in answers.items() if str(v).strip()}
+
+def _vision_extract_base64(b64: str, ext: str = "jpeg", exam: dict = None) -> Dict[int, str]:
     """Call GPT-4o Vision to extract Q→answer pairs from a base64-encoded image."""
     client = _oai.OpenAI(api_key=OPENAI_API_KEY)
     prompt = (
@@ -777,206 +895,65 @@ def _vision_extract_base64(b64: str, ext: str = "jpeg") -> Dict[int, str]:
         return {}
 
 
-def _vision_extract(image_path: str) -> Dict[int, str]:
+def _vision_extract(image_path: str, exam: dict = None) -> Dict[int, str]:
     """Extract answers from an image file using GPT-4o Vision."""
     ext = Path(image_path).suffix.lower().replace(".", "") or "jpeg"
     with open(image_path, "rb") as f:
         b64 = base64.b64encode(f.read()).decode()
-    return _vision_extract_base64(b64, ext)
+    return _vision_extract_base64(b64, ext, exam=exam)
 
 def _run_audit(exam: dict, evaluation: dict) -> dict:
     diffs, obj_ok, subj_ok = [], 0, 0
     for item in evaluation.get("question_wise", []):
         qid = item.get("question_id")
-        q   = next((x for x in exam.get("questions", []) if int(x.get("id", -1)) == int(qid)), None)
+        q = next((x for x in exam.get("questions", []) if int(x.get("id", -1)) == int(qid)), None)
         if not q:
             continue
         if item.get("type") == "objective":
             obj_ok += 1
-            valid  = [_normalize(a) for a in q.get("valid_answers", [])]
-            exp    = float(q.get("weightage", 1)) if _normalize(item.get("student_answer", "")) in valid else 0.0
+            exp = _question_marks(q) if _objective_is_correct(q, item.get("student_answer", "")) else 0.0
             if abs(float(item.get("awarded_marks", 0)) - exp) > 1e-6:
-                diffs.append({"question_id": qid, "kind": "objective_mismatch",
-                               "existing": item.get("awarded_marks", 0), "expected": exp})
+                diffs.append({
+                    "question_id": qid,
+                    "kind": "objective_mismatch",
+                    "existing": item.get("awarded_marks", 0),
+                    "expected": exp,
+                })
         else:
             subj_ok += 1
-            max_m = float(q.get("weightage", 1))
+            max_m = _question_marks(q)
             prompt = SUBJECTIVE_GRADING_PROMPT.format(
-                question=q.get("question", ""), max_marks=max_m,
-                valid_answers=json.dumps(q.get("valid_answers", [])),
+                question=q.get("question", ""),
+                max_marks=max_m,
+                valid_answers=json.dumps(_question_valid_answers(q)),
                 key_points=json.dumps(q.get("answer_key_points", [])),
-                rubric=q.get("evaluation_rubric", ""),
-                student_answer=item.get("student_answer", "")
+                rubric=q.get("evaluation_rubric", q.get("evaluation_criteria", "")),
+                student_answer=item.get("student_answer", ""),
             )
             try:
                 regrade = _llm_json(prompt, temperature=0)
             except Exception:
                 regrade = {}
-            exp   = max(0.0, min(max_m, float(regrade.get("awarded_marks", 0))))
+            exp = max(0.0, min(max_m, float(regrade.get("awarded_marks", 0))))
             delta = abs(exp - float(item.get("awarded_marks", 0)))
             if delta > 0.5:
-                diffs.append({"question_id": qid, "kind": "subjective_variance",
-                               "existing": item.get("awarded_marks", 0),
-                               "regraded": exp, "delta": round(delta, 2)})
+                diffs.append({
+                    "question_id": qid,
+                    "kind": "subjective_variance",
+                    "existing": item.get("awarded_marks", 0),
+                    "regraded": exp,
+                    "delta": round(delta, 2),
+                })
+
     total = obj_ok + subj_ok
     return {
-        "objective_checked": obj_ok, "subjective_checked": subj_ok, "total_checked": total,
+        "objective_checked": obj_ok,
+        "subjective_checked": subj_ok,
+        "total_checked": total,
         "inconsistencies": diffs,
-        "consistency_score": 100.0 if total == 0 else round(((total - len(diffs)) / total) * 100, 2)
+        "consistency_score": 100.0 if total == 0 else round(((total - len(diffs)) / total) * 100, 2),
     }
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  PROMPTS
-# ══════════════════════════════════════════════════════════════════════════════
-STUDY_PROMPT = None
-if LANGCHAIN_OK:
-    STUDY_PROMPT = PromptTemplate(
-        input_variables=["context", "chat_history", "question"],
-        template="""You are a patient tutor helping a student understand complex concepts.
-Style: ELI5 explanations • 1–2 real-world examples • analogies where possible • end with a 1-sentence summary.
-Use ONLY information from the uploaded materials. If the answer isn't there, say so honestly.
-
---- Materials ---
-{context}
-
---- Chat History ---
-{chat_history}
-
-Student Question: {question}
-
-Tutor Answer:"""
-    )
-
-CHAPTER_EXTRACT_PROMPT = """You are analysing a study document.
-Extract all chapter titles, unit names, or major topic headings from the content below.
-Return ONLY a valid JSON array of strings — no markdown, no explanation.
-Keep each item 2–6 words. Return 3–12 items.
-
-Content:
-{context}
-
-JSON array only:"""
-
-MIXED_QUESTION_GEN_PROMPT = """You are an expert exam paper setter.
-Generate exactly {total_count} exam questions from the context only.
-Output EXACTLY valid JSON — no markdown.
-objective_count={objective_count}, subjective_count={subjective_count}
-Difficulty: easy={easy_count}, medium={medium_count}, hard={hard_count}
-
-Each question object must have:
-  id (1-based int), type ("objective"|"subjective"), difficulty ("easy"|"medium"|"hard"),
-  weightage (number), question (string)
-Objective extras: options ({{A,B,C,D}}), valid_answers ([letters]), explanation (string)
-Subjective extras: options=null, valid_answers ([2-5 paraphrases]), answer_key_points ([strings]), evaluation_rubric (string)
-
-Topic: {topic}
-Context:
-{context}
-JSON only:"""
-
-REGIONAL_MIXED_QUESTION_GEN_PROMPT = """You are an expert exam paper setter.
-Generate exactly {total_count} exam questions. Write EVERYTHING in '{language}'.
-Output EXACTLY valid JSON — no markdown.
-objective_count={objective_count}, subjective_count={subjective_count}
-Difficulty: easy={easy_count}, medium={medium_count}, hard={hard_count}
-Same structure as standard question prompt but all text in {language}.
-Topic: {topic}
-Context: {context}
-JSON only:"""
-
-SUBJECTIVE_GRADING_PROMPT = """You are a strict but fair examiner.
-Grade the student's answer. Return JSON only with keys:
-awarded_marks (0 to {max_marks}), feedback (string), missing_points ([strings]), strengths ([strings]), confidence (0-1)
-
-Question: {question}
-Max marks: {max_marks}
-Valid answers: {valid_answers}
-Key points: {key_points}
-Rubric: {rubric}
-Student answer: {student_answer}"""
-
-SUMMARISE_PROMPT = """You are an expert Indian school educator. Summarise the provided context in EXACTLY 10 clear, numbered lines.
-Each line should be one complete educational point. Include a brief real-world or relatable example after each point where useful.
-Do NOT use bullet symbols — only numbered lines.
-Do NOT include any preamble or heading — output ONLY the 10 numbered lines.
-
-Context: {context}
-
-Output format (strictly):
-1. [Complete educational point with example if helpful]
-2. [Complete educational point with example if helpful]
-3. [Complete educational point with example if helpful]
-4. [Complete educational point with example if helpful]
-5. [Complete educational point with example if helpful]
-6. [Complete educational point with example if helpful]
-7. [Complete educational point with example if helpful]
-8. [Complete educational point with example if helpful]
-9. [Complete educational point with example if helpful]
-10. [Complete educational point with example if helpful]"""
-
-REGIONAL_SUMMARISE_PROMPT = """You are an expert educator. Summarise the provided context in EXACTLY 10 clear numbered lines in {language}.
-Do NOT include any preamble — output ONLY 10 numbered lines in {language}.
-
-Context: {context}
-
-10 numbered lines in {language}:"""
-
-FLASHCARDS_PROMPT = """Generate exactly {count} high-quality flashcards from the context below.
-Each flashcard must cover a key concept, definition, formula, or fact from the content.
-Vary the question style: some definitions, some "explain why", some examples.
-
-Context:
-{context}
-
-Return EXACTLY a valid JSON array — no markdown, no preamble:
-[{{"question": "...", "answer": "..."}}, ...]"""
-
-REGIONAL_FLASHCARDS_PROMPT = """Generate exactly {count} high-quality flashcards in {language} from the context below.
-Return EXACTLY a valid JSON array — no markdown:
-[{{"question": "...", "answer": "..."}}]
-
-Context:
-{context}"""
-
-MIXED_PRACTICE_GEN_PROMPT = """You are a high-quality academic practice generator.
-Generate exactly {total_count} distinct practice questions from the context.
-objective_count: {objective_count}, subjective_count: {subjective_count}, difficulty: {difficulty}
-
-Return EXACTLY a valid JSON array. Do NOT generate blank questions.
-Structure:
-[
-  {{"question":"...", "answer":"...", "type":"objective", "options":{{"A":"...","B":"...","C":"...","D":"..."}}}},
-  {{"question":"...", "answer":"...", "type":"subjective", "options":null}}
-]
-
-Context: {context}
-Topic: {topic}
-JSON array only:"""
-
-PRACTICE_EVALUATION_PROMPT = """You are an expert academic tutor.
-Evaluate the student answer. For objective questions, a matching answer (case-insensitive) scores 10.
-Return EXACTLY valid JSON: {{"score":0-10, "feedback":"...", "improvements":"...", "is_correct":true/false}}
-
-Question: {question}
-Model Answer: {model_answer}
-Student Answer: {student_answer}"""
-
-PRACTICE_REPORT_PROMPT = """You are an expert academic counsellor.
-Analyse this practice session and return EXACTLY valid JSON:
-{{"total_marks":n, "obtained_marks":n, "percentage":n, "overall_feedback":"...",
-  "learning_gaps":[{{"topic":"...","gap":"...","recommendation":"..."}}],
-  "predicted_grade":"A/B/C/D/F", "strengths":["..."]}}
-
-Session data: {session_data}"""
-
-VIDEO_EXPLAINER_PROMPT = """You are a warm British primary school teacher explaining: {topic}.
-Return a JSON ARRAY of scene objects (7 scenes: INTRO, CONCEPT, EXAMPLE_1, EXAMPLE_2, TRY_IT, KEY_TAKEAWAYS, SUMMARY).
-Each object: {{"segment":"...","text":"2-4 spoken sentences","visual":"actual content not a description","visual_type":"title|worked_example|bullet_list|fact_box|summary_box"}}
-British English only. Return ONLY valid JSON array. Context: {context}"""
-
-# ══════════════════════════════════════════════════════════════════════════════
-#  CURRICULUM METADATA
-# ══════════════════════════════════════════════════════════════════════════════
 def _build_curriculum() -> dict:
     boards = {
         "National (NCERT)": ["CBSE"],
@@ -2290,6 +2267,11 @@ For each student you can identify, extract:
 2. Their roll number (if present)
 3. Their answers in format Q<number>: <answer>
 
+CRITICAL RULES FOR EXTRACTION:
+- DO NOT include question text or multiple choice options.
+- Extract ONLY the student's response.
+- Format each answer as "Q1: [Student Answer]".
+
 Return ONLY a valid JSON array like:
 [
   {
@@ -2298,9 +2280,7 @@ Return ONLY a valid JSON array like:
     "raw_text": "Q1: B  Q2: photosynthesis  Q3: Newton's first law..."
   }
 ]
-
-If you cannot identify separate students, return a single entry with student_name "Student 1".
-Return ONLY the JSON array, nothing else."""
+"""
 
     try:
         # Convert PDF pages to images for vision API
@@ -2351,18 +2331,8 @@ Text content:
         return [{"student_name": "Student 1", "roll_no": "1", "raw_text": ""}]
 
 def _parse_raw_answers(raw_text: str) -> Dict[int, str]:
-    """Parse Q1: answer  Q2: answer ... from raw text."""
-    answers: Dict[int, str] = {}
-    for line in raw_text.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        for pat in [r"Q(?:uestion)?\s*(\d+)\s*[:\-]\s*(.+)", r"(\d+)\s*[\)\.\-:]\s*(.+)"]:
-            m = re.match(pat, line, flags=re.IGNORECASE)
-            if m:
-                answers[int(m.group(1))] = m.group(2).strip()
-                break
-    return answers
+    """Parse Q1: answer Q2: answer ... using unified extraction logic."""
+    return _parse_answer_text(raw_text)
 
 @app.post("/api/evaluate")
 @auth()
@@ -2390,7 +2360,7 @@ def evaluate_sheet():
     path = UPL_DIR / f"{datetime.utcnow().strftime('%Y%m%dT%H%M%S')}_{fn}"
     f.save(str(path))
 
-    answers, mode = _extract_answers(str(path))
+    answers, mode = _extract_answers(str(path), exam=e)
     if not answers:
         # Provide a clear, actionable error message rather than a generic one
         msg = (
@@ -2401,12 +2371,13 @@ def evaluate_sheet():
         return jsonify({"error": msg, "extraction_mode": mode}), 400
 
     result  = _evaluate_answers(e, answers, roll_no)
+    extraction_debug = _build_extraction_debug(e, answers, result=result, extraction_mode=mode)
     eval_id = uuid.uuid4().hex[:10]
     payload = {
         "evaluation_id": eval_id, "exam_id": exam_id, "created_at": _now(),
         "student_name": student_name, "roll_no": roll_no,
         "parent_email": parent_email, "file_name": fn,
-        "extraction_mode": mode, "submitted_answers": answers, "result": result
+        "extraction_mode": mode, "submitted_answers": answers, "result": result, "extraction_debug": extraction_debug
     }
     evaluations_registry[eval_id] = payload
     if not IS_VERCEL:
@@ -2458,7 +2429,7 @@ def evaluate_multi_student():
             # Fallback: try vision on a temp text file
             tmp = UPL_DIR / f"student_{idx}_{uuid.uuid4().hex[:6]}.txt"
             tmp.write_text(raw_text, encoding="utf-8")
-            answers, _ = _extract_answers(str(tmp))
+            answers, _ = _extract_answers(str(tmp), exam=e)
             try:
                 tmp.unlink()
             except Exception:
@@ -2470,6 +2441,7 @@ def evaluate_multi_student():
 
         # Step 3: Evaluate
         result  = _evaluate_answers(e, answers, roll)
+        extraction_debug = _build_extraction_debug(e, answers, result=result, extraction_mode="multi_student_gpt4o")
         eval_id = uuid.uuid4().hex[:10]
         payload = {
             "evaluation_id":   eval_id,
@@ -2482,6 +2454,7 @@ def evaluate_multi_student():
             "extraction_mode": "multi_student_gpt4o",
             "submitted_answers": answers,
             "result":          result,
+            "extraction_debug": extraction_debug,
         }
         evaluations_registry[eval_id] = payload
         if not IS_VERCEL:
@@ -2528,18 +2501,19 @@ def bulk_evaluate():
         fn   = secure_filename(f.filename)
         path = UPL_DIR / f"{datetime.utcnow().strftime('%Y%m%dT%H%M%S')}_{fn}"
         f.save(str(path))
-        answers, mode = _extract_answers(str(path))
+        answers, mode = _extract_answers(str(path), exam=e)
         if not answers:
             failures.append({"file": fn, "error": f"extract_failed ({mode})"}); continue
         m    = re.search(r"(\d+)", fn)
         roll = request.form.get(f"roll_no_{fn}", "") or (m.group(1) if m else fn)
         res  = _evaluate_answers(e, answers, roll)
+        extraction_debug = _build_extraction_debug(e, answers, result=res, extraction_mode=mode)
         eid  = uuid.uuid4().hex[:10]
         p    = {
             "evaluation_id": eid, "exam_id": exam_id, "created_at": _now(),
             "student_name": request.form.get(f"name_{fn}", ""),
             "roll_no": roll, "file_name": fn,
-            "extraction_mode": mode, "submitted_answers": answers, "result": res
+            "extraction_mode": mode, "submitted_answers": answers, "result": res, "extraction_debug": extraction_debug
         }
         evaluations_registry[eid] = p
         if not IS_VERCEL:
