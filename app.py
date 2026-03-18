@@ -282,6 +282,24 @@ def _grade(p: float)-> str:
     return "A+" if p>=90 else "A" if p>=80 else "B" if p>=70 else "C" if p>=60 else "D" if p>=50 else "F"
 def _normalize(t)   -> str: return re.sub(r"\s+", " ", str(t or "").strip().lower())
 
+def _to_float(v, default: float = 0.0) -> float:
+    """Parse numbers robustly from values like '3', '3.5', '3/5', '3 marks'."""
+    try:
+        if isinstance(v, (int, float)):
+            return float(v)
+        s = str(v or "").strip()
+        if not s:
+            return float(default)
+        # Ratio style: use numerator for awarded marks.
+        if "/" in s:
+            num = s.split("/", 1)[0].strip()
+            if re.match(r"^-?\d+(?:\.\d+)?$", num):
+                return float(num)
+        m = re.search(r"-?\d+(?:\.\d+)?", s)
+        return float(m.group(0)) if m else float(default)
+    except Exception:
+        return float(default)
+
 def _normalize_mcq(t) -> str:
     """Normalize only true MCQ-style answers; avoid random letter picks from question text."""
     raw = _normalize(t)
@@ -295,7 +313,7 @@ def _normalize_mcq(t) -> str:
     return raw.upper()
 
 def _question_marks(q: dict) -> float:
-    return float(q.get("weightage", q.get("marks", 1)))
+    return _to_float(q.get("weightage", q.get("marks", 1)), 1.0)
 
 
 def _question_valid_answers(q: dict) -> List[str]:
@@ -670,7 +688,7 @@ def _evaluate_answers(exam: dict, submitted: Dict[int, str], roll_no: str = "") 
             grade = _llm_json(prompt, temperature=0)
         except Exception:
             grade = {}
-        awarded = max(0.0, min(max_m, float(grade.get("awarded_marks", 0))))
+        awarded = max(0.0, min(max_m, _to_float(grade.get("awarded_marks", 0), 0.0)))
         total_awarded += awarded
         evals.append({
             "question_id": qid,
@@ -742,7 +760,7 @@ def _build_extraction_debug(exam: dict, submitted: Dict[int, str], result: dict 
         if qtype == "objective":
             row["objective_match"] = _objective_is_correct(q, student_raw)
         if qid in result_map:
-            row["awarded_marks"] = float(result_map[qid].get("awarded_marks", 0))
+            row["awarded_marks"] = _to_float(result_map[qid].get("awarded_marks", 0), 0.0)
             row["feedback"] = result_map[qid].get("feedback", "")
         rows.append(row)
 
@@ -940,7 +958,7 @@ def _run_audit(exam: dict, evaluation: dict) -> dict:
         if item.get("type") == "objective":
             obj_ok += 1
             exp = _question_marks(q) if _objective_is_correct(q, item.get("student_answer", "")) else 0.0
-            if abs(float(item.get("awarded_marks", 0)) - exp) > 1e-6:
+            if abs(_to_float(item.get("awarded_marks", 0), 0.0) - exp) > 1e-6:
                 diffs.append({
                     "question_id": qid,
                     "kind": "objective_mismatch",
@@ -962,8 +980,8 @@ def _run_audit(exam: dict, evaluation: dict) -> dict:
                 regrade = _llm_json(prompt, temperature=0)
             except Exception:
                 regrade = {}
-            exp = max(0.0, min(max_m, float(regrade.get("awarded_marks", 0))))
-            delta = abs(exp - float(item.get("awarded_marks", 0)))
+            exp = max(0.0, min(max_m, _to_float(regrade.get("awarded_marks", 0), 0.0)))
+            delta = abs(exp - _to_float(item.get("awarded_marks", 0), 0.0))
             if delta > 0.5:
                 diffs.append({
                     "question_id": qid,
