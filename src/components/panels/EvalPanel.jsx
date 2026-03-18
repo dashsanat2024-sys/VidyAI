@@ -586,7 +586,10 @@ export default function EvalPanel({ showToast }) {
     try {
       const res  = await apiPostForm('/evaluate', fd, token)
       const data = await res.json()
-      if (!res.ok) throw new Error(data.error || 'Evaluation failed')
+      if (!res.ok) {
+        const stage = data?.stage ? ` (stage: ${data.stage})` : ''
+        throw new Error(`${data.error || 'Evaluation failed'}${stage} [HTTP ${res.status}]`)
+      }
       setEvaluations(prev => [data, ...prev])
       setActiveReport(data)
       showToast('Evaluation complete!', 'success')
