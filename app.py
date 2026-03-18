@@ -650,9 +650,12 @@ def _evaluate_answers(exam: dict, submitted: Dict[int, str], roll_no: str = "") 
     """Grade submitted answers against an exam's answer key."""
     evals, total_awarded, total_possible = [], 0.0, 0.0
     for q in exam.get("questions", []):
+        if not isinstance(q, dict):
+            print(f"[EVAL] Skipping malformed question entry: {type(q).__name__}", flush=True)
+            continue
         qid = _coerce_qid(q.get("id"))
         if qid is None:
-            print(f"[EVAL] Skipping question with invalid id: {q.get('id')}")
+            print(f"[EVAL] Skipping question with invalid id: {q.get('id')}", flush=True)
             continue
         qtype = q.get("type", "objective")
         max_m = _question_marks(q)
@@ -741,6 +744,8 @@ def _build_extraction_debug(exam: dict, submitted: Dict[int, str], result: dict 
 
     rows = []
     for q in exam.get("questions", []):
+        if not isinstance(q, dict):
+            continue
         qid = _coerce_qid(q.get("id"))
         if qid is None:
             continue
@@ -844,6 +849,8 @@ def _parse_answer_text(text: str, exam: dict = None) -> Dict[int, str]:
     q_hints: Dict[int, str] = {}
     if exam:
         for q in exam.get("questions", []):
+            if not isinstance(q, dict):
+                continue
             try:
                 q_hints[int(q.get("id"))] = str(q.get("question", ""))
             except Exception:
@@ -2406,7 +2413,9 @@ def evaluate_sheet():
     path = UPL_DIR / f"{datetime.utcnow().strftime('%Y%m%dT%H%M%S')}_{fn}"
     f.save(str(path))
 
+    stage = "start"
     try:
+        stage = "extract_answers"
         answers, mode = _extract_answers(str(path), exam=e)
         if not answers:
             # Provide a clear, actionable error message rather than a generic one
@@ -2417,8 +2426,11 @@ def evaluate_sheet():
             )
             return jsonify({"error": msg, "extraction_mode": mode}), 400
 
+        stage = "evaluate_answers"
         result  = _evaluate_answers(e, answers, roll_no)
+        stage = "build_debug"
         extraction_debug = _build_extraction_debug(e, answers, result=result, extraction_mode=mode)
+        stage = "build_payload"
         eval_id = uuid.uuid4().hex[:10]
         payload = {
             "evaluation_id": eval_id, "exam_id": exam_id, "created_at": _now(),
@@ -2426,15 +2438,20 @@ def evaluate_sheet():
             "parent_email": parent_email, "file_name": fn,
             "extraction_mode": mode, "submitted_answers": answers, "result": result, "extraction_debug": extraction_debug
         }
+        stage = "persist"
         evaluations_registry[eval_id] = payload
         if not IS_VERCEL:
             _save_json(EVAL_DIR / f"{eval_id}.json", payload)
         _save_evals()
+        stage = "done"
         return jsonify(payload)
     except Exception as ex:
-        print(f"[EVAL] /api/evaluate fatal error: {ex}")
-        traceback.print_exc()
-        return jsonify({"error": "Evaluation failed due to server processing error. Please retry with a clearer scan or image."}), 500
+        tb = traceback.format_exc()
+        print(f"[EVAL] /api/evaluate fatal error at stage={stage}: {ex}\n{tb}", flush=True)
+        return jsonify({
+            "error": "Evaluation failed due to server processing error. Please retry with a clearer scan or image.",
+            "stage": stage
+        }), 500
 
 
 @app.post("/api/evaluate/multi-student")
