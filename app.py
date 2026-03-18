@@ -809,7 +809,9 @@ Topic: {topic}
 JSON array only:"""
 
 PRACTICE_EVALUATION_PROMPT = """You are an expert academic tutor.
-Evaluate the student answer. For objective questions, a matching answer (case-insensitive) scores 10.
+Evaluate the student answer against the model answer for the given question.
+For objective questions, a matching answer (case-insensitive) scores 10.
+For subjective questions, evaluate based on accuracy, completeness, and clarity.
 Return EXACTLY valid JSON: {{"score":0-10, "feedback":"...", "improvements":"...", "is_correct":true/false}}
 
 Question: {question}
@@ -2618,8 +2620,28 @@ def evaluate_practice():
     question  = data.get("question","")
     model_ans = data.get("model_answer","")
     stud_ans  = data.get("student_answer","")
-    if not question or not stud_ans:
-        return jsonify({"error": "question and student_answer required"}), 400
+    q_type    = data.get("type", "subjective")
+    options   = data.get("options", {})
+
+    # Deterministic check for objective questions
+    if q_type == "objective":
+        # Use existing logic to see if it's correct
+        is_correct = _objective_is_correct({"options": options, "answer": model_ans}, stud_ans)
+        if is_correct:
+            return jsonify({
+                "score": 10,
+                "is_correct": True,
+                "feedback": f"Correct! The answer is indeed {model_ans}.",
+                "improvements": ""
+            })
+        else:
+            return jsonify({
+                "score": 0,
+                "is_correct": False,
+                "feedback": f"Incorrect. The correct answer is {model_ans}.",
+                "improvements": "Review this topic in your textbook."
+            })
+
     try:
         prompt = PRACTICE_EVALUATION_PROMPT.replace("{question}", question).replace("{model_answer}", model_ans).replace("{student_answer}", stud_ans)
         result = _llm_json(prompt, temperature=0, mini=True)

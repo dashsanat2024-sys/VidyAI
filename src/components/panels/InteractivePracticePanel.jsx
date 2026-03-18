@@ -83,7 +83,11 @@ export default function InteractivePracticePanel({ showToast }) {
       const q = questions[i]
       try {
         const res = await apiPost('/curriculum/practice/evaluate', {
-          question: q.question, model_answer: q.answer, student_answer: answers[i]
+          question: q.question,
+          model_answer: q.answer,
+          student_answer: answers[i],
+          type: q.type,
+          options: q.options || {}
         }, token)
         const ev = await res.json()
         newFeedbacks[i] = ev
