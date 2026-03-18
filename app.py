@@ -281,6 +281,51 @@ def _safe(u: dict)  -> dict: return {k: v for k, v in u.items() if k not in ("pw
 def _grade(p: float)-> str:
     return "A+" if p>=90 else "A" if p>=80 else "B" if p>=70 else "C" if p>=60 else "D" if p>=50 else "F"
 def _normalize(t)   -> str: return re.sub(r"\s+", " ", str(t or "").strip().lower())
+
+def _strip_answer_prefix(text: str) -> str:
+    return re.sub(r"^(?:ans(?:wer)?|response|student\s*ans(?:wer)?)\s*[:\-]\s*", "", str(text or "").strip(), flags=re.IGNORECASE).strip()
+
+def _coerce_mcq_answer(student_answer: str, options: Dict[str, str]) -> str:
+    s = _normalize(_strip_answer_prefix(student_answer))
+    if not s:
+        return ""
+    m = re.match(r"^(?:option\s*)?[\(\[\{]?\s*([a-d])\s*[\)\]\}]?$", s, flags=re.IGNORECASE)
+    if m:
+        return m.group(1).upper()
+    for k, v in (options or {}).items():
+        if _normalize(v) == s:
+            return str(k).strip().upper()
+    return student_answer.strip()
+
+def _question_valid_answers(q: dict) -> List[str]:
+    vals = q.get("valid_answers", [])
+    if not vals:
+        ans = str(q.get("answer", "")).strip()
+        if ans:
+            vals = [x.strip() for x in re.split(r"[,\n;/|]", ans) if x.strip()]
+    return [str(v).strip() for v in vals if str(v).strip()]
+
+def _objective_is_correct(q: dict, student_answer: str) -> bool:
+    options = q.get("options") or {}
+    student = _coerce_mcq_answer(student_answer, options)
+    student_norm = _normalize(student)
+    valid_raw = _question_valid_answers(q)
+    valid_norm = set(_normalize(v) for v in valid_raw if str(v).strip())
+
+    for ans in list(valid_raw):
+        key = str(ans).strip().upper()
+        if key in options:
+            valid_norm.add(_normalize(options[key]))
+            valid_norm.add(_normalize(key))
+
+    ans_field = str(q.get("answer", "")).strip()
+    if ans_field:
+        valid_norm.add(_normalize(ans_field))
+        key = ans_field.upper()
+        if key in options:
+            valid_norm.add(_normalize(options[key]))
+
+    return bool(student_norm and student_norm in valid_norm)
 def _dtype(ext: str)-> str:
     return {"pdf":"PDF","txt":"Text","md":"Text","mp3":"Audio","wav":"Audio",
             "m4a":"Audio","mp4":"Video","jpg":"Image","jpeg":"Image","png":"Image"}.get(ext, "File")
