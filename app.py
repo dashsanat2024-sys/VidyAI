@@ -648,11 +648,59 @@ def _evaluate_answers(exam: dict, submitted: Dict[int, str], roll_no: str = "") 
         "improvement_prediction": improvement, "question_wise": evals
     }
 
-def _extract_answers(path: str):
+def _build_ocr_prompt(exam_questions: list) -> str:
+    """
+    Build a precise OCR prompt that tells the vision model exactly which
+    question numbers to look for and what answer format to expect.
+    This prevents the model from confusing printed question text with
+    handwritten student answers.
+    """
+    if not exam_questions:
+        return (
+            "This is a student answer sheet. Extract ONLY the student's handwritten or "
+            "typed answers — do NOT copy any printed question text.\n"
+            "For MCQ questions the student marks/circles/ticks an option letter (A/B/C/D).\n"
+            "For written questions extract the student's written response.\n"
+            "Return JSON only — no markdown:\n"
+            '{"answers": {"1": "<student answer>", "2": "<student answer>", ...}}\n'
+            "If a question has no visible answer, omit it entirely."
+        )
+
+    obj_qs  = [q for q in exam_questions if q.get("type","objective") == "objective"]
+    subj_qs = [q for q in exam_questions if q.get("type","objective") != "objective"]
+
+    obj_ids  = ", ".join(str(q["id"]) for q in obj_qs)  if obj_qs  else "none"
+    subj_ids = ", ".join(str(q["id"]) for q in subj_qs) if subj_qs else "none"
+
+    question_list = "\n".join(
+        f"  Q{q['id']} ({q.get('type','objective')}): {str(q.get('question',''))[:80]}"
+        for q in sorted(exam_questions, key=lambda x: int(x.get("id",0)))
+    )
+
+    return (
+        "This image is a STUDENT ANSWER SHEET (not a question paper).\n"
+        "Your task: extract ONLY the student's written/marked answers — "
+        "do NOT copy any printed question text from the paper.\n\n"
+        f"The exam has {len(exam_questions)} questions:\n{question_list}\n\n"
+        f"Objective questions (MCQ — student circles/ticks a letter A/B/C/D): {obj_ids}\n"
+        f"Subjective questions (written response): {subj_ids}\n\n"
+        "Rules:\n"
+        "1. For MCQ: record the letter the student circled/ticked (A, B, C, or D).\n"
+        "2. For written: copy only the student's handwritten answer text, not the printed question.\n"
+        "3. If no answer is visible for a question, omit that key entirely.\n"
+        "4. Never copy printed question text as the answer.\n\n"
+        "Return ONLY valid JSON — no markdown, no explanation:\n"
+        '{"answers": {"1": "A", "2": "B", "7": "The area is length × width", ...}}' 
+    )
+
+def _extract_answers(path: str, exam_questions: list = None):
     """Extract student answers from an answer sheet file."""
+    exam_questions = exam_questions or []
     ext = Path(path).suffix.lower()
+
     if ext in {".txt", ".md"}:
         return _parse_answer_text(Path(path).read_text(encoding="utf-8", errors="ignore")), "parsed_text"
+
     if ext == ".pdf":
         # 1. Try text-based extraction (digital/typed PDFs)
         text = ""
@@ -674,19 +722,17 @@ def _extract_answers(path: str):
             if ans:
                 return ans, "parsed_pdf"
         # 2. Scanned PDF — convert pages to images, run Vision OCR on each
+        ocr_prompt = _build_ocr_prompt(exam_questions)
         try:
             from pdf2image import convert_from_path
             import io as _io
             images = convert_from_path(path, dpi=200)
             combined: Dict[int, str] = {}
+            client = _oai.OpenAI(api_key=OPENAI_API_KEY)
             for img in images:
                 buf = _io.BytesIO()
                 img.save(buf, format="PNG")
                 img_b64 = base64.b64encode(buf.getvalue()).decode()
-                client = _oai.OpenAI(api_key=OPENAI_API_KEY)
-                ocr_prompt = ('Extract student answers from this answer sheet image. '
-                              'Return JSON only: {"answers":{"1":"...","2":"..."}}. '
-                              'Omit unreadable questions.')
                 resp = client.chat.completions.create(
                     model=OPENAI_MINI, temperature=0,
                     response_format={"type": "json_object"},
@@ -703,9 +749,35 @@ def _extract_answers(path: str):
                 return combined, "vision_ocr_pdf"
         except Exception as _pdf2img_err:
             print(f"[PDF-OCR] pdf2image failed: {_pdf2img_err}")
+        # 3. Last resort: GPT-4o vision on raw text if pdf2image unavailable
+        try:
+            import pypdf, io as _io
+            reader = pypdf.PdfReader(path)
+            all_text = "\n".join((p.extract_text() or "") for p in reader.pages)
+            if all_text.strip():
+                client = _oai.OpenAI(api_key=OPENAI_API_KEY)
+                fallback_prompt = (
+                    ocr_prompt + "\n\nRaw text extracted from PDF (may include both "
+                    "question and answer text — extract ONLY the answer portions):\n" + all_text[:4000]
+                )
+                resp = client.chat.completions.create(
+                    model=OPENAI_MINI, temperature=0,
+                    response_format={"type": "json_object"},
+                    messages=[{"role": "user", "content": fallback_prompt}]
+                )
+                raw = json.loads(resp.choices[0].message.content)
+                ans = {int(k): str(v).strip() for k, v in raw.get("answers", {}).items()
+                       if str(k).isdigit() and str(v).strip()}
+                if ans:
+                    return ans, "llm_text_extract"
+        except Exception as _fb_err:
+            print(f"[PDF-OCR] Text fallback failed: {_fb_err}")
         return {}, "pdf_unreadable"
+
     if ext in {".png", ".jpg", ".jpeg", ".webp"}:
-        return _vision_extract(path), "vision_ocr"
+        ocr_prompt = _build_ocr_prompt(exam_questions)
+        return _vision_extract(path, ocr_prompt), "vision_ocr"
+
     return {}, "unsupported_type"
 
 def _parse_answer_text(text: str) -> Dict[int, str]:
@@ -721,14 +793,15 @@ def _parse_answer_text(text: str) -> Dict[int, str]:
                 break
     return answers
 
-def _vision_extract(image_path: str) -> Dict[int, str]:
+def _vision_extract(image_path: str, prompt: str = None) -> Dict[int, str]:
     client = _oai.OpenAI(api_key=OPENAI_API_KEY)
     ext    = Path(image_path).suffix.lower().replace(".", "") or "png"
     with open(image_path, "rb") as f:
         b64 = base64.b64encode(f.read()).decode()
-    prompt = ('Extract student answers from this answer sheet. '
-              'Return JSON only: {"answers":{"1":"...","2":"..."}}. '
-              'Omit unreadable questions.')
+    if not prompt:
+        prompt = ('Extract student answers from this answer sheet. '
+                  'Return JSON only: {"answers":{"1":"...","2":"..."}}. '
+                  'Omit unreadable questions. Never copy printed question text.')
     resp = client.chat.completions.create(
         model=OPENAI_MINI, temperature=0,
         response_format={"type": "json_object"},
@@ -2236,7 +2309,7 @@ def _load_exam(exam_id: str) -> Optional[dict]:
     return None
 
 # ── Multi-student PDF splitter using GPT-4o vision ───────────────────────────
-def _split_multi_student_pdf(pdf_path: str) -> list:
+def _split_multi_student_pdf(pdf_path: str, exam_questions: list = None) -> list:
     """
     Use GPT-4o to extract each student's answers from a combined answer-sheet PDF.
     Returns a list of dicts: [{"student_name": "", "roll_no": "", "answers": {1: "...", ...}}]
@@ -2320,13 +2393,17 @@ Text content:
 
         combined_text = "\n\n--- PAGE BREAK ---\n\n".join(all_raw_text_parts)
         # Now ask GPT to structure the combined text into per-student JSON
+        question_ctx = "\n".join(
+            f"Q{q.get('id')}: {str(q.get('question',''))[:60]} [{q.get('type','objective')}]"
+            for q in (exam_questions or [])
+        )
         structure_resp = client.chat.completions.create(
             model=OPENAI_MINI,
             temperature=0.1,
             response_format={"type": "json_object"},
             messages=[{
                 "role": "user",
-                "content": f"{prompt}\n\nExtracted text from all pages:\n{combined_text[:6000]}"
+                "content": f"{prompt}\n\nExam questions for context (extract ONLY student answers, NOT these questions):\n{question_ctx}\n\nExtracted text from all pages:\n{combined_text[:6000]}"
             }]
         )
         raw = structure_resp.choices[0].message.content
@@ -2384,7 +2461,7 @@ def evaluate_sheet():
     path = UPL_DIR / f"{datetime.utcnow().strftime('%Y%m%dT%H%M%S')}_{fn}"
     f.save(str(path))
 
-    answers, mode = _extract_answers(str(path))
+    answers, mode = _extract_answers(str(path), exam_questions=e.get("questions", []))
     if not answers:
         return jsonify({"error": f"Could not extract answers (mode: {mode})"}), 400
 
@@ -2431,7 +2508,7 @@ def evaluate_multi_student():
     print(f"[MULTI-EVAL] Starting multi-student extraction from {fn}")
 
     # Step 1: Split PDF into per-student sections
-    student_sections = _split_multi_student_pdf(str(path))
+    student_sections = _split_multi_student_pdf(str(path), exam_questions=e.get("questions", []))
     print(f"[MULTI-EVAL] Detected {len(student_sections)} students")
 
     all_evaluations = []
@@ -2446,7 +2523,7 @@ def evaluate_multi_student():
             # Fallback: try vision on a temp text file
             tmp = UPL_DIR / f"student_{idx}_{uuid.uuid4().hex[:6]}.txt"
             tmp.write_text(raw_text, encoding="utf-8")
-            answers, _ = _extract_answers(str(tmp))
+            answers, _ = _extract_answers(str(tmp), exam_questions=e.get("questions", []))
             try:
                 tmp.unlink()
             except Exception:
@@ -2516,7 +2593,7 @@ def bulk_evaluate():
         fn   = secure_filename(f.filename)
         path = UPL_DIR / f"{datetime.utcnow().strftime('%Y%m%dT%H%M%S')}_{fn}"
         f.save(str(path))
-        answers, mode = _extract_answers(str(path))
+        answers, mode = _extract_answers(str(path), exam_questions=e.get("questions", []))
         if not answers:
             failures.append({"file": fn, "error": f"extract_failed ({mode})"}); continue
         m    = re.search(r"(\d+)", fn)
