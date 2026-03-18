@@ -577,8 +577,7 @@ def _evaluate_answers(exam: dict, submitted: Dict[int, str], roll_no: str = "") 
         total_possible += max_m
 
         if qtype == "objective":
-            valid   = [_normalize(a) for a in q.get("valid_answers", []) if str(a).strip()]
-            correct = _normalize(student) in valid
+            correct = _objective_is_correct(q, student)
             awarded = max_m if correct else 0.0
             total_awarded += awarded
             evals.append({
@@ -637,16 +636,56 @@ def _extract_answers(path: str):
     if ext in {".txt", ".md"}:
         return _parse_answer_text(Path(path).read_text(encoding="utf-8", errors="ignore")), "parsed_text"
     if ext == ".pdf":
+        # 1. Try text-based extraction (digital/typed PDFs)
+        text = ""
         try:
             from langchain_community.document_loaders import PyPDFLoader
             pages = PyPDFLoader(path).load()
-            text  = "\n".join(p.page_content for p in pages)
+            text  = "\n".join(p.page_content for p in pages if p.page_content)
         except ImportError:
-            import pypdf
-            reader = pypdf.PdfReader(path)
-            text   = "\n".join(p.extract_text() for p in reader.pages)
-        ans = _parse_answer_text(text)
-        return (ans, "parsed_pdf") if ans else ({}, "pdf_unreadable")
+            try:
+                import pypdf
+                reader = pypdf.PdfReader(path)
+                text   = "\n".join((p.extract_text() or "") for p in reader.pages)
+            except Exception:
+                pass
+        except Exception:
+            pass
+        if text.strip():
+            ans = _parse_answer_text(text)
+            if ans:
+                return ans, "parsed_pdf"
+        # 2. Scanned PDF — convert pages to images, run Vision OCR on each
+        try:
+            from pdf2image import convert_from_path
+            import io as _io
+            images = convert_from_path(path, dpi=200)
+            combined: Dict[int, str] = {}
+            for img in images:
+                buf = _io.BytesIO()
+                img.save(buf, format="PNG")
+                img_b64 = base64.b64encode(buf.getvalue()).decode()
+                client = _oai.OpenAI(api_key=OPENAI_API_KEY)
+                ocr_prompt = ('Extract student answers from this answer sheet image. '
+                              'Return JSON only: {"answers":{"1":"...","2":"..."}}. '
+                              'Omit unreadable questions.')
+                resp = client.chat.completions.create(
+                    model=OPENAI_MINI, temperature=0,
+                    response_format={"type": "json_object"},
+                    messages=[{"role": "user", "content": [
+                        {"type": "text", "text": ocr_prompt},
+                        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_b64}"}}
+                    ]}]
+                )
+                raw_ocr = json.loads(resp.choices[0].message.content)
+                page_ans = {int(k): str(v).strip() for k, v in raw_ocr.get("answers", {}).items()
+                            if str(k).isdigit() and str(v).strip()}
+                combined.update(page_ans)
+            if combined:
+                return combined, "vision_ocr_pdf"
+        except Exception as _pdf2img_err:
+            print(f"[PDF-OCR] pdf2image failed: {_pdf2img_err}")
+        return {}, "pdf_unreadable"
     if ext in {".png", ".jpg", ".jpeg", ".webp"}:
         return _vision_extract(path), "vision_ocr"
     return {}, "unsupported_type"
@@ -2229,23 +2268,58 @@ Text content:
                 return result
 
         # Fallback: vision-based extraction for scanned PDFs
-        client = _oai.OpenAI(api_key=OPENAI_API_KEY)
-        with open(pdf_path, "rb") as f:
-            pdf_b64 = base64.b64encode(f.read()).decode()
+        # Convert PDF pages to PNG images — GPT-4o-mini cannot read raw PDF bytes
+        try:
+            from pdf2image import convert_from_path
+            import io as _io
+            images = convert_from_path(pdf_path, dpi=200)
+        except Exception as _conv_err:
+            print(f"[MULTI-SPLIT] pdf2image unavailable: {_conv_err}")
+            return [{"student_name": "Student 1", "roll_no": "1", "raw_text": ""}]
 
-        resp = client.chat.completions.create(
+        client = _oai.OpenAI(api_key=OPENAI_API_KEY)
+        all_raw_text_parts = []
+        for img in images:
+            buf = _io.BytesIO()
+            img.save(buf, format="PNG")
+            img_b64 = base64.b64encode(buf.getvalue()).decode()
+            page_resp = client.chat.completions.create(
+                model=OPENAI_MINI,
+                temperature=0.1,
+                messages=[{
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": (
+                            "Extract all student names, roll numbers, and answers from this answer sheet page. "
+                            "Format each answer as Q<number>: <answer>. Include a header line like: "
+                            "Student: <name>  Roll: <number>  then the answers."
+                        )},
+                        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_b64}"}}
+                    ]
+                }]
+            )
+            all_raw_text_parts.append(page_resp.choices[0].message.content)
+
+        combined_text = "\n\n--- PAGE BREAK ---\n\n".join(all_raw_text_parts)
+        # Now ask GPT to structure the combined text into per-student JSON
+        structure_resp = client.chat.completions.create(
             model=OPENAI_MINI,
             temperature=0.1,
+            response_format={"type": "json_object"},
             messages=[{
                 "role": "user",
-                "content": [
-                    {"type": "text", "text": prompt},
-                    {"type": "image_url", "image_url": {"url": f"data:application/pdf;base64,{pdf_b64}"}}
-                ]
+                "content": f"{prompt}\n\nExtracted text from all pages:\n{combined_text[:6000]}"
             }]
         )
-        raw = resp.choices[0].message.content
-        return _clean_json(raw) if isinstance(_clean_json(raw), list) else [{"student_name": "Student 1", "roll_no": "", "raw_text": raw}]
+        raw = structure_resp.choices[0].message.content
+        parsed = _clean_json(raw)
+        if isinstance(parsed, list) and parsed:
+            return parsed
+        if isinstance(parsed, dict):
+            for k in ("students", "data", "results"):
+                if isinstance(parsed.get(k), list):
+                    return parsed[k]
+        return [{"student_name": "Student 1", "roll_no": "", "raw_text": combined_text}]
 
     except Exception as e:
         print(f"[MULTI-SPLIT] {e}")
