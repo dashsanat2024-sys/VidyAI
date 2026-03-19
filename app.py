@@ -729,39 +729,33 @@ def _build_ocr_prompt(exam_questions: list) -> str:
                     + "\n".join(q_lines)) if q_lines else ""
 
     return (
-        "You are analyzing a SCANNED handwritten exam answer sheet.\n\n"
-        "This is NOT plain OCR. You must use VISUAL REASONING to locate answers.\n\n"
-        "IMPORTANT — the student may have answered in ANY of these ways:\n"
-        "  - Writing A/B/C/D in the \"Answer: ____\" blank\n"
-        "  - Circling one of the printed options (A / B / C / D)\n"
-        "  - Ticking one of the options with a checkmark or cross\n"
-        "  - Writing the answer letter beside or near the options\n"
-        "  - Writing the answer text below the question (subjective)\n\n"
-        "YOU MUST:\n"
-        "  1. Visually locate each question block on the page\n"
-        "  2. Look at the ENTIRE question area (options + Answer: line + surrounding space)\n"
-        "  3. Detect the student's selection by ANY marking method above\n"
-        "  4. Never rely ONLY on the Answer: line — students often circle options directly\n\n"
-        "---\n\n"
-        f"OBJECTIVE QUESTIONS (numbers: {obj_ids}):\n"
-        "  - Scan the printed options A / B / C / D for circles, ticks, underlines, or marks\n"
-        "  - Also check the \"Answer: ____\" blank below the options\n"
-        "  - If multiple markings detected — choose the most clearly marked one\n"
+        "You are analyzing a SCANNED structured answer sheet.\n\n"
+        "ANSWER SHEET LAYOUT — read carefully before extracting:\n\n"
+        "The sheet has two sections:\n"
+        "  1. SECTION A (Objective) — Each question has a coloured left tab with\n"
+        "     the question number, then FOUR large circles labelled A, B, C, D.\n"
+        "     The student FILLED IN or CIRCLED one of these bubbles.\n"
+        "  2. SECTION B (Subjective) — Each question has a coloured left tab with\n"
+        "     the question number, then RULED LINES inside a bordered box.\n"
+        "     The student wrote their answer on these ruled lines.\n\n"
+        "EXTRACTION RULES:\n\n"
+        f"OBJECTIVE (question numbers: {obj_ids}):\n"
+        "  - Find the four large A / B / C / D circles for each question\n"
+        "  - The student marked one by: filling it solid, circling around it,\n"
+        "    writing inside it, ticking/crossing it, or writing the letter beside it\n"
+        "  - If a bubble is darker/filled/circled compared to the others → that is the answer\n"
         "  - Return ONLY the single letter: A, B, C, or D\n\n"
-        f"SUBJECTIVE QUESTIONS (numbers: {subj_ids}):\n"
-        "  - Look for handwritten text in the blank ruled space BELOW the question\n"
-        "  - Do NOT copy the printed question text\n"
-        "  - Extract all handwritten response text verbatim\n\n"
-        "---\n\n"
-        "VERY IMPORTANT:\n"
-        "  - A circled option IS the answer — detect it\n"
-        "  - A ticked option IS the answer — detect it\n"
-        "  - A letter written near options IS the answer — detect it\n"
-        "  - Never copy printed question text as an answer\n"
-        "  - If genuinely no answer, omit that question key\n"
+        f"SUBJECTIVE (question numbers: {subj_ids}):\n"
+        "  - Read ALL handwritten text on the ruled lines inside the bordered box\n"
+        "  - Do NOT return the printed question number label — only the written content\n"
+        "  - Extract the complete handwritten response verbatim\n\n"
+        "CRITICAL:\n"
+        "  - NEVER copy printed labels (Q1, Q2, Section A, etc.) as answers\n"
+        "  - For bubbles: look for ink/filling/mark — not just which letter is printed\n"
+        "  - If a question has no mark/writing, omit it entirely\n"
         + question_ref + "\n\n"
         'Return STRICTLY valid JSON — no markdown, no explanation:\n'
-        '{"answers": {"1": "A", "2": "C", "7": "handwritten answer text here"}}\n'
+        '{"answers": {"1": "A", "2": "C", "7": "student wrote this here"}}\n'
         'If no answers found: {"answers": {}}'
     )
 
@@ -846,127 +840,217 @@ def _validate_ocr_answers(raw_answers: dict, exam_questions: list) -> Dict[int, 
 #  SCANNED ANSWER SHEET: IMAGE-DIFF HANDWRITING EXTRACTION
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _generate_blank_answer_sheet_pdf(exam: dict) -> bytes:
+def _draw_answer_sheet_page_header(c, exam: dict, page_num: int, W, H, mm, colors):
+    """Draw the header (dark bar + student info boxes + corner markers) on each page."""
+    MARGIN = 12 * mm
+
+    # Corner registration marks — help with scan alignment in diff
+    c.setFillColor(colors.black)
+    for rx, ry in [(8, H-8), (W-8, H-8), (8, 8*mm), (W-8, 8*mm)]:
+        c.circle(rx, ry, 3, fill=1)
+
+    # Header bar
+    c.setFillColor(colors.HexColor('#1e1b4b'))
+    c.rect(MARGIN, H - 22*mm, W - 2*MARGIN, 14*mm, fill=1, stroke=0)
+    c.setFillColor(colors.white)
+    c.setFont("Helvetica-Bold", 11)
+    c.drawString(MARGIN + 4*mm, H - 12*mm,
+        f"{exam.get('school_name','VidyAI School')} — ANSWER SHEET")
+    c.setFont("Helvetica", 9)
+    c.drawRightString(W - MARGIN - 4*mm, H - 12*mm,
+        f"Exam ID: {exam.get('exam_id','—')}  |  Page {page_num}")
+
+    # Student info boxes
+    y = H - 30*mm
+    c.setFillColor(colors.black)
+    for label, x, w in [
+        ("STUDENT NAME", MARGIN,          75*mm),
+        ("ROLL NUMBER",  MARGIN + 78*mm,  35*mm),
+        ("CLASS",        MARGIN + 116*mm, 25*mm),
+    ]:
+        c.setFont("Helvetica-Bold", 8)
+        c.drawString(x, y + 5*mm, label)
+        c.setStrokeColor(colors.black)
+        c.setLineWidth(0.8)
+        c.rect(x, y - 2*mm, w, 8*mm, fill=0)
+
+    return y - 12*mm   # y position after header
+
+
+def _generate_answer_sheet_pdf(exam: dict) -> bytes:
     """
-    Reproduce the printed question paper as a blank PDF using reportlab.
-    The layout must closely match what the browser prints so pixel-diff works.
-    Returns PDF bytes.
+    Generate an OCR-optimised ANSWER SHEET PDF.
+
+    Design principles that make this easy to scan and extract:
+    - Answer sheet is SEPARATE from the question paper
+    - Each question gets its own clearly bordered box
+    - MCQ: 4 large A/B/C/D bubble circles — student fills/circles ONE
+    - Subjective: large box with ruled lines, no printed question text inside
+    - Question ID printed in a coloured tab on the left of every box
+    - NO printed question text inside answer boxes → zero OCR confusion
+    - Corner registration marks → helps image-diff alignment
     """
     try:
         from reportlab.pdfgen import canvas as rl_canvas
         from reportlab.lib.pagesizes import A4
         from reportlab.lib.units import mm
+        from reportlab.lib import colors as rl_colors
         import io as _io2
 
-        buf = _io2.BytesIO()
+        buf  = _io2.BytesIO()
         W, H = A4
-        c = rl_canvas.Canvas(buf, pagesize=A4)
+        c    = rl_canvas.Canvas(buf, pagesize=A4)
 
-        school  = exam.get("school_name", "VidyAI School")
-        subject = exam.get("subject", "")
-        cls     = exam.get("class", "")
-        board   = exam.get("board", "")
-        total   = exam.get("total_marks", 0)
         qs      = exam.get("questions", [])
         obj_qs  = [q for q in qs if q.get("type", "objective") == "objective"]
         subj_qs = [q for q in qs if q.get("type", "objective") != "objective"]
+        MARGIN  = 12 * mm
+        BOX_W   = W - 2 * MARGIN
+
+        page  = 1
+        y     = _draw_answer_sheet_page_header(c, exam, page, W, H, mm, rl_colors)
 
         def new_page():
+            nonlocal page
+            # Footer on current page
+            c.setFillColor(rl_colors.HexColor('#9ca3af'))
+            c.setFont("Helvetica", 7)
+            c.drawCentredString(W/2, 6*mm,
+                "Write answers ONLY inside the boxes  ·  Do not write outside the boxes")
             c.showPage()
-            return H - 20 * mm
+            page += 1
+            return _draw_answer_sheet_page_header(c, exam, page, W, H, mm, rl_colors)
 
-        def maybe_new_page(y, needed=25):
-            if y < needed * mm:
-                return new_page()
-            return y
-
-        # ── Header ────────────────────────────────────────────────────────────
-        y = H - 15 * mm
-        c.setFont("Helvetica-Bold", 13)
-        c.drawString(15 * mm, y, school)
-        y -= 7 * mm
-        c.setFont("Helvetica", 11)
-        c.drawString(15 * mm, y, f"{subject} — {board} {cls}")
-        y -= 6 * mm
-        c.setFont("Helvetica", 9)
-        c.drawString(15 * mm, y,
-            f"Total Marks: {total} | Questions: {len(qs)} | Date: {exam.get('exam_date', '')}")
-        y -= 7 * mm
-
-        # Student info row
-        for label, x in [("STUDENT NAME", 15), ("ROLL NUMBER", 85), ("CLASS", 145)]:
-            c.setFont("Helvetica-Bold", 8)
-            c.drawString(x * mm, y, label)
-        y -= 5 * mm
-        c.line(15 * mm, y, 82 * mm, y)
-        c.line(85 * mm, y, 142 * mm, y)
-        y -= 10 * mm
-
-        # ── Section A — Objective ──────────────────────────────────────────────
+        # ── Section A: Objective ───────────────────────────────────────────────
         if obj_qs:
-            y = maybe_new_page(y, 30)
-            c.setFont("Helvetica-Bold", 10)
-            total_obj_marks = sum(q.get("marks", 1) for q in obj_qs)
-            c.drawString(15 * mm, y,
-                f"SECTION A — OBJECTIVE QUESTIONS ({len(obj_qs)} × — = {total_obj_marks} MARKS)")
-            y -= 8 * mm
+            c.setFillColor(rl_colors.HexColor('#eef2ff'))
+            c.rect(MARGIN, y - 8*mm, BOX_W, 8*mm, fill=1, stroke=0)
+            c.setFillColor(rl_colors.HexColor('#3730a3'))
+            c.setFont("Helvetica-Bold", 9)
+            c.drawString(MARGIN + 3*mm, y - 5.5*mm,
+                f"SECTION A — OBJECTIVE  ({len(obj_qs)} questions)  "
+                f"· Circle the correct option (A / B / C / D)")
+            y -= 11*mm
 
             for q in obj_qs:
-                y = maybe_new_page(y, 40)
-                marks = q.get("marks", q.get("weightage", 1))
-                qtext = str(q.get("question", ""))
-                c.setFont("Helvetica-Bold", 10)
-                line1 = f"Q{q['id']}. {qtext[:85]}  [{marks} mark{'s' if marks != 1 else ''}]"
-                c.drawString(15 * mm, y, line1[:100])
-                if len(line1) > 100:
-                    y -= 5 * mm
-                    c.drawString(20 * mm, y, line1[100:])
-                y -= 6 * mm
+                BOX_H = 20*mm
+                if y - BOX_H < 15*mm:
+                    y = new_page()
+                marks = float(q.get("marks", q.get("weightage", 1)))
 
-                opts = q.get("options") or {}
-                if opts:
-                    c.setFont("Helvetica", 9)
-                    opt_str = "     ".join(f"{k}) {v}" for k, v in sorted(opts.items()))
-                    c.drawString(20 * mm, y, opt_str[:110])
-                    y -= 6 * mm
+                # Outer box
+                c.setStrokeColor(rl_colors.HexColor('#374151'))
+                c.setFillColor(rl_colors.HexColor('#f9fafb'))
+                c.setLineWidth(1.2)
+                c.rect(MARGIN, y - BOX_H, BOX_W, BOX_H, fill=1, stroke=1)
 
-                c.setFont("Helvetica", 10)
-                c.drawString(20 * mm, y, "Answer: ")
-                c.line(44 * mm, y - 1, 110 * mm, y - 1)
-                y -= 10 * mm
+                # Q-number tab (left strip, indigo)
+                c.setFillColor(rl_colors.HexColor('#4f46e5'))
+                c.rect(MARGIN, y - BOX_H, 16*mm, BOX_H, fill=1, stroke=0)
+                c.setFillColor(rl_colors.white)
+                c.setFont("Helvetica-Bold", 12)
+                c.drawCentredString(MARGIN + 8*mm, y - BOX_H + 8*mm, f"Q{q['id']}")
+                c.setFont("Helvetica", 7)
+                c.drawCentredString(MARGIN + 8*mm, y - BOX_H + 3*mm,
+                    f"[{int(marks) if marks == int(marks) else marks}m]")
 
-        # ── Section B — Subjective ────────────────────────────────────────────
+                # Instruction
+                c.setFillColor(rl_colors.HexColor('#374151'))
+                c.setFont("Helvetica", 8)
+                c.drawString(MARGIN + 19*mm, y - 5*mm, "Circle your answer:")
+
+                # A / B / C / D bubbles — large (r=6mm), clearly spaced
+                BUBBLE_R = 6 * mm
+                for i, label in enumerate(["A", "B", "C", "D"]):
+                    bx = MARGIN + 20*mm + i * 26*mm + BUBBLE_R
+                    by = y - BOX_H + 10*mm
+                    c.setStrokeColor(rl_colors.HexColor('#111827'))
+                    c.setFillColor(rl_colors.white)
+                    c.setLineWidth(1.5)
+                    c.circle(bx, by, BUBBLE_R, fill=1, stroke=1)
+                    c.setFillColor(rl_colors.HexColor('#111827'))
+                    c.setFont("Helvetica-Bold", 12)
+                    c.drawCentredString(bx, by - 4, label)
+
+                y -= BOX_H + 3*mm
+
+        # ── Section B: Subjective ──────────────────────────────────────────────
         if subj_qs:
-            y = maybe_new_page(y, 40)
-            c.setFont("Helvetica-Bold", 10)
-            c.drawString(15 * mm, y, "SECTION B — SUBJECTIVE QUESTIONS")
-            y -= 8 * mm
+            y -= 4*mm
+            if y < 30*mm:
+                y = new_page()
+
+            c.setFillColor(rl_colors.HexColor('#ecfdf5'))
+            c.rect(MARGIN, y - 8*mm, BOX_W, 8*mm, fill=1, stroke=0)
+            c.setFillColor(rl_colors.HexColor('#065f46'))
+            c.setFont("Helvetica-Bold", 9)
+            c.drawString(MARGIN + 3*mm, y - 5.5*mm,
+                f"SECTION B — SUBJECTIVE  ({len(subj_qs)} questions)  "
+                f"· Write your answer in the box below each question number")
+            y -= 11*mm
 
             for q in subj_qs:
-                y = maybe_new_page(y, 55)
-                marks = q.get("marks", q.get("weightage", 1))
-                qtext = str(q.get("question", ""))
-                c.setFont("Helvetica-Bold", 10)
-                line1 = f"Q{q['id']}. {qtext[:85]}  [{marks} marks]"
-                c.drawString(15 * mm, y, line1[:100])
-                if len(line1) > 100:
-                    y -= 5 * mm
-                    c.drawString(20 * mm, y, line1[100:])
-                y -= 6 * mm
-                # Ruled lines for answer
-                for _ in range(6):
-                    y = maybe_new_page(y, 15)
-                    c.line(15 * mm, y, W - 15 * mm, y)
-                    y -= 7 * mm
-                y -= 4 * mm
+                marks   = float(q.get("marks", q.get("weightage", 1)))
+                n_lines = min(12, max(5, int(marks * 1.8)))
+                LINE_H  = 8*mm
+                BOX_H   = 10*mm + n_lines * LINE_H + 4*mm
+
+                if y - BOX_H < 15*mm:
+                    y = new_page()
+
+                # Outer box
+                c.setStrokeColor(rl_colors.HexColor('#374151'))
+                c.setFillColor(rl_colors.HexColor('#f9fafb'))
+                c.setLineWidth(1.2)
+                c.rect(MARGIN, y - BOX_H, BOX_W, BOX_H, fill=1, stroke=1)
+
+                # Q-number tab (left strip, green)
+                c.setFillColor(rl_colors.HexColor('#059669'))
+                c.rect(MARGIN, y - BOX_H, 16*mm, BOX_H, fill=1, stroke=0)
+                c.setFillColor(rl_colors.white)
+                c.setFont("Helvetica-Bold", 12)
+                c.drawCentredString(MARGIN + 8*mm, y - BOX_H//2 + 2*mm, f"Q{q['id']}")
+                c.setFont("Helvetica", 7)
+                c.drawCentredString(MARGIN + 8*mm, y - BOX_H//2 - 4*mm,
+                    f"[{int(marks) if marks == int(marks) else marks}m]")
+
+                # Instruction row
+                c.setStrokeColor(rl_colors.HexColor('#d1d5db'))
+                c.setLineWidth(0.5)
+                c.line(MARGIN + 16*mm, y - 10*mm, MARGIN + BOX_W, y - 10*mm)
+                c.setFillColor(rl_colors.HexColor('#6b7280'))
+                c.setFont("Helvetica", 8)
+                c.drawString(MARGIN + 19*mm, y - 7*mm, "Write your answer below:")
+
+                # Ruled lines inside box
+                for i in range(n_lines):
+                    line_y = y - 10*mm - (i + 1) * LINE_H
+                    c.setStrokeColor(rl_colors.HexColor('#e5e7eb'))
+                    c.setLineWidth(0.4)
+                    c.line(MARGIN + 18*mm, line_y, MARGIN + BOX_W - 2*mm, line_y)
+
+                y -= BOX_H + 4*mm
+
+        # Footer on last page
+        c.setFillColor(rl_colors.HexColor('#9ca3af'))
+        c.setFont("Helvetica", 7)
+        c.drawCentredString(W/2, 6*mm,
+            "Write answers ONLY inside the boxes  ·  Do not write outside the boxes")
 
         c.save()
         buf.seek(0)
         return buf.read()
 
     except Exception as e:
-        print(f"[BLANK-PDF] Generation failed: {e}")
+        log.error(f"[ANSWER-SHEET] Generation failed: {e}", exc_info=True)
         return b""
+
+
+# Keep _generate_blank_answer_sheet_pdf as an alias so _diff_and_ocr_answers
+# generates a blank that MATCHES the new structured answer sheet layout exactly.
+def _generate_blank_answer_sheet_pdf(exam: dict) -> bytes:
+    """Alias — generates the same structured answer sheet (blank, no handwriting)."""
+    return _generate_answer_sheet_pdf(exam)
 
 
 def _diff_and_ocr_answers(scanned_pdf_path: str, exam: dict) -> Dict[int, str]:
@@ -3056,8 +3140,245 @@ def get_exam_analytics(exam_id):
     })
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  EVALUATION ENDPOINTS
+#  TEMPLATE DOWNLOAD ENDPOINTS
+#  /api/exams/<id>/answer-sheet  → structured OCR-optimised answer sheet PDF
+#  /api/exams/<id>/question-paper → question paper with instructions
 # ══════════════════════════════════════════════════════════════════════════════
+
+@app.get("/api/exams/<exam_id>/answer-sheet")
+@auth()
+def download_answer_sheet(exam_id):
+    """
+    Generate and return the structured OCR-optimised answer sheet PDF.
+    Students print this, fill it in by hand, scan it, and upload for evaluation.
+    """
+    e = _load_exam(exam_id)
+    if not e:
+        return jsonify({"error": "Exam not found"}), 404
+
+    pdf_bytes = _generate_answer_sheet_pdf(e)
+    if not pdf_bytes:
+        return jsonify({"error": "PDF generation failed"}), 500
+
+    subject  = re.sub(r"[^\w\s-]", "", e.get("subject", "Exam"))[:30]
+    filename = f"AnswerSheet_{subject}_{exam_id}.pdf"
+
+    from flask import Response
+    return Response(
+        pdf_bytes,
+        mimetype="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'}
+    )
+
+
+@app.get("/api/exams/<exam_id>/question-paper")
+@auth()
+def download_question_paper(exam_id):
+    """
+    Generate and return the question paper PDF (with full question text).
+    Students use this to READ questions, then write answers on the answer sheet.
+    """
+    e = _load_exam(exam_id)
+    if not e:
+        return jsonify({"error": "Exam not found"}), 404
+
+    pdf_bytes = _generate_question_paper_pdf(e)
+    if not pdf_bytes:
+        return jsonify({"error": "PDF generation failed"}), 500
+
+    subject  = re.sub(r"[^\w\s-]", "", e.get("subject", "Exam"))[:30]
+    filename = f"QuestionPaper_{subject}_{exam_id}.pdf"
+
+    from flask import Response
+    return Response(
+        pdf_bytes,
+        mimetype="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'}
+    )
+
+
+def _generate_question_paper_pdf(exam: dict) -> bytes:
+    """
+    Generate the question paper PDF — contains full question text and options.
+    Students READ this and write answers on the separate answer sheet.
+    Does NOT contain answer boxes (those are on the answer sheet).
+    """
+    try:
+        from reportlab.pdfgen import canvas as rl_canvas
+        from reportlab.lib.pagesizes import A4
+        from reportlab.lib.units import mm
+        from reportlab.lib import colors as rl_colors
+        import io as _io2
+
+        buf  = _io2.BytesIO()
+        W, H = A4
+        c    = rl_canvas.Canvas(buf, pagesize=A4)
+        MARGIN = 15 * mm
+
+        qs      = exam.get("questions", [])
+        obj_qs  = [q for q in qs if q.get("type", "objective") == "objective"]
+        subj_qs = [q for q in qs if q.get("type", "objective") != "objective"]
+
+        def draw_header(page_num=1):
+            # Title bar
+            c.setFillColor(rl_colors.HexColor('#1e1b4b'))
+            c.rect(MARGIN, H - 25*mm, W - 2*MARGIN, 17*mm, fill=1, stroke=0)
+            c.setFillColor(rl_colors.white)
+            c.setFont("Helvetica-Bold", 13)
+            c.drawString(MARGIN + 5*mm, H - 13*mm,
+                exam.get("school_name", "VidyAI School"))
+            c.setFont("Helvetica", 10)
+            c.drawRightString(W - MARGIN - 5*mm, H - 13*mm,
+                f"{exam.get('subject','')} — {exam.get('board','')} {exam.get('class','')}")
+            # Sub-header
+            c.setFillColor(rl_colors.HexColor('#eef2ff'))
+            c.rect(MARGIN, H - 33*mm, W - 2*MARGIN, 8*mm, fill=1, stroke=0)
+            c.setFillColor(rl_colors.HexColor('#374151'))
+            c.setFont("Helvetica", 8)
+            c.drawString(MARGIN + 5*mm, H - 28.5*mm,
+                f"Total Marks: {exam.get('total_marks',0)}  |  "
+                f"Questions: {len(qs)}  |  "
+                f"Date: {exam.get('exam_date','')}  |  "
+                f"Exam ID: {exam.get('exam_id','')}")
+            c.drawRightString(W - MARGIN - 5*mm, H - 28.5*mm,
+                f"Page {page_num}")
+            # Instruction box
+            c.setFillColor(rl_colors.HexColor('#fffbeb'))
+            c.setStrokeColor(rl_colors.HexColor('#fbbf24'))
+            c.setLineWidth(0.8)
+            c.rect(MARGIN, H - 45*mm, W - 2*MARGIN, 11*mm, fill=1, stroke=1)
+            c.setFillColor(rl_colors.HexColor('#92400e'))
+            c.setFont("Helvetica-Bold", 8)
+            c.drawString(MARGIN + 5*mm, H - 37*mm,
+                "★ USE THE SEPARATE ANSWER SHEET TO WRITE YOUR ANSWERS ★")
+            c.setFont("Helvetica", 7.5)
+            c.drawString(MARGIN + 5*mm, H - 41*mm,
+                "Section A: Circle A/B/C/D in the bubble  ·  "
+                "Section B: Write in the ruled box  ·  "
+                "Do NOT write on this question paper")
+            return H - 50*mm
+
+        page = 1
+        y    = draw_header(page)
+
+        def new_page():
+            nonlocal page
+            c.showPage()
+            page += 1
+            return draw_header(page)
+
+        def wrap_text(text, max_chars=95):
+            """Simple word-wrap."""
+            words = text.split()
+            lines, cur = [], ""
+            for w in words:
+                if len(cur) + len(w) + 1 <= max_chars:
+                    cur = (cur + " " + w).strip()
+                else:
+                    if cur:
+                        lines.append(cur)
+                    cur = w
+            if cur:
+                lines.append(cur)
+            return lines or [""]
+
+        # ── Section A ─────────────────────────────────────────────────────────
+        if obj_qs:
+            c.setFillColor(rl_colors.HexColor('#eef2ff'))
+            c.rect(MARGIN, y - 8*mm, W - 2*MARGIN, 8*mm, fill=1, stroke=0)
+            c.setFillColor(rl_colors.HexColor('#3730a3'))
+            c.setFont("Helvetica-Bold", 9)
+            total_obj_m = sum(float(q.get("marks", q.get("weightage", 1))) for q in obj_qs)
+            c.drawString(MARGIN + 3*mm, y - 5.5*mm,
+                f"SECTION A — OBJECTIVE QUESTIONS  "
+                f"({len(obj_qs)} questions × — = {int(total_obj_m)} marks)")
+            y -= 12*mm
+
+            for q in obj_qs:
+                marks = float(q.get("marks", q.get("weightage", 1)))
+                qtext = str(q.get("question", ""))
+                q_lines = wrap_text(
+                    f"Q{q['id']}.  {qtext}",
+                    max_chars=88
+                )
+                needed = (len(q_lines) * 5 + 14) * mm
+                if y - needed < 20*mm:
+                    y = new_page()
+
+                # Question text
+                c.setFillColor(rl_colors.black)
+                c.setFont("Helvetica-Bold", 10)
+                for li, line in enumerate(q_lines):
+                    c.drawString(MARGIN + (5*mm if li > 0 else 0), y - (li + 1) * 5*mm, line)
+                # Marks label
+                c.setFont("Helvetica", 8)
+                c.setFillColor(rl_colors.HexColor('#6b7280'))
+                m_str = f"[{int(marks) if marks == int(marks) else marks} mark{'s' if marks != 1 else ''}]"
+                c.drawRightString(W - MARGIN, y - 5*mm, m_str)
+                y -= (len(q_lines) * 5 + 3) * mm
+
+                # Options on one or two lines
+                opts = q.get("options") or {}
+                if opts:
+                    opt_line = "     ".join(f"({k})  {v}" for k, v in sorted(opts.items()))
+                    c.setFont("Helvetica", 9.5)
+                    c.setFillColor(rl_colors.HexColor('#111827'))
+                    if len(opt_line) <= 100:
+                        c.drawString(MARGIN + 8*mm, y - 5*mm, opt_line)
+                        y -= 8*mm
+                    else:
+                        # Two rows
+                        items = sorted(opts.items())
+                        row1 = "     ".join(f"({k})  {v}" for k, v in items[:2])
+                        row2 = "     ".join(f"({k})  {v}" for k, v in items[2:])
+                        c.drawString(MARGIN + 8*mm, y - 5*mm, row1)
+                        c.drawString(MARGIN + 8*mm, y - 10*mm, row2)
+                        y -= 13*mm
+                y -= 3*mm
+
+        # ── Section B ─────────────────────────────────────────────────────────
+        if subj_qs:
+            y -= 3*mm
+            if y < 30*mm:
+                y = new_page()
+            c.setFillColor(rl_colors.HexColor('#ecfdf5'))
+            c.rect(MARGIN, y - 8*mm, W - 2*MARGIN, 8*mm, fill=1, stroke=0)
+            c.setFillColor(rl_colors.HexColor('#065f46'))
+            c.setFont("Helvetica-Bold", 9)
+            total_subj_m = sum(float(q.get("marks", q.get("weightage", 1))) for q in subj_qs)
+            c.drawString(MARGIN + 3*mm, y - 5.5*mm,
+                f"SECTION B — SUBJECTIVE QUESTIONS  "
+                f"({len(subj_qs)} questions — {int(total_subj_m)} marks total)")
+            y -= 12*mm
+
+            for q in subj_qs:
+                marks = float(q.get("marks", q.get("weightage", 1)))
+                qtext = str(q.get("question", ""))
+                q_lines = wrap_text(f"Q{q['id']}.  {qtext}", max_chars=88)
+                needed  = (len(q_lines) * 5 + 6) * mm
+                if y - needed < 20*mm:
+                    y = new_page()
+
+                c.setFillColor(rl_colors.black)
+                c.setFont("Helvetica-Bold", 10)
+                for li, line in enumerate(q_lines):
+                    c.drawString(MARGIN + (5*mm if li > 0 else 0), y - (li + 1) * 5*mm, line)
+                c.setFont("Helvetica", 8)
+                c.setFillColor(rl_colors.HexColor('#6b7280'))
+                m_str = f"[{int(marks) if marks == int(marks) else marks} marks]"
+                c.drawRightString(W - MARGIN, y - 5*mm, m_str)
+                y -= (len(q_lines) * 5 + 8) * mm
+
+        c.save()
+        buf.seek(0)
+        return buf.read()
+
+    except Exception as e:
+        log.error(f"[QUESTION-PAPER] Generation failed: {e}", exc_info=True)
+        return b""
+
+
+
 def _load_exam(exam_id: str) -> Optional[dict]:
     if exam_id in exams_registry:
         return exams_registry[exam_id]
