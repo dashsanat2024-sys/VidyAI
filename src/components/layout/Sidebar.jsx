@@ -1,210 +1,139 @@
+/**
+ * Sidebar.jsx — Paarthivi Smart Learning
+ * Navigation sidebar matching the brand CSS (index.css).
+ * Uses useApp() for panel switching, useAuth() for user info + role guards.
+ */
+import { useApp }  from '../../context/AppContext'
 import { useAuth } from '../../context/AuthContext'
-import { useApp } from '../../context/AppContext'
 
-const NAV_GROUPS = {
-  student: [
-    {
-      label: 'Core Learning',
-      items: [
-        { id: 'dashboard',            icon: '⊞',  label: 'Dashboard' },
-        { id: 'curriculum',           icon: '🏛️',  label: 'Curriculum Hub' },
-        { id: 'chat',                 icon: '💬',  label: 'AI Study Chat' },
-        { id: 'interactive-practice', icon: '🎯',  label: 'Question Practice' },
-      ]
-    }
-  ],
-  teacher: [
-    {
-      label: 'Academic Hub',
-      items: [
-        { id: 'dashboard',            icon: '⊞',  label: 'Dashboard' },
-        { id: 'curriculum',           icon: '🏛️',  label: 'Curriculum Hub' },
-        { id: 'chat',                 icon: '💬',  label: 'AI Study Chat' },
-        { id: 'qmaster',              icon: '🖋️',  label: 'Question Master' },
-        { id: 'interactive-practice', icon: '🎯',  label: 'Question Practice' },
-      ]
-    },
-    {
-      label: 'Assessment',
-      items: [
-        { id: 'eval', icon: '📋', label: 'Evaluation Central' },
-      ]
-    }
-  ],
-  tutor: [
-    {
-      label: 'Academic Hub',
-      items: [
-        { id: 'dashboard',            icon: '⊞',  label: 'Dashboard' },
-        { id: 'curriculum',           icon: '🏛️',  label: 'Curriculum Hub' },
-        { id: 'chat',                 icon: '💬',  label: 'AI Study Chat' },
-        { id: 'qmaster',              icon: '🖋️',  label: 'Question Master' },
-        { id: 'interactive-practice', icon: '🎯',  label: 'Question Practice' },
-      ]
-    },
-    {
-      label: 'Assessment',
-      items: [
-        { id: 'eval', icon: '📋', label: 'Evaluation Central' },
-      ]
-    }
-  ],
-  parent: [
-    {
-      label: 'Parent Portal',
-      items: [
-        { id: 'dashboard', icon: '⊞',  label: 'Dashboard' },
-        { id: 'analytics', icon: '📈',  label: 'Child Progress' },
-        { id: 'eval',      icon: '📋',  label: 'Exam Reports' },
-      ]
-    }
-  ],
-  school_admin: [
-    {
-      label: 'Administration',
-      items: [
-        { id: 'dashboard',  icon: '⊞',  label: 'Dashboard' },
-        { id: 'institute',  icon: '🏢',  label: 'Institute Manager' },
-        { id: 'analytics',  icon: '📈',  label: 'Analytics' },
-      ]
-    },
-    {
-      label: 'Assessment',
-      items: [
-        { id: 'qmaster', icon: '🖋️', label: 'Question Master' },
-        { id: 'eval',    icon: '📋', label: 'Evaluation Central' },
-      ]
-    }
-  ],
-  school: [
-    {
-      label: 'Administration',
-      items: [
-        { id: 'dashboard', icon: '⊞',  label: 'Dashboard' },
-        { id: 'institute', icon: '🏢',  label: 'Institute Manager' },
-        { id: 'analytics', icon: '📈',  label: 'Analytics' },
-      ]
-    },
-    {
-      label: 'Assessment',
-      items: [
-        { id: 'qmaster', icon: '🖋️', label: 'Question Master' },
-        { id: 'eval',    icon: '📋', label: 'Evaluation Central' },
-      ]
-    }
-  ],
-  admin: [
-    {
-      label: 'Administration',
-      items: [
-        { id: 'dashboard',  icon: '⊞',  label: 'Dashboard' },
-        { id: 'institute',  icon: '🏢',  label: 'User Management' },
-        { id: 'analytics',  icon: '📈',  label: 'Analytics' },
-      ]
-    },
-    {
-      label: 'Content',
-      items: [
-        { id: 'curriculum', icon: '🏛️',  label: 'Curriculum Hub' },
-        { id: 'qmaster',    icon: '🖋️',  label: 'Question Master' },
-        { id: 'eval',       icon: '📋',  label: 'Evaluation Central' },
-      ]
-    }
-  ],
-}
-
-const ROLE_LABELS = {
-  student:     '🎒 Student',
-  teacher:     '👩‍🏫 Teacher',
-  tutor:       '📚 Tutor',
-  parent:      '👨‍👩‍👧 Parent',
-  school_admin:'🏫 School Admin',
-  school:      '🏫 School',
-  admin:       '⚙️ Admin',
-}
+const NAV = [
+  {
+    group: 'Learn',
+    items: [
+      { id: 'dashboard',            icon: '🏠', label: 'Dashboard'            },
+      { id: 'chat',                 icon: '💬', label: 'AI Tutor'              },
+      { id: 'curriculum',           icon: '📚', label: 'Curriculum Hub'        },
+      { id: 'interactive-practice', icon: '🎯', label: 'Practice Mode'         },
+    ],
+  },
+  {
+    group: 'Teach',
+    roles: ['teacher', 'tutor', 'school_admin', 'admin'],
+    items: [
+      { id: 'qmaster',  icon: '📋', label: 'Question Master' },
+      { id: 'qgen',     icon: '✨', label: 'Quick QGen'      },
+      { id: 'eval',     icon: '📊', label: 'Evaluate'        },
+      { id: 'reports',  icon: '📈', label: 'Reports'         },
+    ],
+  },
+  {
+    group: 'Manage',
+    roles: ['school_admin', 'admin'],
+    items: [
+      { id: 'institute', icon: '🏫', label: 'Institute'  },
+      { id: 'analytics', icon: '📉', label: 'Analytics'  },
+    ],
+  },
+]
 
 export default function Sidebar({ isOpen, onClose }) {
-  const { me, logout } = useAuth()
   const { activePanel, setActivePanel } = useApp()
+  const { user, logout }               = useAuth()
+  const role = user?.role || 'student'
 
-  const role   = me?.role || 'student'
-  const groups = NAV_GROUPS[role] || NAV_GROUPS.student
-
-  const handleNav = (id) => {
+  const navigate = (id) => {
     setActivePanel(id)
-    if (window.innerWidth <= 768) onClose()
+    onClose?.()   // close mobile drawer
   }
 
   return (
     <>
-      <aside className={`sidebar ${isOpen ? 'open' : ''}`}>
+      {/* Mobile overlay */}
+      <div
+        className={`sb-overlay${isOpen ? ' show' : ''}`}
+        onClick={onClose}
+      />
 
-        {/* ── Brand Header ── */}
+      <aside className={`sidebar${isOpen ? ' open' : ''}`}>
+        {/* Brand header */}
         <div className="sb-header">
-          {/* Full horizontal logo — white version on dark background */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            {/* PNG logo — use white-friendly version on dark sidebar */}
-            <img
-              src="/paarthivi-icon.png"
-              alt="Paarthivi"
-              style={{
-                width: 36, height: 36,
-                objectFit: 'contain',
-                filter: 'brightness(0) invert(1)',  /* makes the coloured logo white */
-                flexShrink: 0,
-              }}
-            />
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <div style={{
+              width: '36px', height: '36px', borderRadius: '10px',
+              background: 'linear-gradient(135deg,#7c3aed,#2563eb)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              fontSize: '20px', flexShrink: 0,
+            }}>✦</div>
             <div>
-              <div style={{
-                fontFamily: 'var(--sans)', fontSize: 16, fontWeight: 800,
-                color: '#fff', letterSpacing: '.3px', lineHeight: 1.1,
-              }}>
-                Paarthivi
-              </div>
-              <div style={{
-                fontSize: 9, fontWeight: 600, color: 'rgba(167,139,250,.8)',
-                letterSpacing: '.6px', textTransform: 'uppercase', marginTop: 1,
-              }}>
-                Smart Learning
-              </div>
+              <div style={{ color: '#fff', fontWeight: '800', fontSize: '14px',
+                lineHeight: 1.2 }}>Paarthivi</div>
+              <div style={{ color: 'rgba(255,255,255,.45)', fontSize: '10px',
+                textTransform: 'uppercase', letterSpacing: '1px' }}>Smart Learning</div>
             </div>
           </div>
         </div>
 
-        {/* ── Navigation ── */}
+        {/* Navigation */}
         <nav className="sb-nav">
-          {groups.map(group => (
-            <div key={group.label}>
-              <div className="nav-group-label">{group.label}</div>
-              {group.items.map(item => (
-                <div key={item.id}
-                  className={`nav-item ${activePanel === item.id ? 'active' : ''}`}
-                  onClick={() => handleNav(item.id)}>
-                  <span className="nav-item-icon">{item.icon}</span>
-                  <span>{item.label}</span>
-                </div>
-              ))}
-            </div>
-          ))}
+          {NAV.map(group => {
+            // Role-gate entire group
+            if (group.roles && !group.roles.includes(role)) return null
+            return (
+              <div key={group.group}>
+                <div className="nav-group-label">{group.group}</div>
+                {group.items.map(item => {
+                  // Per-item role gate
+                  if (item.roles && !item.roles.includes(role)) return null
+                  const active = activePanel === item.id
+                  return (
+                    <div
+                      key={item.id}
+                      className={`nav-item${active ? ' active' : ''}`}
+                      onClick={() => navigate(item.id)}
+                    >
+                      <span className="nav-item-icon">{item.icon}</span>
+                      <span>{item.label}</span>
+                      {item.badge && (
+                        <span style={{
+                          marginLeft: 'auto', background: '#ef4444', color: '#fff',
+                          fontSize: '10px', fontWeight: '700', padding: '1px 6px',
+                          borderRadius: '999px',
+                        }}>{item.badge}</span>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            )
+          })}
         </nav>
 
-        {/* ── User footer ── */}
+        {/* User footer */}
         <div className="sb-footer">
           <div className="sb-user">
-            <div className="sb-av">{me?.name?.[0]?.toUpperCase() || 'U'}</div>
-            <div style={{ flex:1, overflow:'hidden' }}>
-              <div className="sb-username">{me?.name || 'User'}</div>
-              <div className="sb-role">{ROLE_LABELS[role] || role}</div>
+            <div className="sb-av">
+              {(user?.name || 'U').slice(0, 1).toUpperCase()}
+            </div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div className="sb-username">{user?.name || 'User'}</div>
+              <div className="sb-role">{role}</div>
             </div>
           </div>
-          <button className="btn-outline"
-            style={{ width:'100%', color:'rgba(255,255,255,.8)', borderColor:'rgba(255,255,255,.2)', fontSize:12 }}
-            onClick={logout}>
+          <button
+            style={{
+              width: '100%', padding: '8px', borderRadius: '8px',
+              background: 'rgba(255,255,255,.08)', border: '1px solid rgba(255,255,255,.12)',
+              color: 'rgba(255,255,255,.6)', fontSize: '12px', fontWeight: '600',
+              cursor: 'pointer', fontFamily: 'inherit', transition: '.15s',
+            }}
+            onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,.15)'}
+            onMouseLeave={e => e.currentTarget.style.background = 'rgba(255,255,255,.08)'}
+            onClick={logout}
+          >
             Sign Out
           </button>
         </div>
       </aside>
-      <div className={`sb-overlay ${isOpen ? 'show' : ''}`} onClick={onClose} />
     </>
   )
 }

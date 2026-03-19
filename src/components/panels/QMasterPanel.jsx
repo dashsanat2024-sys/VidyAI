@@ -9,6 +9,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { useAuth } from '../../context/AuthContext'
+import { useApp }  from '../../context/AppContext'
 
 const API = import.meta.env.VITE_API_URL || ''
 
@@ -676,7 +677,7 @@ function QuestionCard({ q, onDelete }) {
 }
 
 // ── Step 3: Review questions + print actions ───────────────────────────────────
-function ReviewAndPrint({ questions, examId, examMeta, token, onBack, onRegenerate, showToast }) {
+function ReviewAndPrint({ questions, examId, examMeta, token, onBack, onRegenerate, showToast, navigateTo }) {
   const [saving, setSaving]       = useState(false)
   const [savedId, setSavedId]     = useState(examId)   // generate-questions auto-saves
   const [qs, setQs]               = useState(questions)
@@ -831,6 +832,17 @@ function ReviewAndPrint({ questions, examId, examMeta, token, onBack, onRegenera
               </a>
             ))}
           </div>
+          {/* Go to Evaluation Central */}
+          <button
+            onClick={() => navigateTo?.('eval')}
+            style={{ width: '100%', padding: '11px', borderRadius: '10px',
+              background: '#eef2ff', border: '1.5px solid #c7d2fe',
+              color: '#3730a3', fontWeight: '700', fontSize: '13px',
+              cursor: 'pointer', fontFamily: 'inherit', marginTop: '6px',
+              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}
+          >
+            📊 Go to Evaluation Central → Upload Scanned Answer Sheets
+          </button>
         </div>
       )}
 
@@ -899,6 +911,7 @@ function ReviewAndPrint({ questions, examId, examMeta, token, onBack, onRegenera
 // ── Main QMasterPanel ──────────────────────────────────────────────────────────
 export function QMasterPanel({ showToast }) {
   const { token, user } = useAuth()
+  const { navigateTo }  = useApp()
   const [step, setStep]               = useState(0)   // 0=curriculum 1=config 2=review
   const [curriculum, setCurriculum]   = useState(null)
   const [generated, setGenerated]     = useState(null)
@@ -968,6 +981,7 @@ export function QMasterPanel({ showToast }) {
             onBack={() => setStep(0)}
             onRegenerate={handleRegenerate}
             showToast={showToast}
+            navigateTo={navigateTo}
           />
         )}
       </div>

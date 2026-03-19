@@ -12,6 +12,7 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useAuth } from '../../context/AuthContext'
+import { useApp }  from '../../context/AppContext'
 
 // ── API helper ────────────────────────────────────────────────────────────────
 const API = import.meta.env.VITE_API_URL || ''
@@ -25,7 +26,11 @@ async function apiFetch(path, opts = {}, token) {
     },
   })
   const data = await res.json().catch(() => ({}))
-  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`)
+  if (!res.ok) {
+    const err = new Error(data.error || `HTTP ${res.status}`)
+    err.data  = data   // attach full response for structured errors
+    throw err
+  }
   return data
 }
 
@@ -141,7 +146,7 @@ const S = {
     border: `1px solid ${pct >= 60 ? '#bbf7d0' : pct >= 40 ? '#fde68a' : '#fecaca'}`,
   }),
   qRow: (correct) => ({
-    display: 'grid', gridTemplateColumns: '50px 1fr 120px 80px 80px',
+    display: 'grid', gridTemplateColumns: '50px 1fr 150px 90px 90px',
     gap: '12px', alignItems: 'center',
     padding: '12px 16px', borderRadius: '8px',
     background: correct === true ? '#f0fdf4' : correct === false ? '#fef2f2' : '#f8fafc',
@@ -471,13 +476,13 @@ function QuestionTable({ questions, questionWise }) {
           <div style={S.sectionTitle}>Section A — Objective Questions</div>
           <div style={{
             display: 'grid',
-            gridTemplateColumns: '50px 1fr 140px 90px 90px',
+            gridTemplateColumns: '50px 1fr 150px 90px 90px',
             gap: '8px', padding: '8px 16px', marginBottom: '6px',
             fontSize: '11px', fontWeight: '700', color: '#94a3b8',
             textTransform: 'uppercase', letterSpacing: '.04em',
           }}>
             <span>Q#</span><span>Question</span>
-            <span>Student Ans.</span><span>Marks</span><span>Result</span>
+            <span>Student / Correct</span><span>Marks</span><span>Result</span>
           </div>
           {obj.map(ev => {
             const q = qMap[ev.question_id] || {}
@@ -487,10 +492,17 @@ function QuestionTable({ questions, questionWise }) {
                 <span style={{ color: '#374151', fontSize: '12px' }}>
                   {q.question ? q.question.slice(0, 80) + (q.question.length > 80 ? '…' : '') : '—'}
                 </span>
-                <span style={{ fontWeight: '600',
-                  color: ev.student_answer ? '#1e293b' : '#94a3b8' }}>
-                  {ev.student_answer || '—'}
-                </span>
+                <div style={{ fontSize: '12px' }}>
+                  <div style={{ fontWeight: '600',
+                    color: ev.student_answer ? (ev.is_correct ? '#16a34a' : '#dc2626') : '#94a3b8' }}>
+                    {ev.student_answer || '—'}
+                  </div>
+                  {!ev.is_correct && ev.valid_answers?.length > 0 && (
+                    <div style={{ color: '#16a34a', fontSize: '11px', marginTop: '2px' }}>
+                      ✓ {ev.valid_answers[0]}
+                    </div>
+                  )}
+                </div>
                 <span style={{ fontWeight: '600' }}>
                   {ev.awarded_marks}/{ev.max_marks}
                 </span>
@@ -668,6 +680,7 @@ function AsyncPoller({ taskId, token, onComplete, onError }) {
 
 // ── Tab: Single Student Evaluation ────────────────────────────────────────────
 function SingleEvalTab({ token, showToast }) {
+  const { navigateTo } = useApp()
   const [examId, setExamId]       = useState('')
   const [examData, setExamData]   = useState(null)
   const [file, setFile]           = useState(null)
@@ -706,13 +719,32 @@ function SingleEvalTab({ token, showToast }) {
       }, token)
 
       if (data.async && data.task_id) {
-        setTaskId(data.task_id)   // trigger async poller
+        setTaskId(data.task_id)
       } else {
         setResult(data)
         showToast('Evaluation complete!', 'success')
       }
     } catch (e) {
-      setError(e.message)
+      // Structured exam ID mismatch error
+      if (e.data?.exam_id_mismatch) {
+        setError(
+          `⚠️ Wrong answer sheet uploaded.
+
+` +
+          `The scanned sheet has Exam ID: ${e.data.sheet_exam_id}
+` +
+          `You selected exam: ${e.data.selected_exam_id}
+
+` +
+          `Please either:
+` +
+          `• Upload the answer sheet that was printed for this exam, OR
+` +
+          `• Select the correct exam from the "Select Exam" dropdown above`
+        )
+      } else {
+        setError(e.message)
+      }
     } finally {
       setLoading(false)
     }
@@ -793,7 +825,11 @@ function SingleEvalTab({ token, showToast }) {
             <FileDropZone file={file} onChange={setFile} />
           </div>
 
-          {error && <div style={S.alert('error')}>⚠️ {error}</div>}
+          {error && (
+            <div style={{ ...S.alert('error'), whiteSpace: 'pre-line' }}>
+              {error}
+            </div>
+          )}
 
           <button
             style={{ ...S.btn('primary'), width: '100%', padding: '14px' }}
@@ -842,6 +878,10 @@ function SingleEvalTab({ token, showToast }) {
                 </div>
               </div>
               <button style={S.btn('ghost')} onClick={handleReset}>← New Evaluation</button>
+              <button
+                style={{ ...S.btn('ghost'), color: '#6d28d9', border: '1.5px solid #c7d2fe', background: '#eef2ff' }}
+                onClick={() => navigateTo('reports')}
+              >📈 All Reports</button>
             </div>
 
             <ScoreSummary result={result.result || {}} />
@@ -850,6 +890,23 @@ function SingleEvalTab({ token, showToast }) {
             <div style={S.progressBar()}>
               <div style={S.progressFill(result.result?.percentage || 0)} />
             </div>
+
+            {/* PDF report download */}
+            {result.evaluation_id && (
+              <div style={{ marginTop: '14px', display: 'flex', alignItems: 'center',
+                gap: '10px', padding: '12px 14px', background: '#f8fafc',
+                borderRadius: '10px', border: '1px solid #e2e8f0' }}>
+                <span style={{ fontSize: '13px', color: '#374151', flex: 1 }}>
+                  📄 Detailed evaluation report (PDF)
+                </span>
+                <a
+                  href={`${API}/api/evaluations/report/${result.evaluation_id}`}
+                  target="_blank" rel="noopener noreferrer"
+                  style={{ ...S.btn('primary'), textDecoration: 'none',
+                    fontSize: '12px', padding: '7px 14px', display: 'inline-flex' }}
+                >Download Report</a>
+              </div>
+            )}
           </div>
 
           <div style={S.card}>

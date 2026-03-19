@@ -14,6 +14,7 @@ import InteractivePracticePanel from '../components/panels/InteractivePracticePa
 import CurriculumPanel from '../components/panels/CurriculumPanel'
 import { QMasterPanel } from '../components/panels/QMasterPanel'
 import { InstitutePanel, AnalyticsPanel } from '../components/panels/OtherPanels'
+import ReportPanel from '../components/panels/ReportPanel'
 
 // ── Panel slot: fills the full content area, scrolls independently ────────
 // Using position:absolute + inset:0 is the most reliable cross-browser way
@@ -63,6 +64,7 @@ export default function AppPage() {
           <PanelSlot active={activePanel === 'interactive-practice'}><InteractivePracticePanel {...p} /></PanelSlot>
           <PanelSlot active={activePanel === 'institute'           }><InstitutePanel           {...p} /></PanelSlot>
           <PanelSlot active={activePanel === 'analytics'           }><AnalyticsPanel           {...p} /></PanelSlot>
+          <PanelSlot active={activePanel === 'reports'              }><ReportPanel              {...p} /></PanelSlot>
         </div>
       </div>
 
