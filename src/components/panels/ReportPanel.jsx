@@ -292,7 +292,7 @@ function IndividualReports({ token, showToast }) {
 
               <div style={{ display:'flex', gap:'5px', flexWrap:'wrap' }}>
                 <a
-                  href={`${API}/api/evaluations/report/${ev.evaluation_id}`}
+                  href={`${API}/api/evaluations/report/${ev.evaluation_id}?token=${token}`}
                   target="_blank" rel="noopener noreferrer"
                   style={{ ...S.btn('ghost', { fontSize:'11px', padding:'4px 8px',
                     textDecoration:'none', display:'inline-flex' }) }}
@@ -537,7 +537,7 @@ function ClassReport({ token, showToast }) {
                 </div>
                 <GradeBadge pct={s.percentage} grade={s.grade} size={14} />
                 <a
-                  href={`${API}/api/evaluations/report/${s.evaluation_id}`}
+                  href={`${API}/api/evaluations/report/${s.evaluation_id}?token=${token}`}
                   target="_blank" rel="noopener noreferrer"
                   style={{ ...S.btn('ghost', { fontSize:'11px', padding:'5px 10px',
                     textDecoration:'none', display:'inline-flex', flexShrink:0 }) }}
@@ -710,7 +710,7 @@ function StudentHistory({ token, showToast }) {
                             </div>
                           </div>
                           <GradeBadge pct={h.percentage} grade={h.grade} />
-                          <a href={`${API}/api/evaluations/report/${h.evaluation_id}`}
+                          <a href={`${API}/api/evaluations/report/${h.evaluation_id}?token=${token}`}
                             target="_blank" rel="noopener noreferrer"
                             style={{ ...S.btn('ghost', { fontSize:'11px', padding:'4px 8px',
                               textDecoration:'none', display:'inline-flex' }) }}>

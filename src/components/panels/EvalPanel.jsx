@@ -900,7 +900,7 @@ function SingleEvalTab({ token, showToast }) {
                   📄 Detailed evaluation report (PDF)
                 </span>
                 <a
-                  href={`${API}/api/evaluations/report/${result.evaluation_id}`}
+                  href={`${API}/api/evaluations/report/${result.evaluation_id}?token=${token}`}
                   target="_blank" rel="noopener noreferrer"
                   style={{ ...S.btn('primary'), textDecoration: 'none',
                     fontSize: '12px', padding: '7px 14px', display: 'inline-flex' }}
