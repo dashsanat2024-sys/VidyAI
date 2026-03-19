@@ -1,5 +1,6 @@
-# VidyAI — Production Dependencies
-# Stack: Flask + MongoDB (primary) + JSON (fallback) + LangChain + OpenAI GPT-4o
+# VidyAI / Parvidya — Production Dependencies
+# Stack: Flask + MongoDB + LangChain + OpenAI GPT-4o + Image-Diff OCR
+# Updated: 2026-03-19
 
 # ── Web Framework ──────────────────────────────────────────────────────────────
 flask>=3.0.0
@@ -14,13 +15,23 @@ langchain>=0.2.0
 langchain-core>=0.2.0
 langchain-openai>=0.1.0
 langchain-text-splitters>=0.2.0
-langchain-community>=0.2.0      # PyPDFLoader (eval answer extraction)
+langchain-community>=0.2.0      # PyPDFLoader (text extraction from digital PDFs)
 
 # ── PDF Processing ────────────────────────────────────────────────────────────
-pypdf>=4.0.0
-pdf2image>=1.17.0               # Convert scanned PDF pages -> images for Vision OCR
-Pillow>=10.0.0                  # Image processing required by pdf2image
-numpy>=1.24.0                   # Required for pixel-diff handwriting isolation
+pypdf>=4.0.0                    # Extract text layer from digital PDFs
+pdf2image>=1.17.0               # Convert scanned PDF pages → PIL images for OCR
+                                # IMPORTANT: requires system package 'poppler-utils':
+                                #   Ubuntu/Debian: apt-get install -y poppler-utils
+                                #   macOS:         brew install poppler
+                                #   Alpine:        apk add poppler-utils
+                                #   Vercel/Docker: see deployment notes below
+
+# ── Image Processing (handwriting OCR pipeline) ───────────────────────────────
+Pillow>=10.0.0                  # PIL — image manipulation, contrast enhancement
+numpy>=1.26.0                   # Pixel-diff array operations for handwriting isolation
+
+# ── PDF Generation (blank answer sheet for image-diff) ───────────────────────
+reportlab>=4.0.0                # Generate blank answer sheet PDFs from exam data
 
 # ── MongoDB — Primary Database ────────────────────────────────────────────────
 pymongo[srv]>=4.6.0             # [srv] = SRV DNS support for Atlas
@@ -33,16 +44,45 @@ python-dotenv>=1.0.0
 # ── Tokenisation (LangChain token counting) ───────────────────────────────────
 tiktoken>=0.7.0
 
-# ── PDF Generation (question paper placeholder PDFs) ─────────────────────────
-reportlab>=4.0.0
+# ── Async Task Queue (optional — graceful degradation if Redis unavailable) ───
+celery>=5.3.0                   # Async evaluation tasks (bulk / multi-student)
+redis>=5.0.0                    # Celery broker + result backend
+                                # Requires Redis server: REDIS_URL env var
+                                # Falls back to synchronous evaluation if unavailable
 
 # ── Email ─────────────────────────────────────────────────────────────────────
 # Uses stdlib smtplib — no extra package needed
 
-# ── Vercel Deployment Notes ───────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+#  DEPLOYMENT NOTES
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ── Local Development ─────────────────────────────────────────────────────────
+# pip install -r requirements.txt
+# Install poppler (required by pdf2image):
+#   macOS:          brew install poppler
+#   Ubuntu/Debian:  sudo apt-get install -y poppler-utils
+# Optional Redis (for async evaluation):
+#   macOS:          brew install redis && brew services start redis
+#   Ubuntu/Debian:  sudo apt-get install -y redis-server
+
+# ── Docker ────────────────────────────────────────────────────────────────────
+# Add to Dockerfile:
+#   RUN apt-get update && apt-get install -y poppler-utils && rm -rf /var/lib/apt/lists/*
+
+# ── Vercel (Python Serverless) ────────────────────────────────────────────────
 # 1. Set env vars in Vercel dashboard:
 #      OPENAI_API_KEY, MONGO_URI, SMTP_HOST, SMTP_USER, SMTP_PASS, SMTP_PORT
-# 2. Vercel Python serverless runtime supports packages above.
-# 3. /tmp is the only writable directory on Vercel (IS_VERCEL=1 auto-detects this).
-# 4. Build the React frontend first:  cd vidyai-react && npm run build
+#      REDIS_URL (optional — for async bulk evaluation)
+# 2. /tmp is the only writable directory (IS_VERCEL=1 auto-detects this).
+# 3. poppler-utils: Vercel Lambda does NOT support apt-get.
+#    For Vercel deployment, pdf2image/poppler won't work.
+#    The app gracefully falls back to GPT-4o vision-only OCR (Path C).
+#    For full image-diff OCR support, use Railway, Render, or Docker instead.
+# 4. Build React frontend first:  cd vidyai-react && npm run build
 # 5. Point Flask static_folder to vidyai-react/dist/
+
+# ── Railway / Render / Fly.io ─────────────────────────────────────────────────
+# These platforms support custom buildpacks. Add a Nixpacks config or Dockerfile:
+#   apt-get install -y poppler-utils
+# All features including image-diff OCR work fully on these platforms.

@@ -13,6 +13,9 @@ API base:     http://localhost:5001/api/...
 """
 
 import os, json, re, uuid, hashlib, random, base64, shutil, smtplib
+import logging
+import time as _time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from datetime import datetime
@@ -78,6 +81,50 @@ ALLOWED = {"pdf","txt","md","mp3","mp4","wav","m4a","jpg","jpeg","png","webp"}
 app = Flask(__name__, static_folder="dist", static_url_path="")
 CORS(app, resources={r"/api/*": {"origins": "*"}})
 app.config["MAX_CONTENT_LENGTH"] = 100 * 1024 * 1024
+
+# ── Structured logging ────────────────────────────────────────────────────────
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+log = logging.getLogger("parvidya.api")
+
+# ── Celery integration (optional — graceful degradation if Redis unavailable) ─
+CELERY_OK = False
+celery_app = None
+try:
+    from celery import Celery as _Celery
+    REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+    celery_app = _Celery(
+        "parvidya_tasks",
+        broker=REDIS_URL,
+        backend=REDIS_URL,
+    )
+    celery_app.conf.update(
+        task_serializer="json", result_serializer="json",
+        accept_content=["json"], task_track_started=True,
+    )
+    # Quick connectivity check
+    celery_app.control.inspect(timeout=1).ping()
+    CELERY_OK = True
+    log.info("Celery/Redis connected ✓ — async evaluation enabled")
+except Exception as _ce:
+    log.warning(f"Celery/Redis unavailable — falling back to sync evaluation: {_ce}")
+
+# ── OpenAI rate limiter (2 req/s to stay within tier limits) ─────────────────
+class _RateLimiter:
+    def __init__(self, rate: float = 2.0):
+        self._min_gap = 1.0 / rate
+        self._last    = 0.0
+    def wait(self):
+        now = _time.monotonic()
+        gap = now - self._last
+        if gap < self._min_gap:
+            _time.sleep(self._min_gap - gap)
+        self._last = _time.monotonic()
+
+_openai_limiter = _RateLimiter(rate=2.0)
 
 @app.route("/api/uploads/<path:filename>")
 def download_upload(filename):
@@ -714,9 +761,10 @@ def _validate_ocr_answers(raw_answers: dict, exam_questions: list) -> Dict[int, 
     valid_ids = {int(q.get("id", 0)) for q in exam_questions} if exam_questions else None
 
     NOISE_PATTERNS = re.compile(
-        r"(?:section\s+[AB]|objective\s+questions?|subjective\s+questions?|"
-        r"general\s+instructions?|total\s+marks|roll\s+number|student\s+name|"
-        r"marks?\s+obtained|date:|answer\s+sheet|vidyai|cbse|icse|marks?\])",
+        r"^(?:section\s+[AB]|objective\s+questions?|subjective\s+questions?|"
+        r"general\s+instructions?|total\s+marks|roll\s+number|student\s+name|"
+        r"marks\s+obtained|answer\s+sheet|vidyai\s+school|"
+        r"\d{1,2}/\d{1,2}/\d{4})",  # standalone date strings
         re.IGNORECASE
     )
     # MCQ answer: should be a single letter A-D (possibly with punctuation)
@@ -754,7 +802,7 @@ def _validate_ocr_answers(raw_answers: dict, exam_questions: list) -> Dict[int, 
         if val.endswith("?") and len(val) > 40:
             print(f"[OCR-VALIDATE] Rejected Q{qid} question-text: {val[:60]}")
             continue
-        if len(val) < 3:
+        if len(val) < 2:
             continue
 
         result[qid] = val
@@ -927,133 +975,207 @@ def _diff_and_ocr_answers(scanned_pdf_path: str, exam: dict) -> Dict[int, str]:
         print(f"[DIFF-OCR] pdf2image failed: {e}")
         return {}
 
-    answers: Dict[int, str] = {}
-    client = _oai.OpenAI(api_key=OPENAI_API_KEY)
+    log.info(f"[DIFF-OCR] Processing {len(blank_pages)} page(s) in parallel")
+    return _ocr_page_parallel(
+        images=scanned_pages,
+        exam_questions=questions,
+        exam=exam,
+        blank_pages=blank_pages,
+    )
 
-    for page_idx, (blank_page, scanned_page) in enumerate(
-            zip(blank_pages, scanned_pages)):
 
-        # ── Step 3: pixel diff ────────────────────────────────────────────────
-        # Resize scanned to match blank (alignment)
-        if scanned_page.size != blank_page.size:
-            scanned_page = scanned_page.resize(blank_page.size, Image.LANCZOS)
 
-        blank_arr   = np.array(blank_page.convert("RGB")).astype(np.int16)
-        scanned_arr = np.array(scanned_page.convert("RGB")).astype(np.int16)
+# ── File-hash cache helper ────────────────────────────────────────────────────
+def _file_hash(path: str) -> str:
+    """MD5 of file contents — stable cache key independent of filename."""
+    h = hashlib.md5()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(65536), b""):
+            h.update(chunk)
+    return h.hexdigest()
 
-        # Handwriting = pixels that became darker in the scanned version
-        diff = blank_arr - scanned_arr          # positive = darker in scanned
-        darkening = diff.mean(axis=2)           # per-pixel average darkening
-        handwriting_mask = darkening > 20       # threshold: 20 grey levels darker
+def _cache_get(file_hash: str, exam_id: str) -> Optional[dict]:
+    """Return cached evaluation payload if it exists, else None."""
+    if not MONGO_OK:
+        return None
+    try:
+        doc = mongo_db["eval_cache"].find_one({"cache_key": f"{file_hash}:{exam_id}"})
+        if doc:
+            doc.pop("_id", None)
+            log.info(f"[CACHE HIT] hash={file_hash[:8]} exam={exam_id}")
+            return doc.get("payload")
+    except Exception as e:
+        log.warning(f"[CACHE] get error: {e}")
+    return None
 
-        # Build clean handwriting-only image (white bg, black ink)
-        hw_img_arr = np.ones_like(blank_arr, dtype=np.uint8) * 255
-        hw_img_arr[handwriting_mask] = 0
-        hw_full = Image.fromarray(hw_img_arr)
+def _cache_set(file_hash: str, exam_id: str, payload: dict):
+    """Write evaluation payload to cache."""
+    if not MONGO_OK:
+        return
+    try:
+        mongo_db["eval_cache"].update_one(
+            {"cache_key": f"{file_hash}:{exam_id}"},
+            {"$set": {
+                "cache_key": f"{file_hash}:{exam_id}",
+                "payload":   payload,
+                "cached_at": _now(),
+            }},
+            upsert=True,
+        )
+    except Exception as e:
+        log.warning(f"[CACHE] set error: {e}")
 
-        H_px, W_px = blank_arr.shape[:2]
 
-        # ── Step 4: map questions to page bands ──────────────────────────────
-        # Divide the usable page area equally, one band per question on this page.
-        qs_per_page = max(1, len(questions) // max(len(blank_pages), 1))
-        page_qs = questions[page_idx * qs_per_page:(page_idx + 1) * qs_per_page]
-        if page_idx == len(blank_pages) - 1:
-            page_qs = questions[page_idx * qs_per_page:]
-        if not page_qs:
-            continue
+def _ocr_page_parallel(images: list, exam_questions: list, exam: dict,
+                        blank_pages: list = None) -> Dict[int, str]:
+    """
+    Run OCR on multiple PDF pages in parallel using ThreadPoolExecutor.
+    Each page is processed independently; results are merged.
+    Uses image-diff if blank_pages supplied, else falls back to enhanced vision.
+    """
+    import io as _io
+    import numpy as _np
+    from PIL import Image, ImageEnhance
 
-        header_frac = 0.18 if page_idx == 0 else 0.05
-        header_px   = int(H_px * header_frac)
-        usable_px   = H_px - header_px
-        band_px     = usable_px // len(page_qs)
+    combined: Dict[int, str] = {}
 
-        for q_idx, q in enumerate(page_qs):
-            qid   = int(q.get("id", 0))
-            qtype = q.get("type", "objective")
+    obj_qs  = [q for q in exam_questions if q.get("type","objective") == "objective"]
+    subj_qs = [q for q in exam_questions if q.get("type","objective") != "objective"]
+    obj_ids  = ", ".join(str(q["id"]) for q in obj_qs)  or "none"
+    subj_ids = ", ".join(str(q["id"]) for q in subj_qs) or "none"
+    q_ref    = "\n".join(
+        f"Q{q['id']}: {str(q.get('question',''))[:70]}"
+        for q in sorted(exam_questions, key=lambda x: int(x.get("id",0)))
+    )
 
-            y_start = header_px + q_idx * band_px
-            y_end   = min(y_start + band_px + 10, H_px)
+    def _process_one_page(args):
+        page_idx, img = args
+        try:
+            import openai as _oai_local
+            client = _oai_local.OpenAI(api_key=OPENAI_API_KEY)
 
-            if qtype == "objective":
-                # "Answer: ___" sits at ~65-80% down the block.
-                # Use a wide window (40%-130% of band) to capture it
-                # even if layout estimation is off by ±half a band.
-                crop_y_start = max(0,    y_start + int(band_px * 0.40))
-                crop_y_end   = min(H_px, y_start + int(band_px * 1.30))
+            if blank_pages and page_idx < len(blank_pages):
+                # ── Diff path ─────────────────────────────────────────────────
+                blank_img = blank_pages[page_idx]
+                if img.size != blank_img.size:
+                    img = img.resize(blank_img.size, Image.LANCZOS)
+                blank_arr   = _np.array(blank_img.convert("RGB")).astype(_np.int16)
+                scanned_arr = _np.array(img.convert("RGB")).astype(_np.int16)
+                diff        = (blank_arr - scanned_arr).mean(axis=2)
+                mask        = diff > 20
+                hw_arr      = _np.ones_like(blank_arr, dtype=_np.uint8) * 255
+                hw_arr[mask] = 0
+
+                H_px, W_px = hw_arr.shape[:2]
+                qs_per_page = max(1, len(exam_questions) // max(len(images), 1))
+                page_qs = exam_questions[page_idx * qs_per_page:]
+                if page_idx < len(images) - 1:
+                    page_qs = exam_questions[page_idx * qs_per_page:
+                                             (page_idx + 1) * qs_per_page]
+
+                if not page_qs:
+                    return {}
+
+                header_px = int(H_px * (0.18 if page_idx == 0 else 0.05))
+                band_px   = (H_px - header_px) // len(page_qs)
+                page_answers: Dict[int, str] = {}
+
+                for q_idx, q in enumerate(page_qs):
+                    qid   = int(q.get("id", 0))
+                    qtype = q.get("type", "objective")
+                    y_start = header_px + q_idx * band_px
+                    if qtype == "objective":
+                        cy_s = max(0,    y_start + int(band_px * 0.40))
+                        cy_e = min(H_px, y_start + int(band_px * 1.30))
+                    else:
+                        cy_s = max(0,    y_start + int(band_px * 0.15))
+                        cy_e = min(H_px, y_start + int(band_px * 1.10))
+
+                    crop = hw_arr[cy_s:cy_e, :, :]
+                    if (crop < 128).sum() < 50:
+                        continue
+
+                    crop_img = ImageEnhance.Contrast(
+                        Image.fromarray(crop)
+                    ).enhance(2.0)
+                    buf = _io.BytesIO()
+                    crop_img.save(buf, format="PNG")
+                    crop_b64 = base64.b64encode(buf.getvalue()).decode()
+
+                    ocr_p = (
+                        f"This shows ONLY handwritten ink (printed text removed). "
+                        f"Q{qid} is {'MCQ — read the letter A/B/C/D' if qtype == 'objective' else 'written — read all text'}. "
+                        f"Return JSON only: " +
+                        ('{"answer":"A"}' if qtype == "objective" else '{"answer":"student wrote this"}')
+                    )
+                    _openai_limiter.wait()
+                    resp = client.chat.completions.create(
+                        model=OPENAI_MODEL, temperature=0,
+                        response_format={"type": "json_object"},
+                        messages=[{"role": "user", "content": [
+                            {"type": "text", "text": ocr_p},
+                            {"type": "image_url", "image_url": {
+                                "url": f"data:image/png;base64,{crop_b64}", "detail": "high"
+                            }}
+                        ]}]
+                    )
+                    val = json.loads(resp.choices[0].message.content).get("answer", "").strip()
+                    if val:
+                        if qtype == "objective":
+                            m = re.search(r"\b([A-D])\b", val, re.IGNORECASE)
+                            if m:
+                                page_answers[qid] = m.group(1).upper()
+                        else:
+                            page_answers[qid] = val
+                return page_answers
+
             else:
-                # Subjective: written text fills blank space after question heading.
-                # Crop from 15% of band through end-of-band + 10% overflow.
-                crop_y_start = max(0,    y_start + int(band_px * 0.15))
-                crop_y_end   = min(H_px, y_start + int(band_px * 1.10))
+                # ── Enhanced vision path (no blank reference) ─────────────────
+                enhanced = ImageEnhance.Contrast(img.convert("L")).enhance(2.5).convert("RGB")
+                buf = _io.BytesIO()
+                enhanced.save(buf, format="PNG")
+                img_b64 = base64.b64encode(buf.getvalue()).decode()
 
-            crop_arr = hw_img_arr[crop_y_start:crop_y_end, :, :]
-
-            # Skip if no ink pixels in this region
-            if (crop_arr < 128).sum() < 50:   # fewer than 50 dark pixels
-                print(f"[DIFF-OCR] Q{qid}: no ink detected in region — skipping")
-                continue
-
-            # ── Step 5: send crop to GPT-4o Vision ───────────────────────────
-            crop_img = Image.fromarray(crop_arr)
-            # Enhance contrast for better OCR
-            from PIL import ImageEnhance
-            crop_img = ImageEnhance.Contrast(crop_img).enhance(2.0)
-
-            crop_buf = _io.BytesIO()
-            crop_img.save(crop_buf, format="PNG")
-            crop_b64 = base64.b64encode(crop_buf.getvalue()).decode()
-
-            if qtype == "objective":
-                ocr_prompt = (
-                    f"This image shows ONLY the handwritten content from a student's answer sheet "
-                    f"(all printed text has been removed). "
-                    f"Q{qid} is an MCQ. The student wrote or circled one letter: A, B, C, or D.\n"
-                    f"Read the handwritten letter and return ONLY valid JSON: "
-                    + '{"answer": "A"}' +
-                    "\nIf you cannot read any letter, return: {\"answer\": \"\"}"
+                prompt = (
+                    "Scanned student answer sheet — contrast boosted so handwriting "
+                    "is very dark, printed text is medium grey.\n"
+                    "ONLY extract text DARKER than surrounding print.\n"
+                    f"Questions (printed — ignore): {q_ref}\n\n"
+                    f"Objective ({obj_ids}): dark letter A/B/C/D in Answer: blank.\n"
+                    f"Subjective ({subj_ids}): dark handwritten sentences below question.\n"
+                    "Return ONLY JSON: " + '{"answers":{"1":"A","7":"student wrote..."}}' 
                 )
-            else:
-                ocr_prompt = (
-                    f"This image shows ONLY the handwritten content from a student's answer sheet "
-                    f"(all printed text has been removed by image processing). "
-                    f"Q{qid} is a written question. Read all handwritten text visible and "
-                    f"return ONLY valid JSON: " +
-                    '{"answer": "the student wrote this"}' +
-                    "\nIf nothing is written, return: {\"answer\": \"\"}"
-                )
-
-            try:
+                _openai_limiter.wait()
                 resp = client.chat.completions.create(
-                    model=OPENAI_MODEL,
-                    temperature=0,
+                    model=OPENAI_MODEL, temperature=0,
                     response_format={"type": "json_object"},
                     messages=[{"role": "user", "content": [
-                        {"type": "text",      "text": ocr_prompt},
+                        {"type": "text", "text": prompt},
                         {"type": "image_url", "image_url": {
-                            "url":    f"data:image/png;base64,{crop_b64}",
-                            "detail": "high"
+                            "url": f"data:image/png;base64,{img_b64}", "detail": "high"
                         }}
                     ]}]
                 )
                 raw = json.loads(resp.choices[0].message.content)
-                val = str(raw.get("answer", "")).strip()
-                if val:
-                    # For MCQ, extract just the letter
-                    if qtype == "objective":
-                        m = re.search(r"\b([A-D])\b", val, re.IGNORECASE)
-                        if m:
-                            answers[qid] = m.group(1).upper()
-                            print(f"[DIFF-OCR] Q{qid} (MCQ): {answers[qid]}")
-                    else:
-                        answers[qid] = val
-                        print(f"[DIFF-OCR] Q{qid} (subj): {val[:60]}")
-            except Exception as e:
-                print(f"[DIFF-OCR] Q{qid} GPT call failed: {e}")
+                return _validate_ocr_answers(raw.get("answers", {}), exam_questions)
 
-    return answers
+        except Exception as e:
+            log.error(f"[OCR-PAGE] page {page_idx} failed: {e}")
+            return {}
+
+    # Run pages in parallel — max 4 workers
+    max_w = min(4, len(images))
+    with ThreadPoolExecutor(max_workers=max_w) as pool:
+        futures = {pool.submit(_process_one_page, (i, img)): i
+                   for i, img in enumerate(images)}
+        for fut in as_completed(futures):
+            page_result = fut.result()
+            combined.update(page_result)
+
+    return combined
 
 
-def _extract_answers(path: str, exam_questions: list = None):
+def _extract_answers(path: str, exam_questions: list = None, exam: dict = None):
     """Extract student answers from an answer sheet file."""
     exam_questions = exam_questions or []
     ext = Path(path).suffix.lower()
@@ -1123,16 +1245,15 @@ def _extract_answers(path: str, exam_questions: list = None):
 
         if exam_questions:
             try:
-                diff_answers = _diff_and_ocr_answers(path, {
+                # Use full exam dict if available for accurate blank PDF layout
+                _exam_for_diff = exam if exam else {
                     "questions":   exam_questions,
-                    "school_name": "",
-                    "subject":     "",
-                    "class":       "",
-                    "board":       "",
+                    "school_name": "", "subject": "", "class": "",
+                    "board": "", "exam_date": "",
                     "total_marks": sum(float(q.get("marks", q.get("weightage", 1)))
                                        for q in exam_questions),
-                    "exam_date":   "",
-                })
+                }
+                diff_answers = _diff_and_ocr_answers(path, _exam_for_diff)
                 if diff_answers:
                     print(f"[PDF-OCR] Image-diff extracted {len(diff_answers)} answers: "
                           f"{list(diff_answers.keys())}")
@@ -3048,7 +3169,12 @@ def _parse_raw_answers(raw_text: str) -> Dict[int, str]:
 @app.post("/api/evaluate")
 @auth()
 def evaluate_sheet():
-    """Single answer sheet evaluation."""
+    """
+    Single answer sheet evaluation.
+    If Redis/Celery is available: returns task_id immediately (async).
+    Otherwise: evaluates synchronously (fallback).
+    Includes file-hash caching to avoid re-processing identical uploads.
+    """
     u            = request.user
     exam_id      = request.form.get("exam_id")
     roll_no      = request.form.get("roll_no", "")
@@ -3070,33 +3196,101 @@ def evaluate_sheet():
     fn   = secure_filename(f.filename)
     path = UPL_DIR / f"{datetime.utcnow().strftime('%Y%m%dT%H%M%S')}_{fn}"
     f.save(str(path))
+    log.info(f"[EVAL] Saved upload: {fn} ({path.stat().st_size} bytes)")
 
-    answers, mode = _extract_answers(str(path), exam_questions=e.get("questions", []))
+    # ── Cache check (skip OCR if identical file already evaluated) ────────────
+    fhash  = _file_hash(str(path))
+    cached = _cache_get(fhash, exam_id)
+    if cached:
+        log.info(f"[EVAL] Cache hit for {fn} — returning cached result")
+        return jsonify({"cached": True, **cached})
+
+    # ── Async path (Celery available) ─────────────────────────────────────────
+    if CELERY_OK:
+        try:
+            from celery_worker import evaluate_single as _eval_task
+            task = _eval_task.delay(
+                str(path), e, roll_no, student_name, parent_email, fn
+            )
+            log.info(f"[EVAL] Async task queued: {task.id}")
+            return jsonify({
+                "async":    True,
+                "task_id":  task.id,
+                "status":   "processing",
+                "message":  "Evaluation queued. Poll /api/evaluate/status/<task_id> for result.",
+            }), 202
+        except Exception as _ce:
+            log.warning(f"[EVAL] Celery dispatch failed, falling back to sync: {_ce}")
+
+    # ── Sync path (fallback) ──────────────────────────────────────────────────
+    log.info(f"[EVAL] Sync evaluation: {fn}")
+    _openai_limiter.wait()
+    answers, mode = _extract_answers(str(path), exam_questions=e.get("questions", []), exam=e)
     if not answers:
         return jsonify({"error": f"Could not extract answers (mode: {mode})"}), 400
 
+    _openai_limiter.wait()
     result  = _evaluate_answers(e, answers, roll_no)
     eval_id = uuid.uuid4().hex[:10]
     payload = {
-        "evaluation_id": eval_id, "exam_id": exam_id, "created_at": _now(),
-        "student_name": student_name, "roll_no": roll_no,
-        "parent_email": parent_email, "file_name": fn,
-        "extraction_mode": mode, "submitted_answers": answers, "result": result
+        "evaluation_id":    eval_id,
+        "exam_id":          exam_id,
+        "created_at":       _now(),
+        "student_name":     student_name,
+        "roll_no":          roll_no,
+        "parent_email":     parent_email,
+        "file_name":        fn,
+        "file_hash":        fhash,
+        "extraction_mode":  mode,
+        "submitted_answers":answers,
+        "result":           result,
     }
     evaluations_registry[eval_id] = payload
     if not IS_VERCEL:
         _save_json(EVAL_DIR / f"{eval_id}.json", payload)
     _save_evals()
+    _cache_set(fhash, exam_id, payload)
+    log.info(f"[EVAL] Sync complete: eval_id={eval_id} score={result.get('percentage',0):.1f}%")
     return jsonify(payload)
+
+
+@app.get("/api/evaluate/status/<task_id>")
+@auth()
+def evaluation_status(task_id):
+    """
+    Poll async evaluation task status.
+    States: pending → processing → completed | failed
+    """
+    if not CELERY_OK or not celery_app:
+        return jsonify({"error": "Async evaluation not available (Redis not connected)"}), 503
+
+    task = celery_app.AsyncResult(task_id)
+
+    if task.state == "PENDING":
+        return jsonify({"status": "pending",    "task_id": task_id})
+    if task.state == "STARTED":
+        meta = task.info or {}
+        return jsonify({"status": "processing", "task_id": task_id,
+                        "progress": meta.get("completed"), "total": meta.get("total"),
+                        "step": meta.get("step", "")})
+    if task.state == "SUCCESS":
+        result = task.result or {}
+        # Cache the result so /api/evaluate can serve it on retry
+        if result.get("file_hash") and result.get("exam_id"):
+            _cache_set(result["file_hash"], result["exam_id"], result)
+        return jsonify({"status": "completed", "task_id": task_id, **result})
+    if task.state == "FAILURE":
+        return jsonify({"status": "failed", "task_id": task_id,
+                        "error": str(task.info)}), 500
+    return jsonify({"status": task.state, "task_id": task_id})
 
 
 @app.post("/api/evaluate/multi-student")
 @auth()
 def evaluate_multi_student():
     """
-    Evaluate a SINGLE PDF that contains multiple students' answer sheets.
-    AI splits the PDF by student, extracts each student's answers, and evaluates each separately.
-    Returns all evaluations in one response.
+    Evaluate a SINGLE PDF containing MULTIPLE students' answer sheets.
+    Async if Celery available. Falls back to parallel-thread sync.
     """
     exam_id = request.form.get("exam_id")
     if not exam_id:
@@ -3114,79 +3308,90 @@ def evaluate_multi_student():
     fn   = secure_filename(f.filename)
     path = UPL_DIR / f"{datetime.utcnow().strftime('%Y%m%dT%H%M%S')}_{fn}"
     f.save(str(path))
+    log.info(f"[MULTI-EVAL] Saved: {fn}")
 
-    print(f"[MULTI-EVAL] Starting multi-student extraction from {fn}")
+    # ── Async path ────────────────────────────────────────────────────────────
+    if CELERY_OK:
+        try:
+            from celery_worker import evaluate_multi_student as _ms_task
+            task = _ms_task.delay(str(path), e)
+            log.info(f"[MULTI-EVAL] Async task queued: {task.id}")
+            return jsonify({
+                "async":   True,
+                "task_id": task.id,
+                "status":  "processing",
+                "message": "Multi-student evaluation queued. Poll /api/evaluate/status/<task_id>.",
+            }), 202
+        except Exception as _ce:
+            log.warning(f"[MULTI-EVAL] Celery dispatch failed, falling back to sync: {_ce}")
 
-    # Step 1: Split PDF into per-student sections
+    # ── Sync path with parallel student evaluation ────────────────────────────
+    log.info(f"[MULTI-EVAL] Sync mode: splitting PDF {fn}")
     student_sections = _split_multi_student_pdf(str(path), exam_questions=e.get("questions", []))
-    print(f"[MULTI-EVAL] Detected {len(student_sections)} students")
+    log.info(f"[MULTI-EVAL] Detected {len(student_sections)} students")
 
     all_evaluations = []
-    for idx, section in enumerate(student_sections):
+
+    def _eval_section(args):
+        idx, section = args
         sname    = section.get("student_name") or f"Student {idx + 1}"
         roll     = section.get("roll_no") or str(idx + 1)
         raw_text = section.get("raw_text", "")
-
-        # Step 2: Parse answers from this student's section
-        answers = _parse_raw_answers(raw_text)
-        if not answers:
-            # Fallback: try vision on a temp text file
+        answers  = _parse_raw_answers(raw_text)
+        if not answers and raw_text:
             tmp = UPL_DIR / f"student_{idx}_{uuid.uuid4().hex[:6]}.txt"
             tmp.write_text(raw_text, encoding="utf-8")
-            answers, _ = _extract_answers(str(tmp), exam_questions=e.get("questions", []))
+            answers, _ = _extract_answers(str(tmp), exam_questions=e.get("questions",[]), exam=e)
             try:
                 tmp.unlink()
             except Exception:
                 pass
-
         if not answers:
-            print(f"[MULTI-EVAL] No answers extracted for {sname} — skipping")
-            continue
-
-        # Step 3: Evaluate
+            log.warning(f"[MULTI-EVAL] No answers for {sname} — skipping")
+            return None
+        _openai_limiter.wait()
         result  = _evaluate_answers(e, answers, roll)
         eval_id = uuid.uuid4().hex[:10]
         payload = {
-            "evaluation_id":   eval_id,
-            "exam_id":         exam_id,
-            "created_at":      _now(),
-            "student_name":    sname,
-            "roll_no":         roll,
-            "parent_email":    section.get("parent_email", ""),
-            "file_name":       fn,
-            "extraction_mode": "multi_student_gpt4o",
-            "submitted_answers": answers,
-            "result":          result,
+            "evaluation_id":     eval_id, "exam_id": exam_id, "created_at": _now(),
+            "student_name":      sname,   "roll_no": roll,
+            "parent_email":      section.get("parent_email", ""), "file_name": fn,
+            "extraction_mode":   "multi_student_parallel",
+            "submitted_answers": answers, "result": result,
         }
         evaluations_registry[eval_id] = payload
         if not IS_VERCEL:
             _save_json(EVAL_DIR / f"{eval_id}.json", payload)
-        all_evaluations.append(payload)
+        return payload
+
+    with ThreadPoolExecutor(max_workers=min(4, len(student_sections) or 1)) as pool:
+        futs = [pool.submit(_eval_section, (i, s)) for i, s in enumerate(student_sections)]
+        for fut in as_completed(futs):
+            p = fut.result()
+            if p:
+                all_evaluations.append(p)
 
     _save_evals()
-
-    # Class-level summary
     total_students = len(all_evaluations)
-    avg_pct = round(
-        sum(ev["result"].get("percentage", 0) for ev in all_evaluations) / max(total_students, 1),
-        1
-    )
+    avg_pct = round(sum(ev["result"].get("percentage",0) for ev in all_evaluations) / max(total_students,1), 1)
     pass_count = sum(1 for ev in all_evaluations if ev["result"].get("is_pass"))
-
+    log.info(f"[MULTI-EVAL] Sync complete: {total_students} students, avg={avg_pct}%")
     return jsonify({
-        "student_count":  total_students,
-        "class_average":  avg_pct,
-        "pass_count":     pass_count,
-        "fail_count":     total_students - pass_count,
-        "evaluations":    all_evaluations,
-        "exam_id":        exam_id,
+        "student_count": total_students, "class_average": avg_pct,
+        "pass_count": pass_count, "fail_count": total_students - pass_count,
+        "evaluations": all_evaluations, "exam_id": exam_id,
     })
 
 
 @app.post("/api/evaluate/bulk")
 @auth(roles=["tutor","teacher","school_admin"])
 def bulk_evaluate():
-    """Multiple separate files (one per student) in a ZIP or multi-file upload."""
+    """
+    Multiple separate files (one per student).
+    Async if Celery available — all sheets processed in parallel.
+    Falls back to sequential sync processing.
+    Includes per-file caching.
+    """
     exam_id = request.form.get("exam_id")
     if not exam_id:
         return jsonify({"error": "exam_id required"}), 400
@@ -3194,42 +3399,95 @@ def bulk_evaluate():
     if not e:
         return jsonify({"error": "Exam not found"}), 404
 
-    files   = request.files.getlist("answer_sheets")
-    results, failures = [], []
+    files = request.files.getlist("answer_sheets")
+    if not files:
+        return jsonify({"error": "No answer_sheets uploaded"}), 400
+
+    # Save all files first
+    saved, unsupported = [], []
     for f in files:
         if not f or not _allowed(f.filename):
-            failures.append({"file": getattr(f,"filename","?"), "error": "unsupported_type"})
+            unsupported.append({"file": getattr(f, "filename", "?"), "error": "unsupported_type"})
             continue
         fn   = secure_filename(f.filename)
         path = UPL_DIR / f"{datetime.utcnow().strftime('%Y%m%dT%H%M%S')}_{fn}"
         f.save(str(path))
-        answers, mode = _extract_answers(str(path), exam_questions=e.get("questions", []))
-        if not answers:
-            failures.append({"file": fn, "error": f"extract_failed ({mode})"}); continue
         m    = re.search(r"(\d+)", fn)
         roll = request.form.get(f"roll_no_{fn}", "") or (m.group(1) if m else fn)
-        res  = _evaluate_answers(e, answers, roll)
-        eid  = uuid.uuid4().hex[:10]
-        p    = {
+        name = request.form.get(f"name_{fn}", "")
+        saved.append((str(path), roll, name, fn))
+
+    log.info(f"[BULK] {len(saved)} files saved for exam={exam_id}")
+
+    # ── Async path ────────────────────────────────────────────────────────────
+    if CELERY_OK and saved:
+        try:
+            from celery_worker import evaluate_bulk as _bulk_task
+            task = _bulk_task.delay(saved, e)
+            log.info(f"[BULK] Async task queued: {task.id}")
+            return jsonify({
+                "async":   True,
+                "task_id": task.id,
+                "status":  "processing",
+                "files":   len(saved),
+                "message": "Bulk evaluation queued. Poll /api/evaluate/status/<task_id>.",
+            }), 202
+        except Exception as _ce:
+            log.warning(f"[BULK] Celery dispatch failed, falling back to sync: {_ce}")
+
+    # ── Sync path with parallel threads ──────────────────────────────────────
+    results, failures = list(unsupported), []
+
+    def _eval_one(entry):
+        fpath, roll, name, fn = entry
+        fhash  = _file_hash(fpath)
+        cached = _cache_get(fhash, exam_id)
+        if cached:
+            return {"evaluation_id": cached["evaluation_id"], "roll_no": roll,
+                    "percentage": cached["result"].get("percentage",0),
+                    "is_pass": cached["result"].get("is_pass",False),
+                    "total_awarded": cached["result"].get("total_awarded",0),
+                    "total_possible": cached["result"].get("total_possible",0)}, None
+        _openai_limiter.wait()
+        answers, mode = _extract_answers(fpath, exam_questions=e.get("questions",[]), exam=e)
+        if not answers:
+            return None, {"file": fn, "error": f"extract_failed ({mode})"}
+        _openai_limiter.wait()
+        res = _evaluate_answers(e, answers, roll)
+        eid = uuid.uuid4().hex[:10]
+        p   = {
             "evaluation_id": eid, "exam_id": exam_id, "created_at": _now(),
-            "student_name": request.form.get(f"name_{fn}", ""),
-            "roll_no": roll, "file_name": fn,
-            "extraction_mode": mode, "submitted_answers": answers, "result": res
+            "student_name": name, "roll_no": roll, "file_name": fn,
+            "file_hash": fhash, "extraction_mode": mode,
+            "submitted_answers": answers, "result": res,
         }
         evaluations_registry[eid] = p
         if not IS_VERCEL:
             _save_json(EVAL_DIR / f"{eid}.json", p)
-        results.append({"evaluation_id": eid, "roll_no": roll,
-                        "percentage": res.get("percentage",0), "is_pass": res.get("is_pass",False),
-                        "total_awarded": res.get("total_awarded",0), "total_possible": res.get("total_possible",0)})
+        _cache_set(fhash, exam_id, p)
+        return {"evaluation_id": eid, "roll_no": roll,
+                "percentage": res.get("percentage",0), "is_pass": res.get("is_pass",False),
+                "total_awarded": res.get("total_awarded",0),
+                "total_possible": res.get("total_possible",0)}, None
+
+    with ThreadPoolExecutor(max_workers=min(4, len(saved))) as pool:
+        futs = {pool.submit(_eval_one, entry): entry for entry in saved}
+        for fut in as_completed(futs):
+            res, err = fut.result()
+            if res:
+                results.append(res)
+            elif err:
+                failures.append(err)
+
     _save_evals()
     bulk_id = uuid.uuid4().hex[:10]
-    bp      = {"bulk_id": bulk_id, "exam_id": exam_id, "created_at": _now(),
-               "total": len(results), "results": results, "failures": failures}
+    bp = {"bulk_id": bulk_id, "exam_id": exam_id, "created_at": _now(),
+          "total": len(results), "results": results, "failures": failures + unsupported}
     bulk_evaluations_registry[bulk_id] = bp
     if not IS_VERCEL:
         _save_json(BULK_DIR / f"{bulk_id}.json", bp)
     _save_bulk()
+    log.info(f"[BULK] Sync complete: ok={len(results)} fail={len(failures)}")
     return jsonify(bp)
 
 
@@ -3697,6 +3955,7 @@ if __name__ == "__main__":
     lc   = "✓" if LANGCHAIN_OK   else "✗ (install langchain-openai)"
     oai  = f"✓ ({OPENAI_MODEL})" if OPENAI_API_KEY else "✗ (set OPENAI_API_KEY)"
     mdb  = "✓ MongoDB"           if MONGO_OK       else "⚠ JSON fallback"
+    que  = "✓ Celery+Redis"      if CELERY_OK      else "⚠ Sync fallback (no Redis)"
     print(f"""
 ╔══════════════════════════════════════════╗
 ║  Parvidya Backend  →  http://localhost:{port}  ║
@@ -3704,6 +3963,7 @@ if __name__ == "__main__":
 ║  LangChain : {lc:<28}║
 ║  OpenAI    : {oai:<28}║
 ║  Database  : {mdb:<28}║
+║  Queue     : {que:<28}║
 ║  Vercel    : {'Yes' if IS_VERCEL else 'No':<28}║
 ╚══════════════════════════════════════════╝
 Syllabi loaded : {len(syllabi_registry)}

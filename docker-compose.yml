@@ -1,0 +1,96 @@
+# ══════════════════════════════════════════════════════════════════════════════
+#  VidyAI / Parvidya — Docker Compose
+#  Full local development stack: Flask API + Celery worker + Redis + MongoDB
+#
+#  Usage:
+#    docker-compose up --build          # start everything
+#    docker-compose up api              # API only (no async workers)
+#    docker-compose logs -f worker      # watch worker logs
+#    docker-compose down -v             # stop and remove volumes
+# ══════════════════════════════════════════════════════════════════════════════
+
+version: "3.9"
+
+services:
+
+  # ── Flask API ───────────────────────────────────────────────────────────────
+  api:
+    build: .
+    container_name: parvidya_api
+    ports:
+      - "5001:5001"
+    environment:
+      - PORT=5001
+      - MONGO_URI=mongodb://mongo:27017
+      - REDIS_URL=redis://redis:6379/0
+    env_file:
+      - .env
+    volumes:
+      # Persist uploads and study_db between restarts
+      - ./uploads:/app/uploads
+      - ./study_db:/app/study_db
+      - ./data:/app/data
+    depends_on:
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5001/api/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ── Celery Worker (async evaluation) ────────────────────────────────────────
+  worker:
+    build: .
+    container_name: parvidya_worker
+    command: celery -A celery_worker worker --loglevel=info --concurrency=2
+    environment:
+      - MONGO_URI=mongodb://mongo:27017
+      - REDIS_URL=redis://redis:6379/0
+    env_file:
+      - .env
+    volumes:
+      - ./uploads:/app/uploads
+      - ./study_db:/app/study_db
+      - ./data:/app/data
+    depends_on:
+      - redis
+      - mongo
+    restart: unless-stopped
+
+  # ── Redis (Celery broker + result backend) ───────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: parvidya_redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── MongoDB (primary database) ───────────────────────────────────────────────
+  mongo:
+    image: mongo:7
+    container_name: parvidya_mongo
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  redis_data:
+  mongo_data:
