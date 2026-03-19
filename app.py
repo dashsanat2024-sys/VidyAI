@@ -2996,6 +2996,7 @@ def generate_questions():
 
 # ── List / Get / Delete Exams ─────────────────────────────────────────────────
 @app.get("/api/questions")
+@app.get("/api/exams")  # Alias for EvalPanel.jsx
 @auth()
 def list_exams():
     u     = request.user
@@ -3048,7 +3049,9 @@ def save_exam():
         "owner_id":         u["id"],
         "created_at":       _now(),
         "syllabus_id":      data.get("syllabus_id", ""),
-        "syllabus_name":    data.get("syllabus_name", "Custom Exam"),
+        "syllabus_name":    data.get("syllabus_name") or \
+                           (syllabi_registry.get(data.get("syllabus_id", "") , {}).get("name")) or \
+                           "Custom Exam",
         "topic":            data.get("topic", ""),
         "board":            data.get("board", ""),
         "class":            data.get("class", ""),
