@@ -1046,6 +1046,267 @@ def _generate_answer_sheet_pdf(exam: dict) -> bytes:
         return b""
 
 
+
+def _generate_answer_key_pdf(exam: dict) -> bytes:
+    """
+    Generate the ANSWER KEY PDF for teachers.
+    Contains:
+    - Every question with its correct answer(s)
+    - MCQ: question + options + correct option highlighted
+    - Subjective: question + model answer + key points + marking rubric
+    - Marking scheme summary
+    CONFIDENTIAL — for teacher/examiner use only.
+    """
+    try:
+        from reportlab.pdfgen import canvas as rl_canvas
+        from reportlab.lib.pagesizes import A4
+        from reportlab.lib.units import mm
+        from reportlab.lib import colors as rl_colors
+        import io as _io2
+
+        buf  = _io2.BytesIO()
+        W, H = A4
+        c    = rl_canvas.Canvas(buf, pagesize=A4)
+        MARGIN = 15 * mm
+
+        qs      = exam.get("questions", [])
+        obj_qs  = [q for q in qs if q.get("type", "objective") == "objective"]
+        subj_qs = [q for q in qs if q.get("type", "objective") != "objective"]
+
+        def wrap_text(text, max_chars=90):
+            words = text.split()
+            lines, cur = [], ""
+            for w in words:
+                if len(cur) + len(w) + 1 <= max_chars:
+                    cur = (cur + " " + w).strip()
+                else:
+                    lines.append(cur); cur = w
+            if cur: lines.append(cur)
+            return lines or [""]
+
+        def draw_header(page_num=1):
+            # Confidential banner
+            c.setFillColor(rl_colors.HexColor('#7f1d1d'))
+            c.rect(MARGIN, H - 20*mm, W - 2*MARGIN, 12*mm, fill=1, stroke=0)
+            c.setFillColor(rl_colors.white)
+            c.setFont("Helvetica-Bold", 12)
+            c.drawCentredString(W/2, H - 12*mm,
+                f"ANSWER KEY  ·  {exam.get('school_name','VidyAI School')}  ·  CONFIDENTIAL")
+
+            # Sub-header
+            c.setFillColor(rl_colors.HexColor('#fef2f2'))
+            c.rect(MARGIN, H - 30*mm, W - 2*MARGIN, 10*mm, fill=1, stroke=0)
+            c.setFillColor(rl_colors.HexColor('#374151'))
+            c.setFont("Helvetica", 8.5)
+            c.drawString(MARGIN + 4*mm, H - 23.5*mm,
+                f"{exam.get('subject','')}  —  {exam.get('board','')} {exam.get('class','')}  "
+                f"|  Total Marks: {exam.get('total_marks',0)}  "
+                f"|  Date: {exam.get('exam_date','')}  "
+                f"|  Exam ID: {exam.get('exam_id','—')}")
+            c.drawRightString(W - MARGIN - 4*mm, H - 23.5*mm, f"Page {page_num}")
+
+            # Marking scheme summary bar
+            obj_m  = sum(float(q.get("marks", q.get("weightage", 1))) for q in obj_qs)
+            subj_m = sum(float(q.get("marks", q.get("weightage", 1))) for q in subj_qs)
+            c.setFillColor(rl_colors.HexColor('#1e1b4b'))
+            c.rect(MARGIN, H - 38*mm, W - 2*MARGIN, 7*mm, fill=1, stroke=0)
+            c.setFillColor(rl_colors.white)
+            c.setFont("Helvetica-Bold", 8)
+            c.drawString(MARGIN + 4*mm, H - 33*mm,
+                f"Marking Scheme:  "
+                f"Section A (Objective) = {int(obj_m)} marks  ·  "
+                f"Section B (Subjective) = {int(subj_m)} marks  ·  "
+                f"Total = {int(obj_m + subj_m)} marks")
+            return H - 43*mm
+
+        page = 1
+        y    = draw_header(page)
+
+        def new_page():
+            nonlocal page
+            c.showPage(); page += 1
+            return draw_header(page)
+
+        # ── Section A: Objective Answer Key ───────────────────────────────────
+        if obj_qs:
+            c.setFillColor(rl_colors.HexColor('#eef2ff'))
+            c.rect(MARGIN, y - 8*mm, W - 2*MARGIN, 8*mm, fill=1, stroke=0)
+            c.setFillColor(rl_colors.HexColor('#3730a3'))
+            c.setFont("Helvetica-Bold", 9)
+            c.drawString(MARGIN + 3*mm, y - 5.5*mm,
+                f"SECTION A — OBJECTIVE  ({len(obj_qs)} questions)")
+            y -= 12*mm
+
+            for q in obj_qs:
+                marks   = float(q.get("marks", q.get("weightage", 1)))
+                qtext   = str(q.get("question", ""))
+                opts    = q.get("options") or {}
+
+                # Resolve correct answer letter(s)
+                correct_letters = set()
+                raw_ans = str(q.get("answer", "")).strip().upper()
+                if raw_ans in opts:
+                    correct_letters.add(raw_ans)
+                for va in q.get("valid_answers", []):
+                    va_u = str(va).strip().upper()
+                    if va_u in opts:
+                        correct_letters.add(va_u)
+                    else:
+                        # try matching by text
+                        for k, v in opts.items():
+                            if str(v).strip().lower() == va.strip().lower():
+                                correct_letters.add(k.upper())
+                if not correct_letters and raw_ans:
+                    correct_letters.add(raw_ans)
+
+                q_lines = wrap_text(f"Q{q['id']}. {qtext}", max_chars=90)
+                needed  = (len(q_lines) * 5 + 20) * mm
+                if y - needed < 20*mm:
+                    y = new_page()
+
+                # Question text
+                c.setFillColor(rl_colors.black)
+                c.setFont("Helvetica-Bold", 9.5)
+                for li, line in enumerate(q_lines):
+                    c.drawString(MARGIN + (6*mm if li > 0 else 0), y - (li+1)*5*mm, line)
+                c.setFont("Helvetica", 7.5)
+                c.setFillColor(rl_colors.HexColor('#6b7280'))
+                c.drawRightString(W - MARGIN, y - 5*mm,
+                    f"[{int(marks) if marks==int(marks) else marks} mark{'s' if marks!=1 else ''}]")
+                y -= (len(q_lines) * 5 + 2) * mm
+
+                # Options — highlight correct ones in green
+                if opts:
+                    for k, v in sorted(opts.items()):
+                        is_correct = k.upper() in correct_letters
+                        opt_text   = f"  ({k})  {v}"
+                        opt_y      = y - 5*mm
+                        if is_correct:
+                            # Green highlight behind correct answer
+                            text_w = len(opt_text) * 4.5   # approx width
+                            c.setFillColor(rl_colors.HexColor('#dcfce7'))
+                            c.rect(MARGIN + 6*mm, opt_y - 1.5*mm,
+                                   min(text_w, W - 2*MARGIN - 6*mm), 6*mm,
+                                   fill=1, stroke=0)
+                            c.setFillColor(rl_colors.HexColor('#166534'))
+                            c.setFont("Helvetica-Bold", 9.5)
+                            c.drawString(MARGIN + 6*mm, opt_y, opt_text + "  ✓ CORRECT")
+                        else:
+                            c.setFillColor(rl_colors.HexColor('#374151'))
+                            c.setFont("Helvetica", 9.5)
+                            c.drawString(MARGIN + 6*mm, opt_y, opt_text)
+                        y -= 6*mm
+
+                # Explanation if present
+                expl = str(q.get("explanation", "")).strip()
+                if expl:
+                    expl_lines = wrap_text(f"Explanation: {expl}", max_chars=92)
+                    c.setFillColor(rl_colors.HexColor('#eff6ff'))
+                    c.rect(MARGIN + 4*mm, y - len(expl_lines)*5*mm - 2*mm,
+                           W - 2*MARGIN - 4*mm, len(expl_lines)*5*mm + 2*mm,
+                           fill=1, stroke=0)
+                    c.setFillColor(rl_colors.HexColor('#1d4ed8'))
+                    c.setFont("Helvetica-Oblique", 8)
+                    for li, line in enumerate(expl_lines):
+                        c.drawString(MARGIN + 6*mm, y - (li+1)*5*mm, line)
+                    y -= (len(expl_lines)*5 + 2)*mm
+
+                y -= 5*mm
+
+        # ── Section B: Subjective Answer Key ──────────────────────────────────
+        if subj_qs:
+            y -= 3*mm
+            if y < 30*mm:
+                y = new_page()
+
+            c.setFillColor(rl_colors.HexColor('#ecfdf5'))
+            c.rect(MARGIN, y - 8*mm, W - 2*MARGIN, 8*mm, fill=1, stroke=0)
+            c.setFillColor(rl_colors.HexColor('#065f46'))
+            c.setFont("Helvetica-Bold", 9)
+            c.drawString(MARGIN + 3*mm, y - 5.5*mm,
+                f"SECTION B — SUBJECTIVE  ({len(subj_qs)} questions)")
+            y -= 12*mm
+
+            for q in subj_qs:
+                marks       = float(q.get("marks", q.get("weightage", 1)))
+                qtext       = str(q.get("question", ""))
+                valid_ans   = q.get("valid_answers", [])
+                key_points  = q.get("answer_key_points", [])
+                rubric      = str(q.get("evaluation_rubric", q.get("evaluation_criteria", ""))).strip()
+                model_ans   = (str(q.get("answer", "")).strip()
+                               or (valid_ans[0] if valid_ans else ""))
+
+                q_lines   = wrap_text(f"Q{q['id']}. {qtext}", max_chars=90)
+                ans_lines = wrap_text(f"Model Answer: {model_ans}", max_chars=90) if model_ans else []
+
+                needed = (len(q_lines)*5 + len(ans_lines)*5 +
+                          len(key_points)*5 + 20) * mm
+                if y - needed < 20*mm:
+                    y = new_page()
+
+                # Question
+                c.setFillColor(rl_colors.black)
+                c.setFont("Helvetica-Bold", 9.5)
+                for li, line in enumerate(q_lines):
+                    c.drawString(MARGIN + (6*mm if li > 0 else 0), y - (li+1)*5*mm, line)
+                c.setFont("Helvetica", 7.5)
+                c.setFillColor(rl_colors.HexColor('#6b7280'))
+                c.drawRightString(W - MARGIN, y - 5*mm,
+                    f"[{int(marks) if marks==int(marks) else marks} marks]")
+                y -= (len(q_lines)*5 + 2)*mm
+
+                # Model answer block
+                if model_ans or key_points:
+                    block_lines = ans_lines[:]
+                    if key_points:
+                        block_lines.append("Key Points:")
+                        for kp in key_points:
+                            block_lines += wrap_text(f"  • {kp}", max_chars=88)
+
+                    BLOCK_H = (len(block_lines)*5 + 4)*mm
+                    c.setFillColor(rl_colors.HexColor('#f0fdf4'))
+                    c.setStrokeColor(rl_colors.HexColor('#86efac'))
+                    c.setLineWidth(0.8)
+                    c.rect(MARGIN + 4*mm, y - BLOCK_H - 2*mm,
+                           W - 2*MARGIN - 4*mm, BLOCK_H + 2*mm, fill=1, stroke=1)
+                    c.setFillColor(rl_colors.HexColor('#14532d'))
+                    for li, line in enumerate(block_lines):
+                        font = "Helvetica-Bold" if line == "Key Points:" else "Helvetica"
+                        c.setFont(font, 8.5)
+                        c.drawString(MARGIN + 6*mm, y - (li+1)*5*mm, line)
+                    y -= BLOCK_H + 4*mm
+
+                # Rubric / marking criteria
+                if rubric:
+                    rub_lines = wrap_text(f"Marking Criteria: {rubric}", max_chars=90)
+                    c.setFillColor(rl_colors.HexColor('#fffbeb'))
+                    c.setStrokeColor(rl_colors.HexColor('#fbbf24'))
+                    c.setLineWidth(0.5)
+                    RBLK_H = len(rub_lines)*5*mm + 3*mm
+                    c.rect(MARGIN + 4*mm, y - RBLK_H - 1*mm,
+                           W - 2*MARGIN - 4*mm, RBLK_H + 1*mm, fill=1, stroke=1)
+                    c.setFillColor(rl_colors.HexColor('#78350f'))
+                    c.setFont("Helvetica-Oblique", 8)
+                    for li, line in enumerate(rub_lines):
+                        c.drawString(MARGIN + 6*mm, y - (li+1)*5*mm, line)
+                    y -= RBLK_H + 3*mm
+
+                y -= 6*mm
+
+        # Footer
+        c.setFillColor(rl_colors.HexColor('#7f1d1d'))
+        c.setFont("Helvetica-Bold", 7)
+        c.drawCentredString(W/2, 5*mm,
+            "CONFIDENTIAL — FOR TEACHER / EXAMINER USE ONLY — DO NOT DISTRIBUTE TO STUDENTS")
+
+        c.save()
+        buf.seek(0)
+        return buf.read()
+
+    except Exception as e:
+        log.error(f"[ANSWER-KEY] Generation failed: {e}", exc_info=True)
+        return b""
+
 # Keep _generate_blank_answer_sheet_pdf as an alias so _diff_and_ocr_answers
 # generates a blank that MATCHES the new structured answer sheet layout exactly.
 def _generate_blank_answer_sheet_pdf(exam: dict) -> bytes:
@@ -2984,13 +3245,27 @@ def generate_questions():
 
     exam_id = uuid.uuid4().hex[:10]
     u       = request.user
+    syl_meta = syllabi_registry.get(sid, {})
     payload = {
-        "exam_id": exam_id, "owner_id": u["id"], "created_at": _now(),
-        "syllabus_id": sid, "syllabus_name": syllabi_registry[sid]["name"],
-        "topic": topic_str, "chapters": chapters,
-        "objective_count": obj_count, "subjective_count": subj_count,
-        "questions": normalized,
-        "total_marks": sum(float(q["marks"]) for q in normalized),
+        "exam_id":          exam_id,
+        "owner_id":         u["id"],
+        "created_at":       _now(),
+        "syllabus_id":      sid,
+        "syllabus_name":    syl_meta.get("name", ""),
+        "topic":            topic_str,
+        "chapters":         chapters,
+        "board":            data.get("board", syl_meta.get("board", "")),
+        "class":            data.get("class_name", syl_meta.get("class_name",
+                                data.get("class", syl_meta.get("class", "")))),
+        "subject":          data.get("subject", syl_meta.get("subject", "")),
+        "school_name":      data.get("school_name", ""),
+        "teacher_name":     data.get("teacher_name", ""),
+        "exam_date":        data.get("exam_date", _now()[:10]),
+        "difficulty":       data.get("difficulty", "Mixed"),
+        "objective_count":  obj_count,
+        "subjective_count": subj_count,
+        "questions":        normalized,
+        "total_marks":      sum(float(q["marks"]) for q in normalized),
     }
     exams_registry[exam_id] = payload
     if not IS_VERCEL:
@@ -3000,7 +3275,6 @@ def generate_questions():
 
 # ── List / Get / Delete Exams ─────────────────────────────────────────────────
 @app.get("/api/questions")
-@app.get("/api/exams")  # Alias for EvalPanel.jsx
 @auth()
 def list_exams():
     u     = request.user
@@ -3012,6 +3286,14 @@ def list_exams():
     elif u["role"] not in ("school_admin", "admin"):
         exams = [e for e in exams if e.get("owner_id") == u["id"]]
     return jsonify({"exams": exams})
+
+# Alias — EvalPanel calls /api/exams, legacy QMaster calls /api/questions
+@app.get("/api/exams")
+@auth()
+def list_exams_alias():
+    """GET /api/exams — alias for GET /api/questions (returns all saved exams)."""
+    return list_exams()
+
 
 @app.post("/api/exams/save")
 @auth()
@@ -3048,21 +3330,28 @@ def save_exam():
         }
         normalised.append(entry)
 
+    # Resolve syllabus metadata — QMaster may not send all fields explicitly
+    _syl_id   = data.get("syllabus_id", "")
+    _syl_meta = syllabi_registry.get(_syl_id, {})
+    _syl_name = (data.get("syllabus_name", "")
+                 or _syl_meta.get("name", "")
+                 or data.get("subject", "")
+                 or "Custom Exam")
+
     payload = {
         "exam_id":          exam_id,
         "owner_id":         u["id"],
         "created_at":       _now(),
-        "syllabus_id":      data.get("syllabus_id", ""),
-        "syllabus_name":    data.get("syllabus_name") or \
-                           (syllabi_registry.get(data.get("syllabus_id", "") , {}).get("name")) or \
-                           "Custom Exam",
+        "syllabus_id":      _syl_id,
+        "syllabus_name":    _syl_name,
         "topic":            data.get("topic", ""),
-        "board":            data.get("board", ""),
-        "class":            data.get("class", ""),
-        "subject":          data.get("subject", ""),
+        "board":            data.get("board", _syl_meta.get("board", "")),
+        "class":            data.get("class", _syl_meta.get("class_name",
+                                _syl_meta.get("class", ""))),
+        "subject":          data.get("subject", _syl_meta.get("subject", "")),
         "school_name":      data.get("school_name", ""),
         "teacher_name":     data.get("teacher_name", ""),
-        "exam_date":        data.get("exam_date", ""),
+        "exam_date":        data.get("exam_date", _now()[:10]),
         "difficulty":       data.get("difficulty", "Mixed"),
         "objective_count":  len([q for q in normalised if q["type"] == "objective"]),
         "subjective_count": len([q for q in normalised if q["type"] != "objective"]),
@@ -3151,6 +3440,32 @@ def get_exam_analytics(exam_id):
 #  /api/exams/<id>/answer-sheet  → structured OCR-optimised answer sheet PDF
 #  /api/exams/<id>/question-paper → question paper with instructions
 # ══════════════════════════════════════════════════════════════════════════════
+
+@app.get("/api/exams/<exam_id>/answer-key")
+@auth(roles=["teacher", "tutor", "school_admin", "admin"])
+def download_answer_key(exam_id):
+    """
+    Generate and return the ANSWER KEY PDF.
+    Teacher-only: shows correct answers, model answers, key points, rubrics.
+    """
+    e = _load_exam(exam_id)
+    if not e:
+        return jsonify({"error": "Exam not found"}), 404
+
+    pdf_bytes = _generate_answer_key_pdf(e)
+    if not pdf_bytes:
+        return jsonify({"error": "PDF generation failed"}), 500
+
+    subject  = re.sub(r"[^\w\s-]", "", e.get("subject", "Exam"))[:30]
+    filename = f"AnswerKey_{subject}_{exam_id}.pdf"
+
+    from flask import Response
+    return Response(
+        pdf_bytes,
+        mimetype="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'}
+    )
+
 
 @app.get("/api/exams/<exam_id>/answer-sheet")
 @auth()
@@ -3242,9 +3557,14 @@ def _generate_question_paper_pdf(exam: dict) -> bytes:
             c.rect(MARGIN, H - 33*mm, W - 2*MARGIN, 8*mm, fill=1, stroke=0)
             c.setFillColor(rl_colors.HexColor('#374151'))
             c.setFont("Helvetica", 8)
+            total_obj_m  = sum(float(q.get("marks", q.get("weightage",1))) for q in obj_qs)
+            total_subj_m = sum(float(q.get("marks", q.get("weightage",1))) for q in subj_qs)
+            time_allowed = exam.get("time_minutes",
+                max(30, int((len(obj_qs) * 1.5) + (len(subj_qs) * 8))))
             c.drawString(MARGIN + 5*mm, H - 28.5*mm,
                 f"Total Marks: {exam.get('total_marks',0)}  |  "
-                f"Questions: {len(qs)}  |  "
+                f"Section A: {int(total_obj_m)}m  |  Section B: {int(total_subj_m)}m  |  "
+                f"Time: {time_allowed} min  |  "
                 f"Date: {exam.get('exam_date','')}  |  "
                 f"Exam ID: {exam.get('exam_id','')}")
             c.drawRightString(W - MARGIN - 5*mm, H - 28.5*mm,

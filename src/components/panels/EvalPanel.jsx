@@ -172,35 +172,155 @@ const S = {
   }),
 }
 
+// ── Subcomponent: TemplateDownloads ──────────────────────────────────────────
+// Used by both EvalPanel and can be imported by QMasterPanel
+function TemplateDownloads({ examId, token }) {
+  if (!examId) return null
+
+  const baseUrl = `${API}/api/exams/${examId}`
+
+  const downloads = [
+    {
+      href:  `${baseUrl}/question-paper`,
+      icon:  '📝',
+      label: 'Question Paper',
+      sub:   'Print & give to students',
+      color: '#1e1b4b',
+      bg:    '#eef2ff',
+      border:'#c7d2fe',
+    },
+    {
+      href:  `${baseUrl}/answer-sheet`,
+      icon:  '🖊',
+      label: 'Answer Sheet',
+      sub:   'Students fill & return',
+      color: '#065f46',
+      bg:    '#f0fdf4',
+      border:'#86efac',
+      primary: true,
+    },
+    {
+      href:  `${baseUrl}/answer-key`,
+      icon:  '🔑',
+      label: 'Answer Key',
+      sub:   'Teacher use only',
+      color: '#7f1d1d',
+      bg:    '#fef2f2',
+      border:'#fca5a5',
+      teacherOnly: true,
+    },
+  ]
+
+  return (
+    <div style={{ marginTop: '10px', padding: '14px', borderRadius: '10px',
+      background: '#f8fafc', border: '1px solid #e2e8f0' }}>
+      <div style={{ fontSize: '11px', fontWeight: '700', color: '#94a3b8',
+        textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '10px' }}>
+        📄 Print Templates
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '8px' }}>
+        {downloads.map(d => (
+          <a
+            key={d.label}
+            href={`${d.href}?token=${token}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{
+              display: 'flex', flexDirection: 'column', alignItems: 'center',
+              padding: '10px 8px', borderRadius: '8px', textDecoration: 'none',
+              background: d.bg, border: `1.5px solid ${d.border}`,
+              transition: 'transform .15s, box-shadow .15s',
+              cursor: 'pointer',
+            }}
+            onMouseEnter={e => { e.currentTarget.style.transform='translateY(-2px)'; e.currentTarget.style.boxShadow='0 4px 12px rgba(0,0,0,.1)' }}
+            onMouseLeave={e => { e.currentTarget.style.transform=''; e.currentTarget.style.boxShadow='' }}
+          >
+            <span style={{ fontSize: '20px', marginBottom: '4px' }}>{d.icon}</span>
+            <span style={{ fontSize: '12px', fontWeight: '700', color: d.color,
+              textAlign: 'center', lineHeight: 1.2 }}>{d.label}</span>
+            <span style={{ fontSize: '10px', color: '#6b7280', marginTop: '2px',
+              textAlign: 'center' }}>{d.sub}</span>
+          </a>
+        ))}
+      </div>
+      <div style={{ fontSize: '10px', color: '#94a3b8', marginTop: '8px', textAlign: 'center' }}>
+        Workflow: Print Question Paper + Answer Sheet → Students complete → Scan Answer Sheet → Upload below
+      </div>
+    </div>
+  )
+}
+
+
 // ── Subcomponent: ExamSelector ────────────────────────────────────────────────
 function ExamSelector({ token, value, onChange }) {
-  const [exams, setExams] = useState([])
+  const [exams, setExams]   = useState([])
   const [loading, setLoading] = useState(true)
+  const [error, setError]   = useState('')
 
-  useEffect(() => {
+  const load = () => {
+    setLoading(true); setError('')
+    // Try /api/exams first (new alias), fall back to /api/questions (legacy)
     apiFetch('/exams', {}, token)
       .then(d => setExams(d.exams || []))
-      .catch(() => {})
+      .catch(() =>
+        apiFetch('/questions', {}, token)
+          .then(d => setExams(d.exams || []))
+          .catch(e => setError(e.message))
+      )
       .finally(() => setLoading(false))
-  }, [token])
+  }
+
+  useEffect(() => { load() }, [token])
+
+  // Build a readable label: prefer syllabus_name, then subject+class, then topic
+  const examLabel = (e) => {
+    const name  = e.syllabus_name || e.subject || ''
+    const cls   = e.class || e.class_name || ''
+    const board = e.board || ''
+    const meta  = [board, cls].filter(Boolean).join(' ')
+    const counts = `${e.objective_count ?? 0}obj + ${e.subjective_count ?? 0}subj`
+    const marks  = e.total_marks ? ` · ${e.total_marks}m` : ''
+    const date   = e.exam_date ? ` · ${e.exam_date}` : ''
+    return `${name}${meta ? ' — ' + meta : ''} [${counts}${marks}${date}]`
+  }
 
   return (
     <div>
-      <label style={S.label}>Select Exam *</label>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <label style={S.label}>Select Exam *</label>
+        <button
+          onClick={load}
+          style={{ fontSize: '11px', color: '#6d28d9', background: 'none',
+            border: 'none', cursor: 'pointer', padding: '0 0 4px' }}
+        >
+          ↻ Refresh
+        </button>
+      </div>
+      {error && (
+        <div style={{ fontSize: '12px', color: '#dc2626', marginBottom: '6px' }}>
+          ⚠ {error}
+        </div>
+      )}
       <select
         style={S.select}
         value={value}
         onChange={e => onChange(e.target.value)}
         disabled={loading}
       >
-        <option value="">{loading ? 'Loading exams…' : '— Choose an exam —'}</option>
+        <option value="">
+          {loading ? 'Loading exams…' : exams.length === 0 ? '— No exams saved yet —' : '— Choose an exam —'}
+        </option>
         {exams.map(e => (
           <option key={e.exam_id} value={e.exam_id}>
-            {e.syllabus_name || e.subject || 'Exam'} — {e.objective_count}obj + {e.subjective_count}subj
-            {e.total_marks ? ` (${e.total_marks} marks)` : ''}
+            {examLabel(e)}
           </option>
         ))}
       </select>
+      {!loading && exams.length === 0 && (
+        <div style={{ fontSize: '12px', color: '#6b7280', marginTop: '6px' }}>
+          Go to <strong>Question Master</strong> → generate questions → click <strong>Save Exam</strong>
+        </div>
+      )}
     </div>
   )
 }
@@ -604,33 +724,7 @@ function SingleEvalTab({ token, showToast }) {
                   📋 {examData.syllabus_name} — {examData.total_marks} total marks,{' '}
                   {examData.objective_count} objective + {examData.subjective_count} subjective
                 </div>
-                <div style={{ marginTop: '10px', padding: '12px 14px', borderRadius: '8px',
-                  background: '#f0fdf4', border: '1px solid #bbf7d0', fontSize: '13px' }}>
-                  <div style={{ fontWeight: '700', color: '#065f46', marginBottom: '8px' }}>
-                    📄 Download Templates
-                  </div>
-                  <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-                    <a
-                      href={`${API}/api/exams/${examId}/question-paper?token=${token}`}
-                      target="_blank" rel="noopener noreferrer"
-                      style={{ ...S.btn('ghost'), fontSize: '12px', padding: '7px 14px',
-                        textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: '5px' }}
-                    >
-                      📝 Question Paper PDF
-                    </a>
-                    <a
-                      href={`${API}/api/exams/${examId}/answer-sheet?token=${token}`}
-                      target="_blank" rel="noopener noreferrer"
-                      style={{ ...S.btn('primary'), fontSize: '12px', padding: '7px 14px',
-                        textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: '5px' }}
-                    >
-                      🖊 Answer Sheet PDF
-                    </a>
-                  </div>
-                  <div style={{ fontSize: '11px', color: '#6b7280', marginTop: '8px' }}>
-                    ① Print Answer Sheet → ② Students fill in bubbles/boxes → ③ Scan & upload below
-                  </div>
-                </div>
+                <TemplateDownloads examId={examId} token={token} />
               </>
             )}
             <div style={{ ...S.formRow, marginTop: '14px' }}>
