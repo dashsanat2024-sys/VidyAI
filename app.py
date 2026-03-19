@@ -710,6 +710,68 @@ def _preprocess_image_for_ocr(img):
     return img.convert("RGB")                      # back to RGB for API
 
 
+
+def _build_ocr_prompt_v2(exam_questions: list) -> str:
+    """
+    Improved OCR prompt — explicitly addresses the dark Q-number tab confusion.
+
+    Root cause of bubble shift bug:
+    The Q-number tab is solid dark indigo (renders black when scanned).
+    On a full-page scan, GPT-4o sees: [BLACK TAB][A circle][B circle][C circle][D circle]
+    It may count the black tab as a visual element and shift bubble labels by 1,
+    reading B as A, C as B, D as C, etc.
+
+    Fix: explicitly tell GPT the tab is NOT a bubble and to count circles
+    strictly left-to-right AFTER the dark tab.
+    """
+    obj_qs  = [q for q in exam_questions if q.get("type", "objective") == "objective"]
+    subj_qs = [q for q in exam_questions if q.get("type", "objective") != "objective"]
+    obj_ids  = ", ".join(str(q["id"]) for q in obj_qs)  or "none"
+    subj_ids = ", ".join(str(q["id"]) for q in subj_qs) or "none"
+
+    q_lines = []
+    for q in sorted(exam_questions, key=lambda x: int(x.get("id", 0))):
+        qtype = "MCQ" if q.get("type", "objective") == "objective" else "Written"
+        q_lines.append(f"  Q{q['id']} [{qtype}]: {str(q.get('question',''))[:80]}")
+    question_ref = (
+        "\nQUESTION REFERENCE (to locate each box by its number):\n"
+        + "\n".join(q_lines)
+    ) if q_lines else ""
+
+    return (
+        "You are reading a SCANNED STUDENT ANSWER SHEET.\n\n"
+
+        "═══ CRITICAL — READ BEFORE ANSWERING ═══\n"
+        "Each question has a DARK COLOURED TAB on the LEFT edge showing the Q number.\n"
+        "⚠️  The dark tab is NOT a bubble and is NOT an answer option.\n"
+        "⚠️  IGNORE the dark tab when identifying bubbles.\n\n"
+
+        "MCQ LAYOUT (questions: " + obj_ids + "):\n"
+        "After the dark Q-number tab, there are EXACTLY 4 circles left-to-right:\n"
+        "  1st circle after tab = option A\n"
+        "  2nd circle after tab = option B\n"
+        "  3rd circle after tab = option C\n"
+        "  4th circle after tab = option D\n\n"
+        "The student FILLED or SCRIBBLED inside exactly one circle.\n"
+        "The circle with the most ink / darkest fill / scribble marks = the answer.\n"
+        "An empty/clean circle = NOT selected.\n"
+        "Count circles strictly: skip the dark tab, then 1st=A, 2nd=B, 3rd=C, 4th=D.\n\n"
+
+        "WRITTEN LAYOUT (questions: " + subj_ids + "):\n"
+        "After the dark green Q-number tab, there are horizontal ruled lines.\n"
+        "Read ALL handwritten text on those lines. Ignore printed labels.\n\n"
+
+        "YOUR TASK:\n"
+        "For each question box, identify its Q number from the tab, then extract:\n"
+        "  MCQ → single letter A, B, C, or D (the scribbled/filled circle)\n"
+        "  Written → all handwritten text verbatim\n"
+        "  Blank → omit from JSON\n"
+        + question_ref + "\n\n"
+
+        "Return ONLY valid JSON (no markdown, no explanation):\n"
+        + '{"answers": {"1":"B","2":"D","3":"B","4":"A","5":"A","6":"C","7":"student text"}}' + "\n"
+    )
+
 def _build_ocr_prompt(exam_questions: list) -> str:
     """
     Layout-aware prompt for the VidyAI structured answer sheet.
@@ -788,69 +850,8 @@ def _build_ocr_prompt(exam_questions: list) -> str:
         "  • If a question has no mark, omit it from the JSON\n"
         + question_ref + "\n\n"
 
-
         "Return STRICTLY valid JSON:\n"
         '{"answers": {"1": "B", "2": "D", "7": "Divide the numerator by the denominator"}}' + "\n"
-        "No markdown, no explanation, no extra keys."
-    )
-
-
-def _build_freeform_handwriting_prompt(exam_questions: list) -> str:
-    """
-    OCR prompt for plain free-form handwritten answer sheets (notebooks, loose paper).
-    Unlike _build_ocr_prompt, this does NOT assume VidyAI's structured layout with
-    colored tabs, bubble circles, or ruled answer boxes.
-    Works for any student handwriting on any paper.
-    """
-    obj_qs  = [q for q in exam_questions if q.get("type", "objective") == "objective"]
-    subj_qs = [q for q in exam_questions if q.get("type", "objective") != "objective"]
-    mcq_ids  = ", ".join(str(q["id"]) for q in obj_qs)  or "none"
-    subj_ids = ", ".join(str(q["id"]) for q in subj_qs) or "none"
-
-    q_lines = []
-    for q in sorted(exam_questions, key=lambda x: int(x.get("id", 0))):
-        qtype = "MCQ (answer = single letter A/B/C/D)" if q.get("type", "objective") == "objective" else "Written"
-        q_lines.append(f"  Q{q['id']} [{qtype}]: {str(q.get('question', ''))[:100]}")
-    question_ref = (
-        "\nEXAM QUESTION REFERENCE (use this to match Q numbers on the sheet):\n"
-        + "\n".join(q_lines)
-    ) if q_lines else ""
-
-    return (
-        "You are an expert examining a SCANNED HANDWRITTEN STUDENT ANSWER SHEET.\n"
-        "This is a plain page of handwriting — it may be written on notebook paper, plain paper, "
-        "or any format. There are NO printed bubbles, colored tabs, or answer boxes.\n\n"
-
-        "═══ HOW STUDENTS TYPICALLY WRITE ANSWERS ═══\n"
-        "  • They write question numbers like: 1. / Q1 / Q.1 / Ans 1 / Answer 1 / (1) etc.\n"
-        "  • For MCQ questions: they may write a letter (A/B/C/D), circle a letter, underline "
-        "    a letter, or write the full option text\n"
-        "  • For Written questions: they write their answer below the question number, "
-        "    possibly continuing across several lines\n"
-        "  • The page layout may be continuous — look for any question-number pattern\n\n"
-
-        "═══ YOUR TASK ═══\n"
-        "Scan the ENTIRE image carefully for any question number markers.\n"
-        f"  MCQ questions (answer = A/B/C/D): {mcq_ids}\n"
-        f"  Written questions (extract full text): {subj_ids}\n\n"
-
-        "For each answer you find:\n"
-        "  1. Identify the question number from the marker on the page\n"
-        "  2. WRITTEN questions: read ALL handwritten text that belongs to that answer\n"
-        "     — keep reading until the next question number or end of page\n"
-        "  3. MCQ questions: find any letter A/B/C/D that is written, circled, underlined, "
-        "     or otherwise marked — return ONLY the letter\n\n"
-
-        "CRITICAL RULES:\n"
-        "  • Read the full handwritten text, do NOT truncate subjective answers\n"
-        "  • For MCQ: return ONLY a single letter (A, B, C or D)\n"
-        "  • Include ALL question numbers you can read — do not skip any\n"
-        "  • If you cannot confidently read a question's answer, omit it\n"
-        "  • Do NOT invent or guess the content — only extract what is clearly written\n"
-        + question_ref + "\n\n"
-
-        "Return STRICTLY valid JSON:\n"
-        '{"answers": {"1": "B", "2": "The speed of light is 3×10⁸ m/s", "3": "C"}}\n'
         "No markdown, no explanation, no extra keys."
     )
 
@@ -866,16 +867,23 @@ def _validate_ocr_answers(raw_answers: dict, exam_questions: list) -> Dict[int, 
     """
     valid_ids = {int(q.get("id", 0)) for q in exam_questions} if exam_questions else None
 
+    # These patterns only match if the ENTIRE value is a label/instruction, not real content.
+    # For subjective answers, we strip any leading instruction prefix before checking.
     NOISE_PATTERNS = re.compile(
         r"^(?:section\s+[AB]|objective\s+questions?|subjective\s+questions?|"
         r"general\s+instructions?|total\s+marks|roll\s+number|student\s+name|"
         r"marks\s+obtained|answer\s+sheet|vidyai\s+school|"
-        r"write\s+(your\s+answer|only\s+inside|answers\s+only)|"
-        r"write\s+only|only\s+inside|inside\s+the\s+box|"
-        r"mark\s+one\s+correct|circle\s+(your|the|one)|"
-        r"do\s+not\s+write|instructions?\s*:|"
-        r"answer\s+only\s+inside|write\s+answer\s+below|"
-        r"\d{1,2}/\d{1,2}/\d{4})",
+        r"write\s+only\s+inside|only\s+inside\s+the|"
+        r"mark\s+one\s+correct\s*answer|circle\s+(your|the|one)\s+answer|"
+        r"do\s+not\s+write\s+outside|"
+        r"\d{1,2}/\d{1,2}/\d{4})$",
+        re.IGNORECASE
+    )
+    # Strip common OCR prefix artifacts before validation
+    STRIP_PREFIXES = re.compile(
+        r"^(?:write\s+your\s+answer\s+below\s*[:\-]?\s*|"
+        r"write\s+answer\s+here\s*[:\-]?\s*|"
+        r"answer\s*[:\-]\s*)",
         re.IGNORECASE
     )
     # MCQ answer: should be a single letter A-D (possibly with punctuation)
@@ -920,7 +928,11 @@ def _validate_ocr_answers(raw_answers: dict, exam_questions: list) -> Dict[int, 
                     log.debug(f"[OCR-VALIDATE] Q{qid} MCQ no letter found in: {val[:40]}")
             continue
 
-        # ── Subjective: reject obvious noise, keep everything else ─────────────
+        # ── Subjective: strip instruction prefixes, then reject obvious noise ──────
+        # Strip "Write your answer below:" or "Answer:" prefixes GPT may include
+        val = STRIP_PREFIXES.sub("", val).strip()
+        if not val:
+            continue
         if NOISE_PATTERNS.search(val):
             log.debug(f"[OCR-VALIDATE] Rejected Q{qid} noise: {val[:60]}")
             continue
@@ -1933,72 +1945,182 @@ def _ocr_page_parallel(images: list, exam_questions: list, exam: dict,
 
     def _process_one_page(args):
         """
-        Process one scanned page with direct full-page GPT-4o vision.
+        Process one scanned page using PER-QUESTION crops.
 
-        Why NOT pixel-diff:
-        - Dark-coloured tabs in the answer sheet render as solid black when scanned
-          on typical school copiers, making the diff unreliable
-        - Non-uniform question heights (MCQ=28mm, Subjective scales with marks)
-          make band-based cropping inaccurate
-        - Header bar scanning artefacts cause false-positive ink detection
+        Why per-question crops (not full page):
+        - The Q-number tab is solid dark blue/black when scanned, visually
+          resembling a filled bubble. Full-page GPT-4o vision mistakes it for
+          the first option and shifts all bubble labels by +1 (reads B as A, etc.)
+        - Per-question crops: each crop contains ONLY the answer area for ONE
+          question, with the Q-number tab on the left edge. GPT sees exactly
+          4 circles (A B C D) with no ambiguous dark region to the left.
+        - For subjective questions: crop the full box so all ruled lines are visible.
 
-        Why direct GPT-4o vision works:
-        - GPT-4o can read the Q-number tabs (Q1, Q2…) and locate each answer box
-        - A precise layout-aware prompt tells it exactly where to look
-        - Scribbled/filled bubbles are visually unambiguous at full page resolution
+        Layout geometry (from _generate_answer_sheet_pdf):
+          Page header: ~30% of page height (varies by content above questions)
+          MCQ box: 28mm tall, 4mm gap below each box
+          Subjective box: 10mm + n_lines*8mm + 4mm tall, 5mm gap
+          Both pages contain questions — Page 1 has MCQs, Page 2+ has subjectives.
         """
         page_idx, img = args
         try:
             import openai as _oai_local
+            from PIL import ImageEnhance as _IE
             client = _oai_local.OpenAI(api_key=OPENAI_API_KEY)
+            page_answers: Dict[int, str] = {}
 
-            # Enhance image quality: sharper, higher contrast, larger size
-            # Upscale to ~2480px wide (A4 at 300dpi) so bubbles are clearly visible
+            # ── Step 1: Upscale + colour-safe contrast boost ──────────────────
             MAX_W = 2480
             if img.width < MAX_W:
                 scale = MAX_W / img.width
-                new_h = int(img.height * scale)
-                img   = img.resize((MAX_W, new_h), Image.LANCZOS)
+                img   = img.resize((MAX_W, int(img.height * scale)), Image.LANCZOS)
+            img = _IE.Contrast(_IE.Sharpness(img.convert("RGB")).enhance(1.8)).enhance(1.5)
 
-            # Contrast + sharpness boost — make bubble fill stand out from paper
-            from PIL import ImageEnhance as _IE, ImageFilter as _IF
-            img = _IE.Contrast(_IE.Sharpness(img.convert("RGB")).enhance(1.8)).enhance(1.6)
+            W_px, H_px = img.width, img.height
 
-            # Encode at high quality PNG
-            buf = _io.BytesIO()
-            img.save(buf, format="PNG", optimize=False)
-            img_b64 = base64.b64encode(buf.getvalue()).decode()
+            # ── Step 2: First send the FULL PAGE with question-counting prompt ─
+            # This lets GPT identify which questions are on this page and roughly
+            # where each answer area is, returning a best-effort JSON.
+            # We use this as a baseline then verify per-question crops.
+            buf_full = _io.BytesIO()
+            img.save(buf_full, format="PNG", optimize=False)
+            b64_full = base64.b64encode(buf_full.getvalue()).decode()
 
-            # Build the precise layout prompt for this page's questions
-            prompt = _build_ocr_prompt(exam_questions)
+            # Questions on this page (heuristic: split evenly across pages)
+            n_pages = max(len(images), 1)
+            qs_per  = max(1, len(exam_questions) // n_pages)
+            start_i = page_idx * qs_per
+            end_i   = start_i + qs_per if page_idx < n_pages - 1 else len(exam_questions)
+            page_qs = exam_questions[start_i:end_i]
+            if not page_qs:
+                page_qs = exam_questions   # fallback: try all questions
 
-            log.info(f"[PAGE-OCR] Processing page {page_idx+1} "
-                     f"({img.width}x{img.height}px, "
-                     f"{len(buf.getvalue())//1024}KB)")
+            page_obj_ids  = ", ".join(str(q["id"]) for q in page_qs
+                                      if q.get("type","objective") == "objective") or "none"
+            page_subj_ids = ", ".join(str(q["id"]) for q in page_qs
+                                      if q.get("type","objective") != "objective") or "none"
+
+            full_page_prompt = (
+                "You are reading a SCANNED STUDENT ANSWER SHEET.\n\n"
+                "LAYOUT: Each question has a bordered box with a DARK TAB on the left "
+                "showing the question number (Q1, Q2 etc).\n"
+                "IMPORTANT: The dark tab on the left is NOT a bubble — IGNORE it when "
+                "identifying the answer.\n\n"
+                "MCQ boxes contain 4 circles labelled A B C D reading left to right "
+                "AFTER the dark tab. The student SCRIBBLED/FILLED one circle.\n"
+                "The FILLED/DARKEST/MOST-INKED circle = the answer.\n"
+                "Count circles left-to-right AFTER the tab: 1st=A, 2nd=B, 3rd=C, 4th=D.\n\n"
+                f"MCQ questions on this page: {page_obj_ids}\n"
+                f"Written questions on this page: {page_subj_ids}\n\n"
+                "For each question return the answer:\n"
+                "  MCQ: single letter A, B, C, or D\n"
+                "  Written: all handwritten text on the ruled lines\n"
+                "  Blank: omit from JSON\n\n"
+                "Return ONLY valid JSON: "
+                + '{"answers": {"1":"B","2":"D","7":"student wrote..."}}' 
+            )
 
             _openai_limiter.wait()
             resp = client.chat.completions.create(
-                model=OPENAI_MODEL,
-                temperature=0,
-                max_tokens=1000,
+                model=OPENAI_MODEL, temperature=0, max_tokens=800,
                 response_format={"type": "json_object"},
                 messages=[{"role": "user", "content": [
-                    {"type": "text",  "text": prompt},
+                    {"type": "text", "text": full_page_prompt},
                     {"type": "image_url", "image_url": {
-                        "url":    f"data:image/png;base64,{img_b64}",
+                        "url": f"data:image/png;base64,{b64_full}",
                         "detail": "high"
                     }},
                 ]}]
             )
-
             raw_content = resp.choices[0].message.content
-            log.info(f"[PAGE-OCR] page {page_idx+1} raw: {raw_content[:300]}")
+            log.info(f"[PAGE-OCR] page {page_idx+1} full-page raw: {raw_content[:300]}")
+            raw_full = json.loads(raw_content)
+            page_answers = _validate_ocr_answers(raw_full.get("answers", {}), exam_questions)
 
-            raw = json.loads(raw_content)
-            page_answers = _validate_ocr_answers(
-                raw.get("answers", {}), exam_questions
-            )
-            log.info(f"[PAGE-OCR] page {page_idx+1} extracted: {page_answers}")
+            # ── Step 3: Per-question crop verification for MCQ only ───────────
+            # Send each MCQ question as an individual crop to eliminate the
+            # Q-number tab confusion. The crop contains ONLY the bubble area.
+            # This is the most reliable way to read scribbled bubbles.
+            mcq_qs_on_page = [q for q in page_qs if q.get("type","objective") == "objective"]
+            if mcq_qs_on_page and len(mcq_qs_on_page) > 0:
+                # Answer sheet geometry (from _generate_answer_sheet_pdf):
+                # Page 1 header: ~55mm (header bar 14 + meta 8 + student boxes 16 +
+                #                        instruction 6 + section bar 8 + gap 3)
+                # MCQ box: 28mm tall, 3mm gap below = 31mm per slot
+                # Page 2+: smaller header ~25mm
+                #
+                # These are fractions of A4 height (297mm).
+                # Added ±5mm padding per crop to handle scan misalignment.
+                BOX_H_FRAC  = 28 / 297
+                SLOT_FRAC   = 31 / 297
+                PAD_FRAC    =  5 / 297
+
+                HEADER_FRAC = (55 / 297) if page_idx == 0 else (25 / 297)
+
+                verified: Dict[int, str] = {}
+                for q_idx, q in enumerate(mcq_qs_on_page):
+                    qid = int(q.get("id", 0))
+                    # Crop coordinates
+                    y_top = int(H_px * (HEADER_FRAC + q_idx * SLOT_FRAC - PAD_FRAC))
+                    y_bot = int(H_px * (HEADER_FRAC + q_idx * SLOT_FRAC + BOX_H_FRAC + PAD_FRAC))
+                    y_top = max(0, min(y_top, H_px - 10))
+                    y_bot = max(y_top + 10, min(y_bot, H_px))
+
+                    crop = img.crop((0, y_top, W_px, y_bot))
+                    # Additional contrast on crop
+                    crop = _IE.Contrast(crop).enhance(1.5)
+
+                    cbuf = _io.BytesIO()
+                    crop.save(cbuf, format="PNG", optimize=False)
+                    cb64 = base64.b64encode(cbuf.getvalue()).decode()
+
+                    crop_prompt = (
+                        f"This image shows ONLY question Q{qid} from a student answer sheet.\n\n"
+                        "On the LEFT is a DARK COLOURED TAB — this is just the question label. "
+                        "DO NOT count this as a bubble or an answer option.\n\n"
+                        "To the RIGHT of the dark tab are EXACTLY FOUR circles in a row:\n"
+                        "  1st circle (leftmost after tab) = option A\n"
+                        "  2nd circle = option B\n"
+                        "  3rd circle = option C\n"
+                        "  4th circle (rightmost) = option D\n\n"
+                        "The student FILLED or SCRIBBLED INSIDE exactly one circle.\n"
+                        "Look for the circle with the most pen ink / darkest fill.\n"
+                        "That circle's label (A, B, C, or D) is the student's answer.\n\n"
+                        "An empty clean circle = NOT selected.\n"
+                        "A circle with scribble marks = SELECTED.\n\n"
+                        "Return ONLY valid JSON: {\"answer\": \"B\"}\n"
+                        "If no circle is filled, return: {\"answer\": \"\"}"
+                    )
+                    try:
+                        _openai_limiter.wait()
+                        crop_resp = client.chat.completions.create(
+                            model=OPENAI_MODEL, temperature=0, max_tokens=50,
+                            response_format={"type": "json_object"},
+                            messages=[{"role": "user", "content": [
+                                {"type": "text", "text": crop_prompt},
+                                {"type": "image_url", "image_url": {
+                                    "url": f"data:image/png;base64,{cb64}",
+                                    "detail": "high"
+                                }},
+                            ]}]
+                        )
+                        crop_raw = json.loads(crop_resp.choices[0].message.content)
+                        val = str(crop_raw.get("answer", "")).strip().upper()
+                        m   = re.search(r"([A-D])", val)
+                        if m:
+                            verified[qid] = m.group(1)
+                            log.info(f"[CROP-OCR] Q{qid} crop answer: {m.group(1)}")
+                        else:
+                            log.info(f"[CROP-OCR] Q{qid} no clear answer in crop: {val!r}")
+                    except Exception as ce:
+                        log.warning(f"[CROP-OCR] Q{qid} crop failed: {ce}")
+
+                # Merge: crop answers override full-page answers for MCQ
+                if verified:
+                    page_answers.update(verified)
+                    log.info(f"[CROP-OCR] page {page_idx+1} verified MCQ: {verified}")
+
+            log.info(f"[PAGE-OCR] page {page_idx+1} final: {page_answers}")
             return page_answers
 
         except Exception as e:
@@ -2066,12 +2188,6 @@ def _extract_answers(path: str, exam_questions: list = None, exam: dict = None):
             re.search(r"Write\s+your\s+answer\s+below", raw_text, re.IGNORECASE)
         ))
 
-        # ── Detect plain image-only PDF (pure handwritten scan, no text layer) ─
-        # When a student photographs/scans their handwritten work and saves as PDF,
-        # the PDF contains only embedded images — no text layer at all.
-        # These are NEVER VidyAI structured sheets — always plain handwriting.
-        IS_LIKELY_SCANNED_IMAGE = len(raw_text.strip()) < 20
-
         # ── Exam ID mismatch detection ────────────────────────────────────────
         # The answer sheet prints "Exam ID: XXXXXXXX" in the header.
         # If the scanned sheet's Exam ID doesn't match the selected exam,
@@ -2088,27 +2204,10 @@ def _extract_answers(path: str, exam_questions: list = None, exam: dict = None):
                     )
                     return {}, f"exam_id_mismatch:{sheet_exam_id}:{selected_id}"
 
-        # ── Select OCR prompt based on sheet type ─────────────────────────────
-        # VidyAI structured sheets → use layout-aware prompt (bubbles, tabs)
-        # Plain handwriting (image-only PDF, notebook paper) → use freeform prompt
-        if IS_BLANK_PAPER or IS_SCANNED_ANSWER_SHEET:
-            _ocr_prompt = _build_ocr_prompt(exam_questions)
-            log.info(
-                f"[PDF-OCR] VidyAI answer sheet detected "
-                f"(IS_BLANK_PAPER={IS_BLANK_PAPER}, "
-                f"IS_SCANNED_ANSWER_SHEET={IS_SCANNED_ANSWER_SHEET}) "
-                "— using structured sheet OCR prompt"
-            )
-        elif IS_LIKELY_SCANNED_IMAGE:
-            _ocr_prompt = _build_freeform_handwriting_prompt(exam_questions)
-            log.info("[PDF-OCR] Image-only PDF detected (pure handwriting) — using freeform OCR prompt")
-        else:
-            # Typed/digital PDF with real text — attempt text extraction first
-            _ocr_prompt = _build_ocr_prompt(exam_questions)
-
         # ── Path A: Typed/digital answer submission ───────────────────────────
-        # Skip entirely if this is a scanned/image-only PDF — no useful text layer.
-        if raw_text.strip() and not IS_BLANK_PAPER and not IS_SCANNED_ANSWER_SHEET and not IS_LIKELY_SCANNED_IMAGE:
+        # Skip entirely if this is a scanned answer sheet — the text layer is
+        # garbled scanner OCR of our printed headers, not student answers.
+        if raw_text.strip() and not IS_BLANK_PAPER and not IS_SCANNED_ANSWER_SHEET:
             ans = _parse_answer_text(raw_text)
             if ans:
                 return ans, "parsed_pdf"
@@ -2119,7 +2218,7 @@ def _extract_answers(path: str, exam_questions: list = None, exam: dict = None):
                     model=OPENAI_MINI, temperature=0,
                     response_format={"type": "json_object"},
                     messages=[{"role": "user", "content": (
-                        _ocr_prompt +
+                        _build_ocr_prompt(exam_questions) +
                         "\n\nRaw text from the PDF (contains both question text and "
                         "student answers — extract ONLY the student answers):\n\n" +
                         raw_text[:5000]
@@ -2133,96 +2232,86 @@ def _extract_answers(path: str, exam_questions: list = None, exam: dict = None):
             except Exception as _gpt_txt_err:
                 print(f"[PDF-TEXT-GPT] {_gpt_txt_err}")
 
-        # ── Path B: Scanned / handwritten PDF — Vision OCR ───────────────────
-        # For VidyAI sheets: use _diff_and_ocr_answers (generates blank + diffs).
-        # For plain handwriting: skip diff (no matching blank exists) and go
-        # directly to whole-page vision OCR with the freeform prompt.
+        # ── Path B: Scanned / handwritten PDF ────────────────────────────────
+        # PRIMARY: Image-diff approach.
+        # Generate a blank version of the question paper from exam data,
+        # subtract it from the scanned image → isolates pure handwriting pixels.
+        # Send per-question crops (containing ONLY ink) to GPT-4o for OCR.
+        # This is the only reliable approach when printed text and handwriting
+        # coexist — prompt engineering alone cannot separate them.
         if IS_BLANK_PAPER or IS_SCANNED_ANSWER_SHEET:
-            # VidyAI structured sheet — try diff approach first
-            if exam_questions:
-                try:
-                    _exam_for_diff = exam if exam else {
-                        "questions":   exam_questions,
-                        "school_name": "", "subject": "", "class": "",
-                        "board": "", "exam_date": "",
-                        "total_marks": sum(float(q.get("marks", q.get("weightage", 1)))
-                                           for q in exam_questions),
-                    }
-                    diff_answers = _diff_and_ocr_answers(path, _exam_for_diff)
-                    if diff_answers:
-                        log.info(f"[PDF-OCR] Structured sheet diff extracted {len(diff_answers)} answers")
-                        return diff_answers, "image_diff_ocr"
-                    else:
-                        log.info("[PDF-OCR] Structured sheet diff found no ink — trying whole-page vision")
-                except Exception as _diff_err:
-                    log.warning(f"[PDF-OCR] Structured sheet diff failed: {_diff_err}")
+            log.info(
+                f"[PDF-OCR] Scanned answer sheet detected "
+                f"(IS_BLANK_PAPER={IS_BLANK_PAPER}, "
+                f"IS_SCANNED_ANSWER_SHEET={IS_SCANNED_ANSWER_SHEET}) "
+                "— using vision OCR, skipping text layer"
+            )
 
-        # ── Path C: GPT-4o whole-page vision OCR ─────────────────────────────
-        # Used for: plain handwriting, diff failures, VidyAI sheet fallback.
-        # Uses correct prompt (_ocr_prompt selected above).
-        import io as _io
-        _vision_images = []
+        if exam_questions:
+            try:
+                # Use full exam dict if available for accurate blank PDF layout
+                _exam_for_diff = exam if exam else {
+                    "questions":   exam_questions,
+                    "school_name": "", "subject": "", "class": "",
+                    "board": "", "exam_date": "",
+                    "total_marks": sum(float(q.get("marks", q.get("weightage", 1)))
+                                       for q in exam_questions),
+                }
+                diff_answers = _diff_and_ocr_answers(path, _exam_for_diff)
+                if diff_answers:
+                    print(f"[PDF-OCR] Image-diff extracted {len(diff_answers)} answers: "
+                          f"{list(diff_answers.keys())}")
+                    return diff_answers, "image_diff_ocr"
+                else:
+                    print("[PDF-OCR] Image-diff found no ink — trying fallback")
+            except Exception as _diff_err:
+                print(f"[PDF-OCR] Image-diff failed: {_diff_err}")
+
+        # ── Path C: GPT-4o whole-page vision with preprocessing ──────────────
+        # Fallback when diff fails (e.g. alignment issues, very light handwriting)
         try:
-            from pdf2image import convert_from_path as _conv_path
-            _vision_images = _conv_path(path, dpi=250)
-            log.info(f"[PDF-OCR] pdf2image converted {len(_vision_images)} page(s) at 250dpi")
-        except Exception as _p2i_err:
-            log.warning(f"[PDF-OCR] pdf2image/poppler unavailable ({_p2i_err}) — trying pypdf image extraction")
-            # Poppler not available (common on Vercel free tier)
-            # Fall back: extract embedded images from PDF using pypdf
-            try:
-                import pypdf as _pypdf_img
-                reader = _pypdf_img.PdfReader(path)
-                for page in reader.pages:
-                    for img_obj in page.images:
-                        try:
-                            from PIL import Image as _PIL_fb
-                            import io as _io_fb
-                            pil_img = _PIL_fb.open(_io_fb.BytesIO(img_obj.data)).convert("RGB")
-                            _vision_images.append(pil_img)
-                        except Exception:
-                            pass
-                if _vision_images:
-                    log.info(f"[PDF-OCR] Extracted {len(_vision_images)} embedded image(s) from PDF via pypdf")
-            except Exception as _pypdf_img_err:
-                log.warning(f"[PDF-OCR] pypdf image extraction also failed: {_pypdf_img_err}")
+            from pdf2image import convert_from_path
+            import io as _io
+            images = convert_from_path(path, dpi=250)
+            combined: Dict[int, str] = {}
+            client = _oai.OpenAI(api_key=OPENAI_API_KEY)
 
-        if _vision_images:
-            try:
-                combined: Dict[int, str] = {}
-                client = _oai.OpenAI(api_key=OPENAI_API_KEY)
+            # Use anti-tab-confusion prompt (dark Q-number tab ≠ bubble)
+            prompt = _build_ocr_prompt_v2(exam_questions)
+
+            for img in images:
+                # Upscale for readability, boost contrast but keep colour
+                # (greyscale conversion kills the blue bubble ink visibility)
                 from PIL import ImageEnhance as _ie2
-                for img in _vision_images:
-                    # Upscale + contrast boost for clarity
-                    MAX_W = 2480
-                    if img.width < MAX_W:
-                        img = img.resize((MAX_W, int(img.height * MAX_W / img.width)), Image.LANCZOS)
-                    enhanced = _ie2.Contrast(_ie2.Sharpness(img.convert("RGB")).enhance(1.8)).enhance(1.6)
-                    buf = _io.BytesIO()
-                    enhanced.save(buf, format="PNG", optimize=False)
-                    img_b64 = base64.b64encode(buf.getvalue()).decode()
+                MAX_W = 2480
+                if img.width < MAX_W:
+                    img = img.resize((MAX_W, int(img.height * MAX_W / img.width)), Image.LANCZOS)
+                enhanced = _ie2.Contrast(_ie2.Sharpness(img.convert("RGB")).enhance(1.8)).enhance(1.6)
+                buf = _io.BytesIO()
+                enhanced.save(buf, format="PNG", optimize=False)
+                img_b64 = base64.b64encode(buf.getvalue()).decode()
 
-                    resp = client.chat.completions.create(
-                        model=OPENAI_MODEL, temperature=0,
-                        response_format={"type": "json_object"},
-                        messages=[{"role": "user", "content": [
-                            {"type": "text", "text": _ocr_prompt},
-                            {"type": "image_url", "image_url": {
-                                "url": f"data:image/png;base64,{img_b64}", "detail": "high"
-                            }}
-                        ]}]
-                    )
-                    raw_ocr = json.loads(resp.choices[0].message.content)
-                    log.info(f"[PATH-C-OCR] raw GPT output ({len(_vision_images)} page): {str(raw_ocr)[:300]}")
-                    page_ans = _validate_ocr_answers(raw_ocr.get("answers", {}), exam_questions)
-                    log.info(f"[PATH-C-OCR] validated: {page_ans}")
-                    combined.update(page_ans)
+                resp = client.chat.completions.create(
+                    model=OPENAI_MODEL, temperature=0,
+                    response_format={"type": "json_object"},
+                    messages=[{"role": "user", "content": [
+                        {"type": "text", "text": prompt},
+                        {"type": "image_url", "image_url": {
+                            "url": f"data:image/png;base64,{img_b64}", "detail": "high"
+                        }}
+                    ]}]
+                )
+                raw_ocr = json.loads(resp.choices[0].message.content)
+                # Fix 3: debug logging
+                log.info(f"[PATH-C-OCR] raw GPT output: {raw_ocr}")
+                page_ans = _validate_ocr_answers(raw_ocr.get("answers", {}), exam_questions)
+                log.info(f"[PATH-C-OCR] validated answers: {page_ans}")
+                combined.update(page_ans)
 
-                if combined:
-                    mode_label = "freeform_handwriting_ocr" if IS_LIKELY_SCANNED_IMAGE else "vision_ocr_enhanced"
-                    return combined, mode_label
-            except Exception as _vis_err:
-                log.error(f"[PDF-OCR] Vision OCR failed: {_vis_err}")
+            if combined:
+                return combined, "vision_ocr_enhanced"
+        except Exception as _vis_err:
+            print(f"[PDF-OCR] Vision fallback failed: {_vis_err}")
 
         # ── Path D: text-only GPT fallback ────────────────────────────────────
         if raw_text.strip():
@@ -2232,7 +2321,7 @@ def _extract_answers(path: str, exam_questions: list = None, exam: dict = None):
                     model=OPENAI_MINI, temperature=0,
                     response_format={"type": "json_object"},
                     messages=[{"role": "user", "content": (
-                        _ocr_prompt +
+                        _build_ocr_prompt(exam_questions) +
                         "\n\nPDF text layer (printed question paper — look for any typed student "
                         "answers after each 'Answer:' label, ignore blank underscores):\n\n" +
                         raw_text[:4000]
@@ -2248,49 +2337,47 @@ def _extract_answers(path: str, exam_questions: list = None, exam: dict = None):
         return {}, "pdf_unreadable"
 
     if ext in {".png", ".jpg", ".jpeg", ".webp"}:
-        # Direct image uploads are always plain handwritten sheets (photos / scans).
-        # Use the freeform handwriting prompt (not the VidyAI bubble/tab layout prompt).
+        # Apply preprocessing + visual-reasoning prompt for direct image uploads
         try:
             import io as _io
-            from PIL import Image as _PIL, ImageEnhance as _ie3
+            from PIL import Image as _PIL
+            # Upscale + contrast boost — keep colour so bubble ink is visible
+            from PIL import ImageEnhance as _ie3
             raw_img = _PIL.open(path).convert("RGB")
             MAX_W   = 2480
             if raw_img.width < MAX_W:
                 raw_img = raw_img.resize(
                     (MAX_W, int(raw_img.height * MAX_W / raw_img.width)), _PIL.LANCZOS
                 )
-            # Greyscale + high contrast + sharpen = handwriting pops off the page
-            preprocessed = _ie3.Contrast(_ie3.Sharpness(raw_img.convert("L")).enhance(2.0)).enhance(2.0)
-            preprocessed  = preprocessed.convert("RGB")
+            preprocessed = _ie3.Contrast(_ie3.Sharpness(raw_img).enhance(1.8)).enhance(1.6)
             buf = _io.BytesIO()
             preprocessed.save(buf, format="PNG", optimize=False)
             img_b64 = base64.b64encode(buf.getvalue()).decode()
 
-            # Always freeform prompt for direct image uploads
-            img_prompt = _build_freeform_handwriting_prompt(exam_questions)
-            log.info(f"[IMG-OCR] Direct image upload — using freeform handwriting prompt ({ext})")
+            # Use anti-tab-confusion prompt (dark Q-number tab ≠ bubble)
+            prompt = _build_ocr_prompt_v2(exam_questions)
 
             client = _oai.OpenAI(api_key=OPENAI_API_KEY)
             resp = client.chat.completions.create(
                 model=OPENAI_MODEL, temperature=0,
                 response_format={"type": "json_object"},
                 messages=[{"role": "user", "content": [
-                    {"type": "text", "text": img_prompt},
+                    {"type": "text", "text": prompt},
                     {"type": "image_url", "image_url": {
                         "url": f"data:image/png;base64,{img_b64}", "detail": "high"
                     }}
                 ]}]
             )
             raw = json.loads(resp.choices[0].message.content)
-            log.info(f"[IMG-OCR] raw GPT output: {str(raw)[:300]}")
+            log.info(f"[IMG-OCR] raw GPT output: {raw}")
             ans = _validate_ocr_answers(raw.get("answers", {}), exam_questions)
             log.info(f"[IMG-OCR] validated: {ans}")
             if ans:
-                return ans, "freeform_image_ocr"
+                return ans, "vision_ocr"
         except Exception as _img_err:
             log.error(f"[IMG-OCR] {_img_err}")
-        # Fallback to simple vision extract with freeform prompt
-        return _vision_extract(path, _build_freeform_handwriting_prompt(exam_questions)), "freeform_image_ocr"
+        # Fallback to simple vision extract
+        return _vision_extract(path, _build_ocr_prompt(exam_questions)), "vision_ocr"
 
     return {}, "unsupported_type"
 
@@ -2785,7 +2872,7 @@ def auth(roles=None):
         def wrap(*a, **kw):
             tok = request.headers.get("Authorization", "").replace("Bearer ", "").strip()
             if not tok:
-                # Fallback: check query parameters (for direct file downloads)
+                # Fallback: check query parameters (for direct file downloads via <a href>)
                 tok = request.args.get("token", "").strip()
 
             if not tok:
