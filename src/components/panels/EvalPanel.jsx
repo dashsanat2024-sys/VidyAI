@@ -611,7 +611,7 @@ function SingleEvalTab({ token, showToast }) {
                   </div>
                   <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
                     <a
-                      href={`${API}/api/exams/${examId}/question-paper`}
+                      href={`${API}/api/exams/${examId}/question-paper?token=${token}`}
                       target="_blank" rel="noopener noreferrer"
                       style={{ ...S.btn('ghost'), fontSize: '12px', padding: '7px 14px',
                         textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: '5px' }}
@@ -619,7 +619,7 @@ function SingleEvalTab({ token, showToast }) {
                       📝 Question Paper PDF
                     </a>
                     <a
-                      href={`${API}/api/exams/${examId}/answer-sheet`}
+                      href={`${API}/api/exams/${examId}/answer-sheet?token=${token}`}
                       target="_blank" rel="noopener noreferrer"
                       style={{ ...S.btn('primary'), fontSize: '12px', padding: '7px 14px',
                         textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: '5px' }}

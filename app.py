@@ -1994,6 +1994,10 @@ def auth(roles=None):
         def wrap(*a, **kw):
             tok = request.headers.get("Authorization", "").replace("Bearer ", "").strip()
             if not tok:
+                # Fallback: check query parameters (for direct file downloads)
+                tok = request.args.get("token", "").strip()
+
+            if not tok:
                 return jsonify({"error": "Unauthorized — no token provided"}), 401
 
             uid = TOKENS.get(tok)
