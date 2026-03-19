@@ -1,40 +1,92 @@
 /**
  * AppContext.jsx
- * Central state: active panel, global refresh trigger.
- * Also exposes navigateTo(panelId) so any component can switch panels.
+ * Central state: active panel, syllabi data, documents, and admin stats.
+ * Handles data fetching and synchronization across all panels.
  */
-import { createContext, useContext, useState, useCallback } from 'react'
+import { createContext, useContext, useState, useCallback, useEffect } from 'react'
+import { useAuth } from './AuthContext'
+import { apiGet } from '../utils/api'
 
 const AppCtx = createContext(null)
 
 export function AppProvider({ children }) {
+  const { token, isLoggedIn } = useAuth()
   const [activePanel, setActivePanelState] = useState('dashboard')
   const [refreshKey,  setRefreshKey]       = useState(0)
+
+  // Data layers
+  const [syllabi,      setSyllabi]      = useState([])
+  const [docs,         setDocs]         = useState([])
+  const [adminStats,   setAdminStats]   = useState({})
+  const [activeSyllabus, setActiveSyllabus] = useState(null)
 
   const setActivePanel = useCallback((id) => {
     setActivePanelState(id)
   }, [])
 
-  // Expose a navigateTo alias for use inside components
   const navigateTo = useCallback((id) => {
     setActivePanelState(id)
-    // Make the panel key available globally for non-React code (e.g. QMasterPanel)
     if (typeof window !== 'undefined') {
       window.__appSetPanel = setActivePanelState
     }
   }, [])
 
-  const refreshData = useCallback(() => {
-    setRefreshKey(k => k + 1)
+  const addSyllabus = useCallback((syl) => {
+    setSyllabi(prev => {
+      if (prev.find(x => x.id === syl.id)) return prev
+      return [...prev, syl]
+    })
+    setActiveSyllabus(syl)
   }, [])
 
-  // Expose setPanel globally once on mount
+  const removeSyllabus = useCallback((id) => {
+    setSyllabi(prev => prev.filter(s => s.id !== id))
+    if (activeSyllabus?.id === id) setActiveSyllabus(null)
+  }, [activeSyllabus])
+
+  const refreshData = useCallback(async () => {
+    if (!token) return
+    try {
+      // 1. Load user syllabi
+      const res1 = await apiGet('/curriculum', token)
+      const data1 = await res1.json()
+      setSyllabi(data1.syllabi || [])
+
+      // 2. Load documents
+      const res2 = await apiGet('/documents', token)
+      const data2 = await res2.json()
+      setDocs(data2.documents || [])
+
+      // 3. Load admin stats (if applicable)
+      const res3 = await apiGet('/admin/stats', token)
+      const data3 = await res3.json()
+      setAdminStats(data3.stats || {})
+
+      setRefreshKey(k => k + 1)
+    } catch (err) {
+      console.error('[AppContext] refreshData failed:', err)
+    }
+  }, [token])
+
+  // Initial load when logged in
+  useEffect(() => {
+    if (isLoggedIn) refreshData()
+  }, [isLoggedIn, refreshData])
+
+  // Expose setPanel globally for non-React code
   if (typeof window !== 'undefined') {
     window.__appSetPanel = setActivePanelState
   }
 
   return (
-    <AppCtx.Provider value={{ activePanel, setActivePanel, navigateTo, refreshData, refreshKey }}>
+    <AppCtx.Provider value={{
+      activePanel, setActivePanel, navigateTo,
+      syllabi, setSyllabi, addSyllabus, removeSyllabus,
+      docs, setDocs,
+      adminStats, setAdminStats,
+      activeSyllabus, setActiveSyllabus,
+      refreshData, refreshKey
+    }}>
       {children}
     </AppCtx.Provider>
   )
