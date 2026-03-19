@@ -38,7 +38,7 @@ const NAV = [
 
 export default function Sidebar({ isOpen, onClose }) {
   const { activePanel, setActivePanel } = useApp()
-  const { user, logout }               = useAuth()
+  const { me: user, logout }           = useAuth()
   const role = user?.role || 'student'
 
   const navigate = (id) => {

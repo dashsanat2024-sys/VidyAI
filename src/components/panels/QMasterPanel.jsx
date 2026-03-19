@@ -910,7 +910,7 @@ function ReviewAndPrint({ questions, examId, examMeta, token, onBack, onRegenera
 
 // ── Main QMasterPanel ──────────────────────────────────────────────────────────
 export function QMasterPanel({ showToast }) {
-  const { token, user } = useAuth()
+  const { token, me: user } = useAuth()
   const { navigateTo }  = useApp()
   const [step, setStep]               = useState(0)   // 0=curriculum 1=config 2=review
   const [curriculum, setCurriculum]   = useState(null)
