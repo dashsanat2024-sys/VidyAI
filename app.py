@@ -762,6 +762,297 @@ def _validate_ocr_answers(raw_answers: dict, exam_questions: list) -> Dict[int, 
     return result
 
 
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  SCANNED ANSWER SHEET: IMAGE-DIFF HANDWRITING EXTRACTION
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _generate_blank_answer_sheet_pdf(exam: dict) -> bytes:
+    """
+    Reproduce the printed question paper as a blank PDF using reportlab.
+    The layout must closely match what the browser prints so pixel-diff works.
+    Returns PDF bytes.
+    """
+    try:
+        from reportlab.pdfgen import canvas as rl_canvas
+        from reportlab.lib.pagesizes import A4
+        from reportlab.lib.units import mm
+        import io as _io2
+
+        buf = _io2.BytesIO()
+        W, H = A4
+        c = rl_canvas.Canvas(buf, pagesize=A4)
+
+        school  = exam.get("school_name", "VidyAI School")
+        subject = exam.get("subject", "")
+        cls     = exam.get("class", "")
+        board   = exam.get("board", "")
+        total   = exam.get("total_marks", 0)
+        qs      = exam.get("questions", [])
+        obj_qs  = [q for q in qs if q.get("type", "objective") == "objective"]
+        subj_qs = [q for q in qs if q.get("type", "objective") != "objective"]
+
+        def new_page():
+            c.showPage()
+            return H - 20 * mm
+
+        def maybe_new_page(y, needed=25):
+            if y < needed * mm:
+                return new_page()
+            return y
+
+        # ── Header ────────────────────────────────────────────────────────────
+        y = H - 15 * mm
+        c.setFont("Helvetica-Bold", 13)
+        c.drawString(15 * mm, y, school)
+        y -= 7 * mm
+        c.setFont("Helvetica", 11)
+        c.drawString(15 * mm, y, f"{subject} — {board} {cls}")
+        y -= 6 * mm
+        c.setFont("Helvetica", 9)
+        c.drawString(15 * mm, y,
+            f"Total Marks: {total} | Questions: {len(qs)} | Date: {exam.get('exam_date', '')}")
+        y -= 7 * mm
+
+        # Student info row
+        for label, x in [("STUDENT NAME", 15), ("ROLL NUMBER", 85), ("CLASS", 145)]:
+            c.setFont("Helvetica-Bold", 8)
+            c.drawString(x * mm, y, label)
+        y -= 5 * mm
+        c.line(15 * mm, y, 82 * mm, y)
+        c.line(85 * mm, y, 142 * mm, y)
+        y -= 10 * mm
+
+        # ── Section A — Objective ──────────────────────────────────────────────
+        if obj_qs:
+            y = maybe_new_page(y, 30)
+            c.setFont("Helvetica-Bold", 10)
+            total_obj_marks = sum(q.get("marks", 1) for q in obj_qs)
+            c.drawString(15 * mm, y,
+                f"SECTION A — OBJECTIVE QUESTIONS ({len(obj_qs)} × — = {total_obj_marks} MARKS)")
+            y -= 8 * mm
+
+            for q in obj_qs:
+                y = maybe_new_page(y, 40)
+                marks = q.get("marks", q.get("weightage", 1))
+                qtext = str(q.get("question", ""))
+                c.setFont("Helvetica-Bold", 10)
+                line1 = f"Q{q['id']}. {qtext[:85]}  [{marks} mark{'s' if marks != 1 else ''}]"
+                c.drawString(15 * mm, y, line1[:100])
+                if len(line1) > 100:
+                    y -= 5 * mm
+                    c.drawString(20 * mm, y, line1[100:])
+                y -= 6 * mm
+
+                opts = q.get("options") or {}
+                if opts:
+                    c.setFont("Helvetica", 9)
+                    opt_str = "     ".join(f"{k}) {v}" for k, v in sorted(opts.items()))
+                    c.drawString(20 * mm, y, opt_str[:110])
+                    y -= 6 * mm
+
+                c.setFont("Helvetica", 10)
+                c.drawString(20 * mm, y, "Answer: ")
+                c.line(44 * mm, y - 1, 110 * mm, y - 1)
+                y -= 10 * mm
+
+        # ── Section B — Subjective ────────────────────────────────────────────
+        if subj_qs:
+            y = maybe_new_page(y, 40)
+            c.setFont("Helvetica-Bold", 10)
+            c.drawString(15 * mm, y, "SECTION B — SUBJECTIVE QUESTIONS")
+            y -= 8 * mm
+
+            for q in subj_qs:
+                y = maybe_new_page(y, 55)
+                marks = q.get("marks", q.get("weightage", 1))
+                qtext = str(q.get("question", ""))
+                c.setFont("Helvetica-Bold", 10)
+                line1 = f"Q{q['id']}. {qtext[:85]}  [{marks} marks]"
+                c.drawString(15 * mm, y, line1[:100])
+                if len(line1) > 100:
+                    y -= 5 * mm
+                    c.drawString(20 * mm, y, line1[100:])
+                y -= 6 * mm
+                # Ruled lines for answer
+                for _ in range(6):
+                    y = maybe_new_page(y, 15)
+                    c.line(15 * mm, y, W - 15 * mm, y)
+                    y -= 7 * mm
+                y -= 4 * mm
+
+        c.save()
+        buf.seek(0)
+        return buf.read()
+
+    except Exception as e:
+        print(f"[BLANK-PDF] Generation failed: {e}")
+        return b""
+
+
+def _diff_and_ocr_answers(scanned_pdf_path: str, exam: dict) -> Dict[int, str]:
+    """
+    Core handwriting extraction using image diff:
+    1. Generate the blank answer sheet from exam data
+    2. Convert both blank and scanned to images at same DPI
+    3. Pixel-diff: scanned - blank = only handwriting remains
+    4. Per-question: crop the diff image to that question's answer region
+    5. Send each crop to GPT-4o Vision for clean OCR (sees only ink on white)
+    Returns {question_id: answer_text}
+    """
+    import io as _io
+    import numpy as np
+    from PIL import Image
+
+    questions   = exam.get("questions", [])
+    obj_qs      = [q for q in questions if q.get("type", "objective") == "objective"]
+    subj_qs     = [q for q in questions if q.get("type", "objective") != "objective"]
+
+    if not questions:
+        return {}
+
+    # ── Step 1: generate blank answer sheet ───────────────────────────────────
+    blank_pdf_bytes = _generate_blank_answer_sheet_pdf(exam)
+    if not blank_pdf_bytes:
+        print("[DIFF-OCR] Blank PDF generation failed — falling back")
+        return {}
+
+    # ── Step 2: convert both PDFs to images ──────────────────────────────────
+    try:
+        from pdf2image import convert_from_path, convert_from_bytes
+        DPI = 200
+        blank_pages  = convert_from_bytes(blank_pdf_bytes, dpi=DPI)
+        scanned_pages = convert_from_path(scanned_pdf_path, dpi=DPI)
+    except Exception as e:
+        print(f"[DIFF-OCR] pdf2image failed: {e}")
+        return {}
+
+    answers: Dict[int, str] = {}
+    client = _oai.OpenAI(api_key=OPENAI_API_KEY)
+
+    for page_idx, (blank_page, scanned_page) in enumerate(
+            zip(blank_pages, scanned_pages)):
+
+        # ── Step 3: pixel diff ────────────────────────────────────────────────
+        # Resize scanned to match blank (alignment)
+        if scanned_page.size != blank_page.size:
+            scanned_page = scanned_page.resize(blank_page.size, Image.LANCZOS)
+
+        blank_arr   = np.array(blank_page.convert("RGB")).astype(np.int16)
+        scanned_arr = np.array(scanned_page.convert("RGB")).astype(np.int16)
+
+        # Handwriting = pixels that became darker in the scanned version
+        diff = blank_arr - scanned_arr          # positive = darker in scanned
+        darkening = diff.mean(axis=2)           # per-pixel average darkening
+        handwriting_mask = darkening > 20       # threshold: 20 grey levels darker
+
+        # Build clean handwriting-only image (white bg, black ink)
+        hw_img_arr = np.ones_like(blank_arr, dtype=np.uint8) * 255
+        hw_img_arr[handwriting_mask] = 0
+        hw_full = Image.fromarray(hw_img_arr)
+
+        H_px, W_px = blank_arr.shape[:2]
+
+        # ── Step 4: map questions to page bands ──────────────────────────────
+        # Divide the usable page area equally, one band per question on this page.
+        qs_per_page = max(1, len(questions) // max(len(blank_pages), 1))
+        page_qs = questions[page_idx * qs_per_page:(page_idx + 1) * qs_per_page]
+        if page_idx == len(blank_pages) - 1:
+            page_qs = questions[page_idx * qs_per_page:]
+        if not page_qs:
+            continue
+
+        header_frac = 0.18 if page_idx == 0 else 0.05
+        header_px   = int(H_px * header_frac)
+        usable_px   = H_px - header_px
+        band_px     = usable_px // len(page_qs)
+
+        for q_idx, q in enumerate(page_qs):
+            qid   = int(q.get("id", 0))
+            qtype = q.get("type", "objective")
+
+            y_start = header_px + q_idx * band_px
+            y_end   = min(y_start + band_px + 10, H_px)
+
+            if qtype == "objective":
+                # "Answer: ___" sits at ~65-80% down the block.
+                # Use a wide window (40%-130% of band) to capture it
+                # even if layout estimation is off by ±half a band.
+                crop_y_start = max(0,    y_start + int(band_px * 0.40))
+                crop_y_end   = min(H_px, y_start + int(band_px * 1.30))
+            else:
+                # Subjective: written text fills blank space after question heading.
+                # Crop from 15% of band through end-of-band + 10% overflow.
+                crop_y_start = max(0,    y_start + int(band_px * 0.15))
+                crop_y_end   = min(H_px, y_start + int(band_px * 1.10))
+
+            crop_arr = hw_img_arr[crop_y_start:crop_y_end, :, :]
+
+            # Skip if no ink pixels in this region
+            if (crop_arr < 128).sum() < 50:   # fewer than 50 dark pixels
+                print(f"[DIFF-OCR] Q{qid}: no ink detected in region — skipping")
+                continue
+
+            # ── Step 5: send crop to GPT-4o Vision ───────────────────────────
+            crop_img = Image.fromarray(crop_arr)
+            # Enhance contrast for better OCR
+            from PIL import ImageEnhance
+            crop_img = ImageEnhance.Contrast(crop_img).enhance(2.0)
+
+            crop_buf = _io.BytesIO()
+            crop_img.save(crop_buf, format="PNG")
+            crop_b64 = base64.b64encode(crop_buf.getvalue()).decode()
+
+            if qtype == "objective":
+                ocr_prompt = (
+                    f"This image shows ONLY the handwritten content from a student's answer sheet "
+                    f"(all printed text has been removed). "
+                    f"Q{qid} is an MCQ. The student wrote or circled one letter: A, B, C, or D.\n"
+                    f"Read the handwritten letter and return ONLY valid JSON: "
+                    + '{"answer": "A"}' +
+                    "\nIf you cannot read any letter, return: {\"answer\": \"\"}"
+                )
+            else:
+                ocr_prompt = (
+                    f"This image shows ONLY the handwritten content from a student's answer sheet "
+                    f"(all printed text has been removed by image processing). "
+                    f"Q{qid} is a written question. Read all handwritten text visible and "
+                    f"return ONLY valid JSON: " +
+                    '{"answer": "the student wrote this"}' +
+                    "\nIf nothing is written, return: {\"answer\": \"\"}"
+                )
+
+            try:
+                resp = client.chat.completions.create(
+                    model=OPENAI_MODEL,
+                    temperature=0,
+                    response_format={"type": "json_object"},
+                    messages=[{"role": "user", "content": [
+                        {"type": "text",      "text": ocr_prompt},
+                        {"type": "image_url", "image_url": {
+                            "url":    f"data:image/png;base64,{crop_b64}",
+                            "detail": "high"
+                        }}
+                    ]}]
+                )
+                raw = json.loads(resp.choices[0].message.content)
+                val = str(raw.get("answer", "")).strip()
+                if val:
+                    # For MCQ, extract just the letter
+                    if qtype == "objective":
+                        m = re.search(r"\b([A-D])\b", val, re.IGNORECASE)
+                        if m:
+                            answers[qid] = m.group(1).upper()
+                            print(f"[DIFF-OCR] Q{qid} (MCQ): {answers[qid]}")
+                    else:
+                        answers[qid] = val
+                        print(f"[DIFF-OCR] Q{qid} (subj): {val[:60]}")
+            except Exception as e:
+                print(f"[DIFF-OCR] Q{qid} GPT call failed: {e}")
+
+    return answers
+
+
 def _extract_answers(path: str, exam_questions: list = None):
     """Extract student answers from an answer sheet file."""
     exam_questions = exam_questions or []
@@ -821,127 +1112,102 @@ def _extract_answers(path: str, exam_questions: list = None):
                 print(f"[PDF-TEXT-GPT] {_gpt_txt_err}")
 
         # ── Path B: Scanned / handwritten PDF ────────────────────────────────
-        # Key insight: the page contains BOTH printed question-paper text AND
-        # the student's handwriting. A single whole-page prompt causes GPT to
-        # read the dominant printed text and miss the handwriting.
-        #
-        # Solution — two-stage extraction:
-        #   Stage 1: Send the page image together with the printed text layer
-        #            and ask GPT to report ONLY text that is NOT in the printed
-        #            layer (i.e., pure handwritten additions).
-        #   Stage 2: If Stage 1 returns nothing useful, fall back to per-question
-        #            targeted extraction asking specifically about each answer blank.
+        # PRIMARY: Image-diff approach.
+        # Generate a blank version of the question paper from exam data,
+        # subtract it from the scanned image → isolates pure handwriting pixels.
+        # Send per-question crops (containing ONLY ink) to GPT-4o for OCR.
+        # This is the only reliable approach when printed text and handwriting
+        # coexist — prompt engineering alone cannot separate them.
         if IS_BLANK_PAPER:
-            print("[PDF-OCR] Printed question paper detected — using handwriting-diff OCR")
+            print("[PDF-OCR] Printed question paper with handwriting — using image-diff OCR")
 
+        if exam_questions:
+            try:
+                diff_answers = _diff_and_ocr_answers(path, {
+                    "questions":   exam_questions,
+                    "school_name": "",
+                    "subject":     "",
+                    "class":       "",
+                    "board":       "",
+                    "total_marks": sum(float(q.get("marks", q.get("weightage", 1)))
+                                       for q in exam_questions),
+                    "exam_date":   "",
+                })
+                if diff_answers:
+                    print(f"[PDF-OCR] Image-diff extracted {len(diff_answers)} answers: "
+                          f"{list(diff_answers.keys())}")
+                    return diff_answers, "image_diff_ocr"
+                else:
+                    print("[PDF-OCR] Image-diff found no ink — trying fallback")
+            except Exception as _diff_err:
+                print(f"[PDF-OCR] Image-diff failed: {_diff_err}")
+
+        # ── Path C: GPT-4o whole-page vision with adaptive thresholding ───────
+        # Fallback when diff fails (e.g. alignment issues, very light handwriting)
         try:
             from pdf2image import convert_from_path
-            import io as _io
-            images = convert_from_path(path, dpi=300)
+            import io as _io, numpy as _np
+            images = convert_from_path(path, dpi=250)
             combined: Dict[int, str] = {}
             client = _oai.OpenAI(api_key=OPENAI_API_KEY)
 
+            obj_qs  = [q for q in exam_questions if q.get("type","objective") == "objective"]
+            subj_qs = [q for q in exam_questions if q.get("type","objective") != "objective"]
+            obj_ids  = ", ".join(str(q["id"]) for q in obj_qs)  or "none"
+            subj_ids = ", ".join(str(q["id"]) for q in subj_qs) or "none"
+            q_ref    = "\n".join(
+                f"Q{q['id']}: {str(q.get('question',''))[:70]}"
+                for q in sorted(exam_questions, key=lambda x: int(x.get("id",0)))
+            )
+
             for img in images:
+                # Adaptive threshold: make handwriting stand out
+                # Convert to greyscale, apply contrast enhancement
+                from PIL import ImageEnhance, ImageFilter
+                grey = img.convert("L")
+                # Enhance contrast to make handwriting darker vs printed grey
+                enhanced = ImageEnhance.Contrast(grey).enhance(2.5)
+                # Convert back to RGB for API
+                enhanced_rgb = enhanced.convert("RGB")
                 buf = _io.BytesIO()
-                img.save(buf, format="PNG")
+                enhanced_rgb.save(buf, format="PNG")
                 img_b64 = base64.b64encode(buf.getvalue()).decode()
 
-                # ── Stage 1: diff-based extraction ───────────────────────────
-                # Provide the printed text so GPT knows what to IGNORE,
-                # then asks only for content the student added by hand.
-                printed_layer = raw_text[:4000] if raw_text.strip() else ""
-                obj_qs  = [q for q in exam_questions if q.get("type","objective") == "objective"]
-                subj_qs = [q for q in exam_questions if q.get("type","objective") != "objective"]
-                obj_ids  = ", ".join(str(q["id"]) for q in obj_qs)  or "none"
-                subj_ids = ", ".join(str(q["id"]) for q in subj_qs) or "none"
-
-                q_ref = "\n".join(
-                    f"Q{q['id']}: {str(q.get('question',''))[:70]}"
-                    for q in sorted(exam_questions, key=lambda x: int(x.get("id",0)))
-                ) if exam_questions else ""
-
-                diff_prompt = (
-                    "You are analysing a scanned student answer sheet.\n"
-                    "The sheet is a PRINTED question paper that the student has filled in by hand.\n\n"
-                    "PRINTED TEXT already on the paper (ignore all of this):\n"
-                    "---\n" + (printed_layer if printed_layer else "(not available)") + "\n---\n\n"
-                    "QUESTION REFERENCE:\n" + (q_ref if q_ref else "(not provided)") + "\n\n"
-                    "YOUR TASK — find and read ONLY the student's handwritten additions:\n"
-                    f"• Objective questions {obj_ids}: student circles or writes ONE letter (A/B/C/D) "
-                    "in the blank after 'Answer:'. Read that letter.\n"
-                    f"• Subjective questions {subj_ids}: student writes sentences in the blank space "
-                    "below the question. Read that handwritten text.\n\n"
-                    "CRITICAL: Do NOT return any text that appears in the PRINTED TEXT section above.\n"
-                    "If a student left a question blank, omit it.\n\n"
-                    "Return ONLY valid JSON:\n"
-                    + '{"answers": {"1":"A","2":"B","7":"student wrote this","8":"student wrote this"}}' 
+                prompt = (
+                    "This is an enhanced scan of a student answer sheet. "
+                    "The contrast has been boosted so handwritten ink appears very dark "
+                    "while printed text appears medium grey.\n\n"
+                    "CRITICAL RULE: Only extract text that appears DARKER than the surrounding "
+                    "printed text — this is the student's handwriting. Ignore all medium-grey "
+                    "printed question text.\n\n"
+                    f"Questions reference (PRINTED — do not extract these):\n{q_ref}\n\n"
+                    f"For objective questions ({obj_ids}): extract the DARK letter "
+                    "A/B/C/D written in the Answer: blank.\n"
+                    f"For subjective questions ({subj_ids}): extract DARK handwritten "
+                    "sentences in blank ruled space below the question.\n\n"
+                    "Return ONLY valid JSON: "
+                    + '{"answers": {"1":"A","2":"C","7":"student wrote this"}}' 
                 )
-
                 resp = client.chat.completions.create(
-                    model=OPENAI_MODEL,
-                    temperature=0,
+                    model=OPENAI_MODEL, temperature=0,
                     response_format={"type": "json_object"},
                     messages=[{"role": "user", "content": [
-                        {"type": "text",      "text": diff_prompt},
+                        {"type": "text", "text": prompt},
                         {"type": "image_url", "image_url": {
-                            "url":    f"data:image/png;base64,{img_b64}",
-                            "detail": "high"
+                            "url": f"data:image/png;base64,{img_b64}", "detail": "high"
                         }}
                     ]}]
                 )
-                stage1 = json.loads(resp.choices[0].message.content)
-                page_ans = _validate_ocr_answers(stage1.get("answers", {}), exam_questions)
-                print(f"[PDF-OCR] Stage-1 extracted: {list(page_ans.keys())}")
-
-                # ── Stage 2: per-question targeted pass for any missing Qs ──
-                answered = set(page_ans.keys())
-                missing  = [q for q in exam_questions if int(q.get("id",0)) not in answered]
-
-                if missing:
-                    missing_lines = "\n".join(
-                        f"Q{q['id']} [{'MCQ' if q.get('type','objective')=='objective' else 'Written'}]: "
-                        f"{str(q.get('question',''))[:70]}"
-                        for q in missing
-                    )
-                    targeted_prompt = (
-                        "You are reading a scanned handwritten exam answer sheet.\n\n"
-                        "I need you to find the student's handwritten answer for EACH of these "
-                        "specific questions. Look carefully — the answers may be small, faint, "
-                        "or written in cursive.\n\n"
-                        "Questions to find answers for:\n" + missing_lines + "\n\n"
-                        "For MCQ questions: look for a circled or written letter A, B, C, or D "
-                        "in the blank line labelled 'Answer:' below the options.\n"
-                        "For written questions: look for handwritten sentences in the blank "
-                        "space below the question text.\n\n"
-                        "If genuinely blank/unanswered, omit that question.\n"
-                        "Return ONLY valid JSON: {\"answers\": {\"7\": \"...\", \"8\": \"...\"}}"
-                    )
-                    resp2 = client.chat.completions.create(
-                        model=OPENAI_MODEL,
-                        temperature=0,
-                        response_format={"type": "json_object"},
-                        messages=[{"role": "user", "content": [
-                            {"type": "text",      "text": targeted_prompt},
-                            {"type": "image_url", "image_url": {
-                                "url":    f"data:image/png;base64,{img_b64}",
-                                "detail": "high"
-                            }}
-                        ]}]
-                    )
-                    stage2 = json.loads(resp2.choices[0].message.content)
-                    stage2_ans = _validate_ocr_answers(stage2.get("answers", {}), exam_questions)
-                    print(f"[PDF-OCR] Stage-2 filled in: {list(stage2_ans.keys())}")
-                    page_ans.update(stage2_ans)
-
+                raw_ocr = json.loads(resp.choices[0].message.content)
+                page_ans = _validate_ocr_answers(raw_ocr.get("answers", {}), exam_questions)
                 combined.update(page_ans)
 
             if combined:
-                return combined, "vision_ocr_pdf"
+                return combined, "vision_ocr_enhanced"
+        except Exception as _vis_err:
+            print(f"[PDF-OCR] Vision fallback failed: {_vis_err}")
 
-        except Exception as _pdf2img_err:
-            print(f"[PDF-OCR] pdf2image failed: {_pdf2img_err}")
-
-        # ── Path C: pdf2image unavailable — text-only GPT fallback ───────────
+        # ── Path D: text-only GPT fallback ────────────────────────────────────
         if raw_text.strip():
             try:
                 client = _oai.OpenAI(api_key=OPENAI_API_KEY)
@@ -950,9 +1216,8 @@ def _extract_answers(path: str, exam_questions: list = None):
                     response_format={"type": "json_object"},
                     messages=[{"role": "user", "content": (
                         _build_ocr_prompt(exam_questions) +
-                        "\n\nThe following raw text was extracted from the PDF. It is the PRINTED "
-                        "question paper template — look for any student-typed answers that appear "
-                        "AFTER each 'Answer:' label (ignore blank underscores):\n\n" +
+                        "\n\nPDF text layer (printed question paper — look for any typed student "
+                        "answers after each 'Answer:' label, ignore blank underscores):\n\n" +
                         raw_text[:4000]
                     )}]
                 )
