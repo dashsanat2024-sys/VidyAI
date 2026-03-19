@@ -176,15 +176,24 @@ const S = {
 // Used by both EvalPanel and can be imported by QMasterPanel
 function TemplateDownloads({ examId, token }) {
   if (!examId) return null
-
   const baseUrl = `${API}/api/exams/${examId}`
 
   const downloads = [
     {
+      href:  `${baseUrl}/combined-print`,
+      icon:  '🖨️',
+      label: 'Print Pack',
+      sub:   'Questions + Answer Sheet',
+      color: '#1e40af',
+      bg:    '#eff6ff',
+      border:'#93c5fd',
+      recommended: true,
+    },
+    {
       href:  `${baseUrl}/question-paper`,
       icon:  '📝',
       label: 'Question Paper',
-      sub:   'Print & give to students',
+      sub:   'Questions only',
       color: '#1e1b4b',
       bg:    '#eef2ff',
       border:'#c7d2fe',
@@ -193,11 +202,10 @@ function TemplateDownloads({ examId, token }) {
       href:  `${baseUrl}/answer-sheet`,
       icon:  '🖊',
       label: 'Answer Sheet',
-      sub:   'Students fill & return',
+      sub:   'OCR-ready bubbles',
       color: '#065f46',
       bg:    '#f0fdf4',
       border:'#86efac',
-      primary: true,
     },
     {
       href:  `${baseUrl}/answer-key`,
@@ -207,18 +215,22 @@ function TemplateDownloads({ examId, token }) {
       color: '#7f1d1d',
       bg:    '#fef2f2',
       border:'#fca5a5',
-      teacherOnly: true,
     },
   ]
 
   return (
     <div style={{ marginTop: '10px', padding: '14px', borderRadius: '10px',
       background: '#f8fafc', border: '1px solid #e2e8f0' }}>
-      <div style={{ fontSize: '11px', fontWeight: '700', color: '#94a3b8',
-        textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '10px' }}>
-        📄 Print Templates
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+        marginBottom: '10px' }}>
+        <span style={{ fontSize: '11px', fontWeight: '700', color: '#94a3b8',
+          textTransform: 'uppercase', letterSpacing: '0.05em' }}>📄 Print Templates</span>
+        <span style={{ fontSize: '10px', color: '#6d28d9', background: '#ede9fe',
+          padding: '2px 8px', borderRadius: '999px', fontWeight: '600' }}>
+          Exam ID: {examId}
+        </span>
       </div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '8px' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '7px' }}>
         {downloads.map(d => (
           <a
             key={d.label}
@@ -227,24 +239,48 @@ function TemplateDownloads({ examId, token }) {
             rel="noopener noreferrer"
             style={{
               display: 'flex', flexDirection: 'column', alignItems: 'center',
-              padding: '10px 8px', borderRadius: '8px', textDecoration: 'none',
+              padding: '9px 6px', borderRadius: '8px', textDecoration: 'none',
               background: d.bg, border: `1.5px solid ${d.border}`,
+              position: 'relative',
               transition: 'transform .15s, box-shadow .15s',
-              cursor: 'pointer',
             }}
             onMouseEnter={e => { e.currentTarget.style.transform='translateY(-2px)'; e.currentTarget.style.boxShadow='0 4px 12px rgba(0,0,0,.1)' }}
             onMouseLeave={e => { e.currentTarget.style.transform=''; e.currentTarget.style.boxShadow='' }}
           >
-            <span style={{ fontSize: '20px', marginBottom: '4px' }}>{d.icon}</span>
-            <span style={{ fontSize: '12px', fontWeight: '700', color: d.color,
+            {d.recommended && (
+              <span style={{ position: 'absolute', top: '-8px', left: '50%',
+                transform: 'translateX(-50%)', background: '#6d28d9', color: 'white',
+                fontSize: '8px', fontWeight: '700', padding: '1px 6px',
+                borderRadius: '999px', whiteSpace: 'nowrap' }}>
+                RECOMMENDED
+              </span>
+            )}
+            <span style={{ fontSize: '18px', marginBottom: '3px' }}>{d.icon}</span>
+            <span style={{ fontSize: '11px', fontWeight: '700', color: d.color,
               textAlign: 'center', lineHeight: 1.2 }}>{d.label}</span>
-            <span style={{ fontSize: '10px', color: '#6b7280', marginTop: '2px',
-              textAlign: 'center' }}>{d.sub}</span>
+            <span style={{ fontSize: '9px', color: '#6b7280', marginTop: '2px',
+              textAlign: 'center', lineHeight: 1.3 }}>{d.sub}</span>
           </a>
         ))}
       </div>
-      <div style={{ fontSize: '10px', color: '#94a3b8', marginTop: '8px', textAlign: 'center' }}>
-        Workflow: Print Question Paper + Answer Sheet → Students complete → Scan Answer Sheet → Upload below
+      {/* Workflow steps */}
+      <div style={{ marginTop: '10px', padding: '8px 10px', borderRadius: '7px',
+        background: '#faf5ff', border: '1px solid #e9d5ff' }}>
+        <div style={{ fontSize: '10px', color: '#5b21b6', fontWeight: '600',
+          marginBottom: '4px' }}>How to use:</div>
+        <div style={{ fontSize: '10px', color: '#6b7280', lineHeight: 1.7 }}>
+          <span style={{ color: '#6d28d9', fontWeight: '600' }}>① </span>
+          Print the <strong>Print Pack</strong> (both pages together) and distribute to students
+          <br/>
+          <span style={{ color: '#6d28d9', fontWeight: '600' }}>② </span>
+          Students write answers on the Answer Sheet (bubble for MCQ, ruled box for written)
+          <br/>
+          <span style={{ color: '#6d28d9', fontWeight: '600' }}>③ </span>
+          Collect filled Answer Sheets, scan them, and upload here to evaluate
+          <br/>
+          <span style={{ color: '#6d28d9', fontWeight: '600' }}>④ </span>
+          Select this exam (ID shown above) when uploading for correct grading
+        </div>
       </div>
     </div>
   )

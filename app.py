@@ -1267,21 +1267,21 @@ def _generate_question_paper_pdf(exam: dict) -> bytes:
                 f'Total: {int(total_m)} marks  ·  '
                 f'All questions compulsory')
 
-            # ── Answer sheet instruction box ──────────────────────────────────
-            INSTR_Y = SUMM_Y - 11*mm
+            # ── Instructions box ─────────────────────────────────────────────
+            INSTR_Y = SUMM_Y - 13*mm
             c.setFillColor(rl_colors.HexColor('#fffbeb'))
             c.setStrokeColor(rl_colors.HexColor('#f59e0b'))
             c.setLineWidth(0.8)
-            c.roundRect(M, INSTR_Y, W - 2*M, 10*mm, 2, fill=1, stroke=1)
+            c.roundRect(M, INSTR_Y, W - 2*M, 12*mm, 2, fill=1, stroke=1)
             c.setFillColor(rl_colors.HexColor('#92400e'))
             c.setFont("Helvetica-Bold", 8.5)
-            c.drawString(M + 5*mm, INSTR_Y + 6.5*mm,
-                '★  USE THE SEPARATE ANSWER SHEET — do NOT write on this question paper  ★')
+            c.drawString(M + 5*mm, INSTR_Y + 8.5*mm,
+                'OPTION 1 (Preferred): Use the separate ANSWER SHEET — circle the bubble / write in the box')
             c.setFont("Helvetica", 7.5)
-            c.drawString(M + 5*mm, INSTR_Y + 2.5*mm,
-                'Section A: Circle A/B/C/D bubble  ·  '
-                'Section B: Write in ruled box  ·  '
-                'Answer sheet has a coloured Q-number tab for each question')
+            c.drawString(M + 5*mm, INSTR_Y + 4.5*mm,
+                'OPTION 2 (Fallback): Write answers directly on this question paper in the space provided')
+            c.drawString(M + 5*mm, INSTR_Y + 1*mm,
+                'If using Answer Sheet: Exam ID must match. Download Answer Sheet from teacher portal.')
 
             return INSTR_Y - 6*mm
 
@@ -1347,6 +1347,15 @@ def _generate_question_paper_pdf(exam: dict) -> bytes:
                         c.drawString(M + 8*mm, y - 5*mm, row)
                         y -= 8*mm
 
+                # Answer blank line (for students writing directly on paper)
+                c.setFillColor(rl_colors.HexColor('#374151'))
+                c.setFont("Helvetica", 8.5)
+                c.drawString(M + 8*mm, y - 5*mm, "Answer: ")
+                c.setStrokeColor(rl_colors.HexColor('#94a3b8'))
+                c.setLineWidth(0.7)
+                c.line(M + 28*mm, y - 4*mm, M + 90*mm, y - 4*mm)
+                y -= 8*mm
+
                 # Thin separator between questions
                 c.setStrokeColor(rl_colors.HexColor('#e2e8f0'))
                 c.setLineWidth(0.4)
@@ -1385,10 +1394,20 @@ def _generate_question_paper_pdf(exam: dict) -> bytes:
                 c.setFont("Helvetica", 7.5)
                 c.setFillColor(rl_colors.HexColor('#059669'))
                 c.drawRightString(W - M, y - 5*mm, m_str)
+                y -= (len(q_lines)*5 + 3) * mm
+
+                # Answer lines for fallback writing on paper
+                # Number of lines proportional to marks
+                n_ans_lines = min(8, max(3, int(marks * 1.2)))
+                for li in range(n_ans_lines):
+                    line_y = y - (li+1) * 7*mm
+                    c.setStrokeColor(rl_colors.HexColor('#cbd5e1'))
+                    c.setLineWidth(0.5)
+                    c.line(M + 2*mm, line_y, W - M - 2*mm, line_y)
+                y -= (n_ans_lines * 7 + 3) * mm
 
                 c.setStrokeColor(rl_colors.HexColor('#d1fae5'))
                 c.setLineWidth(0.4)
-                y -= (len(q_lines)*5 + 3) * mm
                 c.line(M, y - 2, W - M, y - 2)
                 y -= 5*mm
 
@@ -3651,6 +3670,12 @@ def generate_questions():
     if not IS_VERCEL:
         _save_json(EXAMS_DIR / f"{exam_id}.json", payload)
     _save_exams()
+    payload["_download_urls"] = {
+        "question_paper":  f"/api/exams/{exam_id}/question-paper",
+        "answer_sheet":    f"/api/exams/{exam_id}/answer-sheet",
+        "answer_key":      f"/api/exams/{exam_id}/answer-key",
+        "combined_print":  f"/api/exams/{exam_id}/combined-print",
+    }
     return jsonify({**payload})
 
 # ── List / Get / Delete Exams ─────────────────────────────────────────────────
@@ -3755,10 +3780,22 @@ def save_exam():
         except Exception as e:
             print(f"[EXAMS] MongoDB detail write failed: {e}")
 
-    print(f"[EXAMS] Saved exam {exam_id} — {len(normalised)} questions, {payload['total_marks']} marks")
-    return jsonify({"ok": True, "exam_id": exam_id, "total_marks": payload["total_marks"],
-                    "objective_count": payload["objective_count"],
-                    "subjective_count": payload["subjective_count"]}), 201
+    log.info(f"[EXAMS] Saved exam {exam_id} — {len(normalised)} questions, {payload['total_marks']} marks")
+    return jsonify({
+        "ok":               True,
+        "exam_id":          exam_id,
+        "total_marks":      payload["total_marks"],
+        "objective_count":  payload["objective_count"],
+        "subjective_count": payload["subjective_count"],
+        "syllabus_name":    payload["syllabus_name"],
+        "subject":          payload["subject"],
+        "download_urls": {
+            "question_paper":  f"/api/exams/{exam_id}/question-paper",
+            "answer_sheet":    f"/api/exams/{exam_id}/answer-sheet",
+            "answer_key":      f"/api/exams/{exam_id}/answer-key",
+            "combined_print":  f"/api/exams/{exam_id}/combined-print",
+        },
+    }), 201
 
 @app.get("/api/exams/<exam_id>")
 @auth()
@@ -3898,6 +3935,54 @@ def download_question_paper(exam_id):
         headers={"Content-Disposition": f'attachment; filename="{filename}"'}
     )
 
+
+
+@app.get("/api/exams/<exam_id>/combined-print")
+@auth()
+def download_combined_print(exam_id):
+    """
+    Combined print PDF: Question Paper followed by Answer Sheet.
+    Single file for teacher to print — students get both together.
+    Page 1+: Question Paper (read-only, questions + instructions)
+    Then: Answer Sheet (fill in — bubbles + ruled boxes)
+    The Exam ID appears prominently on every page of both documents.
+    """
+    e = _load_exam(exam_id)
+    if not e:
+        return jsonify({"error": "Exam not found"}), 404
+
+    try:
+        from pypdf import PdfWriter, PdfReader
+        import io as _io
+
+        writer = PdfWriter()
+
+        qp_bytes = _generate_question_paper_pdf(e)
+        as_bytes = _generate_answer_sheet_pdf(e)
+
+        for pdf_bytes in [qp_bytes, as_bytes]:
+            if pdf_bytes:
+                reader = PdfReader(_io.BytesIO(pdf_bytes))
+                for page in reader.pages:
+                    writer.add_page(page)
+
+        out = _io.BytesIO()
+        writer.write(out)
+        out.seek(0)
+        combined = out.read()
+
+        subject  = re.sub(r"[^\w\s-]", "", e.get("subject", "Exam"))[:30]
+        filename = f"PrintPack_{subject}_{exam_id}.pdf"
+
+        from flask import Response
+        return Response(
+            combined,
+            mimetype="application/pdf",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'}
+        )
+    except Exception as ex:
+        log.error(f"[COMBINED-PRINT] {ex}", exc_info=True)
+        return jsonify({"error": str(ex)}), 500
 
 def _load_exam(exam_id: str) -> Optional[dict]:
     if exam_id in exams_registry:
