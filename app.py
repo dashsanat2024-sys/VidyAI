@@ -3212,8 +3212,9 @@ def signup():
         return jsonify({"error": "Enter a valid email address"}), 400
     if len(pw) < 8:
         return jsonify({"error": "Password must be at least 8 characters"}), 400
-    if role not in ("student", "tutor", "teacher", "school_admin", "parent", "admin"):
-        role = "student"
+    if role not in ("student", "tutor", "teacher", "parent"):
+        # Explicitly blocking admin/school_admin registration as requested
+        return jsonify({"error": "Administrative registration is restricted. Please contact the system administrator."}), 403
 
     # ── OTP verification (required for registration) ──────────────────────────
     if otp:
@@ -5906,15 +5907,18 @@ def admin_stats():
     ) / (1024 ** 3)
 
     # Exam/eval counts: scoped to visible users
+    # Stats across all users
     exam_count = len([e for e in exams_registry.values()
                       if u["role"] == "admin" or e.get("owner_id") in visible_uid_set])
     eval_count = len([e for e in evaluations_registry.values()
                       if u["role"] == "admin" or e.get("owner_id") in visible_uid_set])
+    visitor_count = len(db.get("visitors", []))
 
     return jsonify({
         "teacher_count":  len([x for x in users if x["role"] in ("teacher","tutor")]),
         "student_count":  len([x for x in users if x["role"] == "student"]),
         "parent_count":   len([x for x in users if x["role"] == "parent"]),
+        "visitor_count":  visitor_count,
         "exam_count":     exam_count,
         "eval_count":     eval_count,
         "syllabus_count": len(syllabi_registry),
@@ -5949,6 +5953,27 @@ def admin_settings():
 def get_settings():
     db = db_load()
     return jsonify({"settings": db.get("settings", {})})
+
+@app.route("/api/visitors/track", methods=["POST"])
+def track_visitor():
+    db = db_load()
+    if "visitors" not in db:
+        db["visitors"] = []
+    
+    # Store minimal info: timestamp, hashed IP (privacy), and browser
+    ip_hash = hashlib.sha256((request.remote_addr or "unknown").encode()).hexdigest()[:12]
+    db["visitors"].append({
+        "time": _now(),
+        "ip_hash": ip_hash,
+        "ua": request.headers.get("User-Agent", "unknown")[:100]
+    })
+    
+    # Optional: Keep only last 10,000 visitors to save space in platform_data.json
+    if len(db["visitors"]) > 10000:
+        db["visitors"] = db["visitors"][-10000:]
+        
+    db_save(db)
+    return jsonify({"ok": True})
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  SPA SERVING (React dist/)

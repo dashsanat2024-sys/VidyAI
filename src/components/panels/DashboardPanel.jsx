@@ -277,10 +277,10 @@ function SchoolAdminDashboard({ me, adminStats, navigate, token, showToast }) {
       <div className="stats-grid">
         <StatCard label="Teachers"       value={stats.teacher_count ?? 0} />
         <StatCard label="Students"       value={stats.student_count ?? 0} />
+        <StatCard label="Visitors"       value={stats.visitor_count ?? 0} color="var(--indigo)" />
         <StatCard label="Exams Created"  value={stats.exam_count   ?? 0} color="var(--saffron)" />
         <StatCard label="Evaluations"    value={stats.eval_count   ?? 0} />
         <StatCard label="Storage Used"   value={`${stats.storage_gb ?? '0.0'} GB`} />
-        <StatCard label="Avg. Score"     value={stats.avg_score ? `${stats.avg_score}%` : 'N/A'} />
       </div>
 
       <h3 style={{ marginBottom: 14, fontFamily: 'var(--serif)' }}>Quick Access</h3>

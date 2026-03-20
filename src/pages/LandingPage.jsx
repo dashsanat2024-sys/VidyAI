@@ -2,6 +2,7 @@ import Logo from '../components/shared/Logo'
 
 import { useState, useEffect, useRef } from 'react'
 import AuthModal from '../components/auth/AuthModal'
+import { apiPost } from '../utils/api'
 
 const BOARDS = ['CBSE','ICSE / ISC','Maharashtra Board','Tamil Nadu Board','Karnataka Board','Kerala Board','UP Board','Gujarat Board','Rajasthan Board','West Bengal Board','Telangana Board','NIOS']
 
@@ -72,6 +73,8 @@ export default function LandingPage() {
   useEffect(() => {
     const handler = () => setScrolled(window.scrollY > 20)
     window.addEventListener('scroll', handler, { passive: true })
+    // Track visitor
+    apiPost('/visitors/track', {})
     return () => window.removeEventListener('scroll', handler)
   }, [])
 
