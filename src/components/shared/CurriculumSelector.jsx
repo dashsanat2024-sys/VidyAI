@@ -102,7 +102,7 @@ export default function CurriculumSelector({ token, onComplete, buttonLabel = "L
       {/* Selection Grid: Exactly like Curriculum Hub */}
       <div style={{ 
         display: 'grid', 
-        gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', 
+        gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', 
         gap: '14px',
         alignItems: 'flex-end'
       }}>

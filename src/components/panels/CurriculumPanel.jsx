@@ -124,6 +124,7 @@ export default function CurriculumPanel({ showToast }) {
   const loadChapters = async () => {
     if (!subject || !board) return
     setChapLoading(true); setResult(null); setActiveMode(''); stopSpeechAll()
+    setPdfUrl(null)
 
     const localChapters = getChapters(classNum, subject)
     const localPdf      = getPdfUrl(classNum, subject)

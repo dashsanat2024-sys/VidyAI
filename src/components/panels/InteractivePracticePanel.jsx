@@ -166,31 +166,33 @@ export default function InteractivePracticePanel({ showToast }) {
             </div>
           </div>
 
-          <div style={{ background: '#f8fafc', padding: '20px', borderRadius: '12px', border: '1px solid #e2e8f0', marginBottom: '24px' }}>
-             <h4 style={{ fontSize: '13px', fontWeight: '700', color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '16px' }}>
+          <div style={{ background: '#f8fafc', padding: '16px 0', borderRadius: '12px', border: '1px solid #e2e8f0', marginBottom: '24px' }}>
+             <h4 style={{ fontSize: '11px', fontWeight: '800', color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: '14px', padding: '0 16px' }}>
                 1. Select Curriculum
              </h4>
-             <CurriculumSelector token={token} onComplete={handleSelectionComplete} buttonLabel="Load Practice Knowledge" />
+             <div style={{ padding: '0 16px' }}>
+               <CurriculumSelector token={token} onComplete={handleSelectionComplete} buttonLabel="Load Practice Knowledge" />
+             </div>
           </div>
 
           {selectedSyl && sourceMeta && (
             <div style={{ background: 'var(--indigo3)', padding: '16px', borderRadius: '12px', border: '1px solid var(--indigo2)', marginBottom: '24px' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
                 <div>
-                   <div style={{ fontSize: '11px', fontWeight: '700', color: 'var(--indigo)', textTransform: 'uppercase', marginBottom: '4px' }}>Target Syllabus</div>
-                   <div style={{ fontWeight: '700', color: 'var(--text)' }}>{sourceMeta.name}</div>
+                   <div style={{ fontSize: '10px', fontWeight: '800', color: 'var(--indigo)', textTransform: 'uppercase', marginBottom: '4px', letterSpacing: '0.05em' }}>Target Syllabus</div>
+                   <div style={{ fontWeight: '700', color: 'var(--text)', fontSize: '15px' }}>{sourceMeta.name}</div>
                    <div style={{ fontSize: '12px', color: 'var(--muted)' }}>{sourceMeta.board} · Class {sourceMeta.classNum} · {sourceMeta.subject}</div>
                 </div>
                 <button onClick={handleDeleteSyllabus} disabled={deleting}
-                  style={{ padding: '8px 12px', background: '#fee2e2', border: '1px solid #fca5a5', borderRadius: 8, color: '#991b1b', fontSize: 11, fontWeight: 700, cursor: 'pointer', fontFamily: 'var(--sans)' }}>
-                  {deleting ? '…' : 'Remove'}
+                  style={{ padding: '8px 16px', background: '#fee2e2', border: 'none', borderRadius: 8, color: '#991b1b', fontSize: '11px', fontWeight: '700', cursor: 'pointer', fontFamily: 'var(--sans)' }}>
+                  {deleting ? '…' : 'Remove Syllabus'}
                 </button>
               </div>
             </div>
           )}
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 24 }}>
-            <div className="fg">
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 16, marginBottom: 24 }}>
+            <div className="fg" style={{ marginBottom: 0 }}>
               <label>Question Type</label>
               <select className="fi sel" value={qType} onChange={e => setQType(e.target.value)}>
                 <option value="mixed">Mixed (Obj + Subj)</option>
@@ -198,7 +200,7 @@ export default function InteractivePracticePanel({ showToast }) {
                 <option value="subjective">Subjective Only</option>
               </select>
             </div>
-            <div className="fg">
+            <div className="fg" style={{ marginBottom: 0 }}>
               <label>Number of Questions</label>
               <select className="fi sel" value={qCount} onChange={e => setQCount(Number(e.target.value))}>
                 {[5, 10, 15, 20].map(n => <option key={n} value={n}>{n} Questions</option>)}
@@ -206,7 +208,7 @@ export default function InteractivePracticePanel({ showToast }) {
             </div>
           </div>
 
-          <button className="btn-submit indigo" onClick={generate} disabled={loading || !selectedSyl}>
+          <button className="btn-submit indigo" onClick={generate} disabled={loading || !selectedSyl} style={{ height: '48px' }}>
             {loading ? <><span className="spin" />Generating Questions…</> : '🚀 Start Practice Session →'}
           </button>
         </div>
