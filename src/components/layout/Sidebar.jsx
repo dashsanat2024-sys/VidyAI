@@ -5,6 +5,7 @@
  */
 import { useApp }  from '../../context/AppContext'
 import { useAuth } from '../../context/AuthContext'
+import Logo from '../shared/Logo'
 
 const NAV = [
   {
@@ -58,12 +59,7 @@ export default function Sidebar({ isOpen, onClose }) {
         {/* Brand header */}
         <div className="sb-header">
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-            <div style={{
-              width: '36px', height: '36px', borderRadius: '10px',
-              background: 'linear-gradient(135deg,#7c3aed,#2563eb)',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              fontSize: '20px', flexShrink: 0,
-            }}>✦</div>
+            <Logo size={36} />
             <div>
               <div style={{ color: '#fff', fontWeight: '800', fontSize: '14px',
                 lineHeight: 1.2 }}>Paarthivi</div>

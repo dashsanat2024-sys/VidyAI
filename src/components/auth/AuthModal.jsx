@@ -1,6 +1,6 @@
-import { useState, useRef, useEffect } from 'react'
 import { useAuth } from '../../context/AuthContext'
 import { apiPost } from '../../utils/api'
+import Logo from '../shared/Logo'
 
 const APP_NAME = 'Parvidya'
 
@@ -249,16 +249,7 @@ export default function AuthModal({ isOpen, onClose, defaultForm = 'login', defa
         <div className="pv-modal-head">
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             {/* Parvidya mini-logo */}
-            <svg width="32" height="32" viewBox="0 0 40 40">
-              <defs>
-                <linearGradient id="lg1" x1="0%" y1="0%" x2="100%" y2="100%">
-                  <stop offset="0%" stopColor="#E8761A"/>
-                  <stop offset="100%" stopColor="#F59E0B"/>
-                </linearGradient>
-              </defs>
-              <rect width="40" height="40" rx="10" fill="url(#lg1)"/>
-              <text x="50%" y="55%" dominantBaseline="middle" textAnchor="middle" fontSize="22" fill="white">प</text>
-            </svg>
+            <Logo size={32} />
             <div>
               <div style={{ fontFamily: 'var(--serif)', fontSize: 18, color: 'var(--indigo)', fontWeight: 800 }}>
                 {APP_NAME}

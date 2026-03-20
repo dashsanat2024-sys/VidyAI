@@ -1,17 +1,4 @@
-// ── Paarthivi Smart Learning — Real PNG Logo ───────────────────────────────
-function ParvidyaLogo({ size = 40, fullLogo = false, darkBg = false }) {
-  const filter = darkBg ? 'brightness(0) invert(1)' : 'none'
-  if (fullLogo) {
-    return (
-      <img src="/paarthivi-logo.png" alt="Paarthivi Smart Learning"
-        style={{ height: size, width: 'auto', objectFit: 'contain', display: 'block', flexShrink: 0, filter }} />
-    )
-  }
-  return (
-    <img src="/paarthivi-icon.png" alt="Paarthivi"
-      style={{ width: size, height: size, objectFit: 'contain', display: 'block', flexShrink: 0, filter }} />
-  )
-}
+import Logo from '../components/shared/Logo'
 
 import { useState, useEffect, useRef } from 'react'
 import AuthModal from '../components/auth/AuthModal'
@@ -94,7 +81,7 @@ export default function LandingPage() {
       {/* ════════════════════ NAV ════════════════════ */}
       <nav className={`lp-nav${scrolled ? ' lp-nav-scrolled' : ''}`}>
         <a className="lp-nav-brand" href="#">
-          <ParvidyaLogo size={42} fullLogo={true} />
+          <Logo size={42} full={true} />
         </a>
         <div className="lp-nav-links">
           <a href="#roles">For Schools</a>
@@ -116,7 +103,7 @@ export default function LandingPage() {
         <div className="lp-mobile-overlay" onClick={() => setMobileMenu(false)}>
           <div className="lp-mobile-drawer" onClick={e => e.stopPropagation()}>
             <div className="lp-mobile-top">
-              <ParvidyaLogo size={36} fullLogo={true} />
+              <Logo size={36} full={true} />
               <button className="lp-mobile-close" onClick={() => setMobileMenu(false)}>✕</button>
             </div>
             <nav className="lp-mobile-links">
@@ -334,7 +321,7 @@ export default function LandingPage() {
           <div className="lp-footer-top">
             <div className="lp-footer-brand">
               <div style={{ marginBottom:16 }}>
-                <ParvidyaLogo size={36} fullLogo={true} darkBg={true} />
+                <Logo size={36} full={true} dark={true} />
               </div>
               <p style={{ fontSize:13, lineHeight:1.75, color:'rgba(255,255,255,.45)', maxWidth:260 }}>
                 AI-powered education for every Indian school and student. Making quality learning accessible across all 36 states.
