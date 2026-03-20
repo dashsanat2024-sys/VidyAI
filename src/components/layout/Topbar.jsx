@@ -1,4 +1,5 @@
 import { useApp } from '../../context/AppContext'
+import Logo from '../shared/Logo'
 
 const PANEL_TITLES = {
   dashboard:              'Dashboard',
@@ -40,13 +41,7 @@ export default function Topbar({ onMenuClick }) {
         paddingLeft: 16, borderLeft: '1px solid #EDE9FE',
         marginLeft: 8,
       }}>
-        <img src="/paarthivi-icon.png" alt="" style={{ width: 22, height: 22, objectFit: 'contain' }} />
-        <span style={{
-          fontFamily: 'var(--sans)', fontWeight: 800, fontSize: 13,
-          color: '#4C1D95', letterSpacing: '.2px',
-        }}>
-          Paarthivi
-        </span>
+        <Logo size={24} full={true} />
       </div>
     </div>
   )

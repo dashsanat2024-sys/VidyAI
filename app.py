@@ -2814,20 +2814,20 @@ British English only. Return ONLY valid JSON array. Context: {context}"""
 # ══════════════════════════════════════════════════════════════════════════════
 def _build_curriculum() -> dict:
     boards = {
-        "National (NCERT)": ["CBSE"],
-        "Andhra Pradesh": ["BSEAP"],
-        "Bihar": ["BSEB", "CBSE"],
-        "Delhi": ["CBSE"],
-        "Gujarat": ["GSEB"],
-        "Karnataka": ["KSEEB"],
-        "Kerala": ["KBPE"],
-        "Maharashtra": ["MSBSHSE"],
-        "Odisha": ["BSE Odisha"],
-        "Punjab": ["PSEB"],
-        "Rajasthan": ["RBSE"],
-        "Tamil Nadu": ["TNBSE"],
-        "Uttar Pradesh": ["UPMSP"],
-        "West Bengal": ["WBBSE"],
+        "National (NCERT)": ["CBSE", "ICSE"],
+        "Andhra Pradesh": ["BSEAP", "CBSE", "ICSE"],
+        "Bihar": ["BSEB", "CBSE", "ICSE"],
+        "Delhi": ["CBSE", "ICSE"],
+        "Gujarat": ["GSEB", "CBSE", "ICSE"],
+        "Karnataka": ["KSEEB", "CBSE", "ICSE"],
+        "Kerala": ["KBPE", "CBSE", "ICSE"],
+        "Maharashtra": ["MSBSHSE", "CBSE", "ICSE"],
+        "Odisha": ["BSE Odisha", "CBSE", "ICSE"],
+        "Punjab": ["PSEB", "CBSE", "ICSE"],
+        "Rajasthan": ["RBSE", "CBSE", "ICSE"],
+        "Tamil Nadu": ["TNBSE", "CBSE", "ICSE"],
+        "Uttar Pradesh": ["UPMSP", "CBSE", "ICSE"],
+        "West Bengal": ["WBBSE", "CBSE", "ICSE"],
     }
     data: dict = {}
     for state, bds in boards.items():
@@ -5947,6 +5947,18 @@ def admin_settings():
         db["settings"].update(incoming)
         db_save(db)
     return jsonify({"settings": db["settings"]})
+
+@app.get("/api/admin/visitors")
+@auth(roles=["admin", "school_admin"])
+def get_visitor_details():
+    db = db_load()
+    visitors = db.get("visitors", [])
+    # Sort by timestamp descending
+    try:
+        visitors.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
+    except:
+        pass
+    return jsonify({"visitors": visitors})
 
 @app.route("/api/settings", methods=["GET"])
 @auth() # Any logged in user

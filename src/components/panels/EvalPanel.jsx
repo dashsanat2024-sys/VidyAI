@@ -125,8 +125,10 @@ const S = {
     ...(variant === 'primary' ? {
       background: 'linear-gradient(135deg,#6d28d9,#4f46e5)',
       color: '#fff', boxShadow: '0 2px 8px rgba(109,40,217,.25)',
-    } : variant === 'danger' ? {
-      background: '#fee2e2', color: '#dc2626',
+    } : variant === 'ghost' ? {
+      background: 'transparent', color: '#6d28d9', border: '1px solid transparent'
+    } : variant === 'outline' ? {
+      background: '#fff', color: '#6d28d9', border: '1.5px solid #c7d2fe'
     } : {
       background: '#f1f5f9', color: '#475569',
     }),
@@ -338,7 +340,7 @@ function ExamSelector({ token, value, onChange, showToast }) {
     const meta  = [board, cls].filter(Boolean).join(' ')
     const counts = `${e.objective_count ?? 0}obj + ${e.subjective_count ?? 0}subj`
     const marks  = e.total_marks ? ` · ${e.total_marks}m` : ''
-    return `[${id}] ${name}${meta ? ' — ' + meta : ''} (${counts}${marks})`
+    return `Exam [${id}]: ${name}${meta ? ' — ' + meta : ''} (${counts}${marks})`
   }
 
   return (
@@ -915,6 +917,29 @@ function SingleEvalTab({ token, showToast }) {
 
             <ScoreSummary result={result.result || {}} />
 
+            {/* Parent Email Section - Moved higher for visibility */}
+            <div style={{ ...S.card, margin: '16px 0', border: '2px solid #eef2ff', background: '#fcfdff' }}>
+              <div style={{ fontWeight: '700', color: '#4338ca', fontSize: '14px', marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                📧 Send Report to Parent
+              </div>
+              <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+                <input 
+                  style={{ ...S.input, flex: '1 1 250px' }} 
+                  type="email" 
+                  value={parentEmail}
+                  onChange={e => setParentEmail(e.target.value)} 
+                  placeholder="parent@email.com" 
+                />
+                <button
+                  style={{ ...S.btn('primary'), whiteSpace: 'nowrap', flex: '1 1 150px' }}
+                  onClick={handleEmailReport}
+                  disabled={emailSending || !parentEmail}
+                >
+                  {emailSending ? '⏳ Sending…' : '🚀 Send Email Report'}
+                </button>
+              </div>
+            </div>
+
             {/* Progress bar */}
             <div style={S.progressBar()}>
               <div style={S.progressFill(result.result?.percentage || 0)} />
@@ -943,28 +968,6 @@ function SingleEvalTab({ token, showToast }) {
               questions={examData?.questions || []}
               questionWise={result.result?.question_wise || []}
             />
-          </div>
-
-          <div style={S.card}>
-            <div style={{ fontWeight: '600', color: '#374151', fontSize: '14px', marginBottom: '12px' }}>
-              📧 Send Report to Parent
-            </div>
-            <div style={{ display: 'flex', gap: '10px' }}>
-              <input 
-                style={{ ...S.input, flex: 1 }} 
-                type="email" 
-                value={parentEmail}
-                onChange={e => setParentEmail(e.target.value)} 
-                placeholder="parent@email.com" 
-              />
-              <button
-                style={{ ...S.btn('primary'), whiteSpace: 'nowrap' }}
-                onClick={handleEmailReport}
-                disabled={emailSending || !parentEmail}
-              >
-                {emailSending ? 'Sending…' : 'Send Email Report'}
-              </button>
-            </div>
           </div>
         </>
       )}

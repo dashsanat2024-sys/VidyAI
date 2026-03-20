@@ -1,53 +1,49 @@
 import { useState, useEffect } from 'react'
-import { INDIA_STATES, STATE_BOARDS, getSubjects } from '../panels/indiaCurriculum'
+import { INDIA_STATES, STATE_BOARDS, getSubjects } from '../../data/indiaCurriculum'
 
 const C = {
   indigo:  '#4f46e5', indigoDark: '#3730a3', indigoLight: '#eef2ff', indigoBorder: '#c7d2fe',
   slate:   '#64748b', slateBorder: '#e2e8f0',
   purple:  '#7c3aed', purpleLight:'#f5f3ff', purpleBorder:'#ddd6fe',
   red:     '#dc2626', redLight:   '#fef2f2', redBorder:   '#fecaca',
+  saffron: '#f59e0b', saffron2: '#d97706',
 }
 
 const S = {
   label: {
     fontSize: '12px', fontWeight: '700', color: C.slate,
-    display: 'block', marginBottom: '5px',
+    display: 'block', marginBottom: '8px',
     textTransform: 'uppercase', letterSpacing: '0.04em',
   },
   select: {
-    width: '100%', padding: '10px 12px',
-    border: `1.5px solid ${C.slateBorder}`, borderRadius: '8px',
+    width: '100%', padding: '11px 12px',
+    border: `1.5px solid ${C.slateBorder}`, borderRadius: '10px',
     fontSize: '14px', fontFamily: 'inherit', outline: 'none',
     boxSizing: 'border-box', color: '#0f172a', background: '#fff',
     cursor: 'pointer', transition: 'border-color .15s',
   },
   btn: (v = 'primary', extra = {}) => ({
-    padding: '10px 20px', borderRadius: '10px', border: 'none',
+    padding: '11px 24px', borderRadius: '10px', border: 'none',
     cursor: 'pointer', fontFamily: 'inherit', fontSize: '14px',
-    fontWeight: '600', transition: 'all .15s', display: 'inline-flex',
-    alignItems: 'center', gap: '6px', ...extra,
+    fontWeight: '700', transition: 'all .15s', display: 'inline-flex',
+    alignItems: 'center', gap: '8px', ...extra,
     ...(v === 'primary' ? {
-      background: `linear-gradient(135deg,${C.purple},${C.indigo})`,
-      color: '#fff', boxShadow: '0 2px 8px rgba(109,40,217,.25)',
+      background: 'linear-gradient(135deg, var(--saffron, #f59e0b), var(--saffron2, #d97706))',
+      color: '#fff',
     } : {
       background: '#fff', color: C.slate, border: `1px solid ${C.slateBorder}`
     }),
   }),
   spinner: {
-    width: '18px', height: '18px', border: '2px solid #e2e8f0',
-    borderTop: `2px solid ${C.purple}`, borderRadius: '50%',
+    width: '18px', height: '18px', border: '2px solid rgba(255,255,255,0.3)',
+    borderTop: '2px solid #fff', borderRadius: '50%',
     animation: 'spin .7s linear infinite', display: 'inline-block',
   },
 }
 
 /**
  * Shared CurriculumSelector component
- * cascading: State -> Board -> Class -> Subject
- * 
- * Props:
- *  - token: string (for API calls)
- *  - onComplete: function({ state, board, classNum, subject, chapters, syllabus_id, name })
- *  - buttonLabel: string (default: "Load Chapters")
+ * UI aligned with Curriculum Hub (linear dropdowns + action buttons below)
  */
 export default function CurriculumSelector({ token, onComplete, buttonLabel = "Load Chapters" }) {
   const [state, setState]       = useState('')
@@ -103,9 +99,15 @@ export default function CurriculumSelector({ token, onComplete, buttonLabel = "L
     <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
       <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
       
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '12px' }}>
+      {/* Selection Grid: Exactly like Curriculum Hub */}
+      <div style={{ 
+        display: 'grid', 
+        gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', 
+        gap: '14px',
+        alignItems: 'flex-end'
+      }}>
         {/* State */}
-        <div>
+        <div className="fg" style={{ marginBottom: 0 }}>
           <label style={S.label}>State / UT</label>
           <select style={S.select} value={state} onChange={e => { setState(e.target.value); setBoard(''); setClassNum(''); setSubject('') }}>
             <option value="">— Select State —</option>
@@ -114,7 +116,7 @@ export default function CurriculumSelector({ token, onComplete, buttonLabel = "L
         </div>
 
         {/* Board */}
-        <div>
+        <div className="fg" style={{ marginBottom: 0 }}>
           <label style={S.label}>Board</label>
           <select style={S.select} value={board} onChange={e => { setBoard(e.target.value); setSubject('') }} disabled={!state}>
             <option value="">— Select Board —</option>
@@ -123,7 +125,7 @@ export default function CurriculumSelector({ token, onComplete, buttonLabel = "L
         </div>
 
         {/* Class */}
-        <div>
+        <div className="fg" style={{ marginBottom: 0 }}>
           <label style={S.label}>Class</label>
           <select style={S.select} value={classNum} onChange={e => { setClassNum(e.target.value); setSubject('') }} disabled={!board}>
             <option value="">— Select Class —</option>
@@ -132,7 +134,7 @@ export default function CurriculumSelector({ token, onComplete, buttonLabel = "L
         </div>
 
         {/* Subject */}
-        <div>
+        <div className="fg" style={{ marginBottom: 0 }}>
           <label style={S.label}>Subject</label>
           <select style={S.select} value={subject} onChange={e => setSubject(e.target.value)} disabled={!classNum}>
             <option value="">— Select Subject —</option>
@@ -141,19 +143,36 @@ export default function CurriculumSelector({ token, onComplete, buttonLabel = "L
         </div>
       </div>
 
+      {/* Action Row */}
+      <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
+        <button 
+          className="btn-saffron"
+          style={{ ...S.btn('primary'), opacity: ready ? 1 : 0.5 }}
+          onClick={handleLoad}
+          disabled={!ready || loading}
+        >
+          {loading ? <span style={S.spinner} /> : (
+            <span style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              📖 {buttonLabel}
+            </span>
+          )}
+        </button>
+      </div>
+
       {error && (
-        <div style={{ color: C.red, fontSize: '13px', padding: '10px', background: C.redLight, borderRadius: '8px', border: `1px solid ${C.redBorder}` }}>
+        <div style={{ color: C.red, fontSize: '13px', padding: '10px', background: C.redLight, borderRadius: '8px', border: `1px solid ${C.redBorder}`, marginTop: '8px' }}>
           ⚠️ {error}
         </div>
       )}
+    </div>
+  )
+}
 
-      <button 
-        style={{ ...S.btn('primary', { width: '100%', justifyContent: 'center', padding: '12px' }), opacity: ready ? 1 : 0.5 }}
-        onClick={handleLoad}
-        disabled={!ready || loading}
-      >
-        {loading ? <span style={S.spinner} /> : buttonLabel}
-      </button>
+      {error && (
+        <div style={{ color: C.red, fontSize: '13px', padding: '10px', background: C.redLight, borderRadius: '8px', border: `1px solid ${C.redBorder}`, marginTop: '8px' }}>
+          ⚠️ {error}
+        </div>
+      )}
     </div>
   )
 }

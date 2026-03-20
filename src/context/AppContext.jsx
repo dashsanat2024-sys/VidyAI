@@ -70,9 +70,21 @@ export function AppProvider({ children }) {
         setPlatformSettings(data4.settings || { sidebar: {} })
       }
 
-      setRefreshKey(k => k + 1)
     } catch (err) {
       console.error('[AppContext] refreshData failed:', err)
+    }
+  }, [token])
+
+  const refreshSettings = useCallback(async () => {
+    if (!token) return
+    try {
+      const res = await apiGet('/settings', token)
+      if (res.ok) {
+        const data = await res.json()
+        setPlatformSettings(data.settings || { sidebar: {} })
+      }
+    } catch (err) {
+      console.error('[AppContext] refreshSettings failed:', err)
     }
   }, [token])
 
@@ -94,7 +106,7 @@ export function AppProvider({ children }) {
       adminStats, setAdminStats,
       platformSettings, setPlatformSettings,
       activeSyllabus, setActiveSyllabus,
-      refreshData, refreshKey
+      refreshData, refreshSettings, refreshKey
     }}>
       {children}
     </AppCtx.Provider>

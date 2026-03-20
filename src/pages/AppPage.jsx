@@ -13,7 +13,7 @@ import EvalPanel from '../components/panels/EvalPanel'
 import InteractivePracticePanel from '../components/panels/InteractivePracticePanel'
 import CurriculumPanel from '../components/panels/CurriculumPanel'
 import { QMasterPanel } from '../components/panels/QMasterPanel'
-import { InstitutePanel, AnalyticsPanel, AdminSettingsPanel } from '../components/panels/OtherPanels'
+import { InstitutePanel, AnalyticsPanel, AdminSettingsPanel, VisitorLogPanel } from '../components/panels/OtherPanels'
 import ReportPanel from '../components/panels/ReportPanel'
 
 // ── Panel slot: fills the full content area, scrolls independently ────────
@@ -64,8 +64,9 @@ export default function AppPage() {
           <PanelSlot active={activePanel === 'interactive-practice'}><InteractivePracticePanel {...p} /></PanelSlot>
           <PanelSlot active={activePanel === 'institute'           }><InstitutePanel           {...p} /></PanelSlot>
           <PanelSlot active={activePanel === 'analytics'           }><AnalyticsPanel           {...p} /></PanelSlot>
+          <PanelSlot active={activePanel === 'visitor-log'         }><VisitorLogPanel          {...p} /></PanelSlot>
           <PanelSlot active={activePanel === 'reports'             }><ReportPanel              {...p} /></PanelSlot>
-          <PanelSlot active={activePanel === 'settings'            }><AdminSettingsPanel         {...p} /></PanelSlot>
+          <PanelSlot active={activePanel === 'settings'            }><AdminSettingsPanel       {...p} /></PanelSlot>
         </div>
       </div>
 

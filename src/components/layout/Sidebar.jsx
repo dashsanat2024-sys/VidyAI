@@ -33,6 +33,7 @@ const NAV = [
     items: [
       { id: 'institute', icon: '🏫', label: 'Institute'  },
       { id: 'analytics', icon: '📉', label: 'Analytics'  },
+      { id: 'visitor-log', icon: '👥', label: 'Visitor Log' },
       { id: 'settings',  icon: '⚙️', label: 'Settings'   },
     ],
   },

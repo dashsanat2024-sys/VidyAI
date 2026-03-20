@@ -6,17 +6,16 @@ import Logo from '../shared/Logo'
 const APP_NAME = 'Parvidya'
 
 const ROLES = [
-  { key: 'student',     label: '🎒 Student',      color: 'saffron', reqRoll: true  },
-  { key: 'teacher',     label: '👩‍🏫 Teacher',     color: 'green',   reqRoll: false },
-  { key: 'tutor',       label: '📚 Tutor',         color: 'green',   reqRoll: false },
-  { key: 'parent',      label: '👨‍👩‍👧 Parent',     color: 'indigo',  reqRoll: false },
+  { key: 'student', label: '🎒 Student', color: 'saffron', reqRoll: true },
+  { key: 'teacher', label: '👩‍🏫 Teacher', color: 'green', reqRoll: false },
+  { key: 'tutor', label: '📚 Tutor', color: 'green', reqRoll: false },
+  { key: 'parent', label: '👨‍👩‍👧 Parent', color: 'indigo', reqRoll: false },
 ]
 
 const LOGIN_TABS = [
-  { key: 'student',     label: '🎒 Student'      },
-  { key: 'teacher',     label: '👩‍🏫 Teacher'     },
-  { key: 'parent',      label: '👨‍👩‍👧 Parent'     },
-  { key: 'school_admin',label: '🏫 School Admin'  },
+  { key: 'student', label: '🎒 Student' },
+  { key: 'teacher', label: '👩‍🏫 Teacher' },
+  { key: 'parent', label: '👨‍👩‍👧 Parent' },
 ]
 
 // ── Accessible OTP Input component ───────────────────────────────────────────
@@ -94,33 +93,33 @@ function OTPInput({ value, onChange }) {
 export default function AuthModal({ isOpen, onClose, defaultForm = 'login', defaultRole = 'student' }) {
   const { login } = useAuth()
 
-  const [form,    setForm]    = useState(defaultForm)
-  const [role,    setRole]    = useState(defaultRole)
-  const [alert,   setAlert]   = useState(null)
+  const [form, setForm] = useState(defaultForm)
+  const [role, setRole] = useState(defaultRole)
+  const [alert, setAlert] = useState(null)
   const [loading, setLoading] = useState(false)
 
   // Login
   const [lEmail, setLEmail] = useState('')
-  const [lPw,    setLPw]    = useState('')
-  const [lShowPw,setLShowPw]= useState(false)
+  const [lPw, setLPw] = useState('')
+  const [lShowPw, setLShowPw] = useState(false)
 
   // Register  — step 1: personal info, step 2: account info, step 3: OTP
-  const [regStep,   setRegStep]   = useState(1)
-  const [rFn,       setRFn]       = useState('')
-  const [rLn,       setRLn]       = useState('')
-  const [rPhone,    setRPhone]    = useState('')
-  const [rInst,     setRInst]     = useState('')
-  const [rRoll,     setRRoll]     = useState('')
-  const [rEmail,    setREmail]    = useState('')
-  const [rPw,       setRPw]       = useState('')
-  const [rPwC,      setRPwC]      = useState('')
-  const [rShowPw,   setRShowPw]   = useState(false)
+  const [regStep, setRegStep] = useState(1)
+  const [rFn, setRFn] = useState('')
+  const [rLn, setRLn] = useState('')
+  const [rPhone, setRPhone] = useState('')
+  const [rInst, setRInst] = useState('')
+  const [rRoll, setRRoll] = useState('')
+  const [rEmail, setREmail] = useState('')
+  const [rPw, setRPw] = useState('')
+  const [rPwC, setRPwC] = useState('')
+  const [rShowPw, setRShowPw] = useState(false)
 
   // OTP
-  const [otp,         setOtp]         = useState('')
-  const [otpSending,  setOtpSending]  = useState(false)
-  const [otpTimer,    setOtpTimer]    = useState(0)
-  const [otpVerifying,setOtpVerifying]= useState(false)
+  const [otp, setOtp] = useState('')
+  const [otpSending, setOtpSending] = useState(false)
+  const [otpTimer, setOtpTimer] = useState(0)
+  const [otpVerifying, setOtpVerifying] = useState(false)
   const timerRef = useRef(null)
 
   if (!isOpen) return null
@@ -178,7 +177,7 @@ export default function AuthModal({ isOpen, onClose, defaultForm = 'login', defa
     if (rPw !== rPwC) { showAlert('Passwords do not match'); return }
     setOtpSending(true); clearAlert()
     try {
-      const res  = await apiPost('/auth/send-otp', { email, role, form: 'register' })
+      const res = await apiPost('/auth/send-otp', { email, role, form: 'register' })
       const data = await res.json()
       if (!res.ok) { showAlert(data.error || 'Could not send OTP'); setOtpSending(false); return }
       setRegStep(3)
@@ -199,15 +198,15 @@ export default function AuthModal({ isOpen, onClose, defaultForm = 'login', defa
     if (clean.length < 6) { showAlert('Enter the complete 6-digit OTP'); return }
     setOtpVerifying(true); clearAlert()
     try {
-      const res  = await apiPost('/auth/signup', {
-        name:        `${rFn} ${rLn}`.trim(),
-        email:       rEmail.trim().toLowerCase(),
-        phone:       rPhone.trim(),
-        password:    rPw,
+      const res = await apiPost('/auth/signup', {
+        name: `${rFn} ${rLn}`.trim(),
+        email: rEmail.trim().toLowerCase(),
+        phone: rPhone.trim(),
+        password: rPw,
         role,
         institution: rInst.trim(),
         roll_number: rRoll.trim(),
-        otp:         clean,
+        otp: clean,
       })
       const data = await res.json()
       if (!res.ok) { showAlert(data.error || 'Registration failed'); setOtpVerifying(false); return }
@@ -222,7 +221,7 @@ export default function AuthModal({ isOpen, onClose, defaultForm = 'login', defa
     if (!lEmail || !lPw) { showAlert('Enter email and password'); return }
     setLoading(true); clearAlert()
     try {
-      const res  = await apiPost('/auth/login', { email: lEmail.trim().toLowerCase(), password: lPw, role })
+      const res = await apiPost('/auth/login', { email: lEmail.trim().toLowerCase(), password: lPw, role })
       const data = await res.json()
       if (!res.ok) { showAlert(data.error || 'Login failed'); setLoading(false); return }
       login(data.token, data.user)
@@ -232,9 +231,9 @@ export default function AuthModal({ isOpen, onClose, defaultForm = 'login', defa
   }
 
   const pwHints = [
-    { ok: rPw.length >= 8, label: '8+ chars'   },
+    { ok: rPw.length >= 8, label: '8+ chars' },
     { ok: /[A-Z]/.test(rPw), label: 'Uppercase' },
-    { ok: /\d/.test(rPw),    label: 'Number'    },
+    { ok: /\d/.test(rPw), label: 'Number' },
   ]
 
   const activeRoleData = ROLES.find(r => r.key === role) || ROLES[0]
@@ -266,10 +265,12 @@ export default function AuthModal({ isOpen, onClose, defaultForm = 'login', defa
 
           {/* Alert */}
           {alert && (
-            <div style={{ padding: '10px 14px', borderRadius: 8, marginBottom: 14, fontSize: 13,
+            <div style={{
+              padding: '10px 14px', borderRadius: 8, marginBottom: 14, fontSize: 13,
               background: alert.type === 'ok' ? '#d1fae5' : '#fee2e2',
               color: alert.type === 'ok' ? '#065f46' : '#991b1b',
-              border: `1px solid ${alert.type === 'ok' ? '#a7f3d0' : '#fca5a5'}` }}>
+              border: `1px solid ${alert.type === 'ok' ? '#a7f3d0' : '#fca5a5'}`
+            }}>
               {alert.msg}
             </div>
           )}
@@ -281,10 +282,12 @@ export default function AuthModal({ isOpen, onClose, defaultForm = 'login', defa
               <div style={{ display: 'flex', gap: 3, background: 'var(--paper)', borderRadius: 10, padding: 3, marginBottom: 18 }}>
                 {LOGIN_TABS.map(t => (
                   <button key={t.key} onClick={() => { setRole(t.key); clearAlert() }}
-                    style={{ flex: 1, padding: '7px 2px', fontSize: 10, fontWeight: 700, fontFamily: 'var(--sans)', borderRadius: 8, border: 'none', cursor: 'pointer', transition: '.2s',
+                    style={{
+                      flex: 1, padding: '7px 2px', fontSize: 10, fontWeight: 700, fontFamily: 'var(--sans)', borderRadius: 8, border: 'none', cursor: 'pointer', transition: '.2s',
                       background: role === t.key ? '#fff' : 'transparent',
                       color: role === t.key ? 'var(--indigo)' : 'var(--muted)',
-                      boxShadow: role === t.key ? '0 1px 4px rgba(0,0,0,.12)' : 'none' }}>
+                      boxShadow: role === t.key ? '0 1px 4px rgba(0,0,0,.12)' : 'none'
+                    }}>
                     {t.label}
                   </button>
                 ))}
@@ -310,7 +313,7 @@ export default function AuthModal({ isOpen, onClose, defaultForm = 'login', defa
                 </div>
               </div>
               <button className={btnCls} onClick={doLogin} disabled={loading}>
-                {loading ? <><span className="spin"/>Signing in…</> : 'Sign In →'}
+                {loading ? <><span className="spin" />Signing in…</> : 'Sign In →'}
               </button>
               <div style={{ textAlign: 'center', marginTop: 14, fontSize: 13, color: 'var(--muted)' }}>
                 No account?{' '}
@@ -440,7 +443,7 @@ export default function AuthModal({ isOpen, onClose, defaultForm = 'login', defa
                   ← Back
                 </button>
                 <button className={btnCls} onClick={sendOTP} disabled={otpSending} style={{ flex: 2 }}>
-                  {otpSending ? <><span className="spin"/>Sending OTP…</> : '📧 Send OTP to Email →'}
+                  {otpSending ? <><span className="spin" />Sending OTP…</> : '📧 Send OTP to Email →'}
                 </button>
               </div>
               <div style={{ textAlign: 'center', marginTop: 12 }}>
@@ -472,14 +475,14 @@ export default function AuthModal({ isOpen, onClose, defaultForm = 'login', defa
                 {otpTimer > 0
                   ? <>Resend in <strong style={{ color: 'var(--indigo)' }}>{otpTimer}s</strong></>
                   : <a onClick={sendOTP} style={{ color: 'var(--saffron)', fontWeight: 700, cursor: 'pointer' }}>
-                      Resend OTP
-                    </a>
+                    Resend OTP
+                  </a>
                 }
               </div>
 
               <button className={btnCls} onClick={verifyAndCreate}
                 disabled={otpVerifying || !otpDone}>
-                {otpVerifying ? <><span className="spin"/>Creating account…</> : '✓ Verify & Create Account →'}
+                {otpVerifying ? <><span className="spin" />Creating account…</> : '✓ Verify & Create Account →'}
               </button>
 
               <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 12 }}>

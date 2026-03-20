@@ -28,11 +28,13 @@ export const STATE_BOARDS = {
   'Arunachal Pradesh': [
     { name: 'CBSE', shortName: 'CBSE', type: 'national', govUrl: 'https://cbseacademic.nic.in' },
     { name: 'CBSE (DIET Arunachal)', shortName: 'CBSE-AP', type: 'state', govUrl: 'https://cbseacademic.nic.in' },
+    { name: 'ICSE / ISC', shortName: 'ICSE', type: 'national', govUrl: 'https://cisce.org' },
   ],
   'Assam': [
     { name: 'CBSE', shortName: 'CBSE', type: 'national', govUrl: 'https://cbseacademic.nic.in' },
     { name: 'SEBA (Assam Board)', shortName: 'SEBA', type: 'state', govUrl: 'https://sebaonline.org' },
     { name: 'AHSEC (Assam Higher Secondary)', shortName: 'AHSEC', type: 'state', govUrl: 'https://ahsec.nic.in' },
+    { name: 'ICSE / ISC', shortName: 'ICSE', type: 'national', govUrl: 'https://cisce.org' },
   ],
   'Bihar': [
     { name: 'CBSE', shortName: 'CBSE', type: 'national', govUrl: 'https://cbseacademic.nic.in' },
@@ -42,6 +44,7 @@ export const STATE_BOARDS = {
   'Chhattisgarh': [
     { name: 'CBSE', shortName: 'CBSE', type: 'national', govUrl: 'https://cbseacademic.nic.in' },
     { name: 'CGBSE (Chhattisgarh Board)', shortName: 'CGBSE', type: 'state', govUrl: 'https://cgbse.nic.in' },
+    { name: 'ICSE / ISC', shortName: 'ICSE', type: 'national', govUrl: 'https://cisce.org' },
   ],
   'Goa': [
     { name: 'CBSE', shortName: 'CBSE', type: 'national', govUrl: 'https://cbseacademic.nic.in' },
@@ -61,10 +64,12 @@ export const STATE_BOARDS = {
   'Himachal Pradesh': [
     { name: 'CBSE', shortName: 'CBSE', type: 'national', govUrl: 'https://cbseacademic.nic.in' },
     { name: 'HPBOSE (HP Board)', shortName: 'HPBOSE', type: 'state', govUrl: 'https://hpbose.org' },
+    { name: 'ICSE / ISC', shortName: 'ICSE', type: 'national', govUrl: 'https://cisce.org' },
   ],
   'Jharkhand': [
     { name: 'CBSE', shortName: 'CBSE', type: 'national', govUrl: 'https://cbseacademic.nic.in' },
     { name: 'JAC (Jharkhand Board)', shortName: 'JAC', type: 'state', govUrl: 'https://jac.jharkhand.gov.in' },
+    { name: 'ICSE / ISC', shortName: 'ICSE', type: 'national', govUrl: 'https://cisce.org' },
   ],
   'Karnataka': [
     { name: 'CBSE', shortName: 'CBSE', type: 'national', govUrl: 'https://cbseacademic.nic.in' },
@@ -91,23 +96,28 @@ export const STATE_BOARDS = {
   'Manipur': [
     { name: 'CBSE', shortName: 'CBSE', type: 'national', govUrl: 'https://cbseacademic.nic.in' },
     { name: 'BSEM (Manipur Board)', shortName: 'BSEM', type: 'state', govUrl: 'https://bsem.nic.in' },
+    { name: 'ICSE / ISC', shortName: 'ICSE', type: 'national', govUrl: 'https://cisce.org' },
   ],
   'Meghalaya': [
     { name: 'CBSE', shortName: 'CBSE', type: 'national', govUrl: 'https://cbseacademic.nic.in' },
     { name: 'MBOSE (Meghalaya Board)', shortName: 'MBOSE', type: 'state', govUrl: 'https://mbose.in' },
+    { name: 'ICSE / ISC', shortName: 'ICSE', type: 'national', govUrl: 'https://cisce.org' },
   ],
   'Mizoram': [
     { name: 'CBSE', shortName: 'CBSE', type: 'national', govUrl: 'https://cbseacademic.nic.in' },
     { name: 'MBSE (Mizoram Board)', shortName: 'MBSE', type: 'state', govUrl: 'https://mbse.edu.in' },
+    { name: 'ICSE / ISC', shortName: 'ICSE', type: 'national', govUrl: 'https://cisce.org' },
   ],
   'Nagaland': [
     { name: 'CBSE', shortName: 'CBSE', type: 'national', govUrl: 'https://cbseacademic.nic.in' },
     { name: 'NBSE (Nagaland Board)', shortName: 'NBSE', type: 'state', govUrl: 'https://nbsenagaland.com' },
+    { name: 'ICSE / ISC', shortName: 'ICSE', type: 'national', govUrl: 'https://cisce.org' },
   ],
   'Odisha': [
     { name: 'CBSE', shortName: 'CBSE', type: 'national', govUrl: 'https://cbseacademic.nic.in' },
     { name: 'BSE Odisha (Odisha Board)', shortName: 'BSE', type: 'state', govUrl: 'https://bseodisha.ac.in' },
     { name: 'CHSE Odisha (Higher Secondary)', shortName: 'CHSE', type: 'state', govUrl: 'https://chseodisha.nic.in' },
+    { name: 'ICSE / ISC', shortName: 'ICSE', type: 'national', govUrl: 'https://cisce.org' },
   ],
   'Punjab': [
     { name: 'CBSE', shortName: 'CBSE', type: 'national', govUrl: 'https://cbseacademic.nic.in' },
@@ -122,6 +132,7 @@ export const STATE_BOARDS = {
   'Sikkim': [
     { name: 'CBSE', shortName: 'CBSE', type: 'national', govUrl: 'https://cbseacademic.nic.in' },
     { name: 'BSSS (Sikkim Board)', shortName: 'BSSS', type: 'state', govUrl: 'https://sikkimhrdd.org' },
+    { name: 'ICSE / ISC', shortName: 'ICSE', type: 'national', govUrl: 'https://cisce.org' },
   ],
   'Tamil Nadu': [
     { name: 'CBSE', shortName: 'CBSE', type: 'national', govUrl: 'https://cbseacademic.nic.in' },
@@ -136,6 +147,7 @@ export const STATE_BOARDS = {
   'Tripura': [
     { name: 'CBSE', shortName: 'CBSE', type: 'national', govUrl: 'https://cbseacademic.nic.in' },
     { name: 'TBSE (Tripura Board)', shortName: 'TBSE', type: 'state', govUrl: 'https://tbse.in' },
+    { name: 'ICSE / ISC', shortName: 'ICSE', type: 'national', govUrl: 'https://cisce.org' },
   ],
   'Uttar Pradesh': [
     { name: 'CBSE', shortName: 'CBSE', type: 'national', govUrl: 'https://cbseacademic.nic.in' },
@@ -145,6 +157,7 @@ export const STATE_BOARDS = {
   'Uttarakhand': [
     { name: 'CBSE', shortName: 'CBSE', type: 'national', govUrl: 'https://cbseacademic.nic.in' },
     { name: 'UBSE (Uttarakhand Board)', shortName: 'UBSE', type: 'state', govUrl: 'https://ubse.uk.gov.in' },
+    { name: 'ICSE / ISC', shortName: 'ICSE', type: 'national', govUrl: 'https://cisce.org' },
   ],
   'West Bengal': [
     { name: 'CBSE', shortName: 'CBSE', type: 'national', govUrl: 'https://cbseacademic.nic.in' },
@@ -155,14 +168,17 @@ export const STATE_BOARDS = {
   // UTs
   'Andaman & Nicobar Islands': [
     { name: 'CBSE', shortName: 'CBSE', type: 'national', govUrl: 'https://cbseacademic.nic.in' },
+    { name: 'ICSE / ISC', shortName: 'ICSE', type: 'national', govUrl: 'https://cisce.org' },
   ],
   'Chandigarh': [
     { name: 'CBSE', shortName: 'CBSE', type: 'national', govUrl: 'https://cbseacademic.nic.in' },
     { name: 'PSEB (Punjab Board)', shortName: 'PSEB', type: 'state', govUrl: 'https://pseb.ac.in' },
+    { name: 'ICSE / ISC', shortName: 'ICSE', type: 'national', govUrl: 'https://cisce.org' },
   ],
   'Dadra & Nagar Haveli and Daman & Diu': [
     { name: 'CBSE', shortName: 'CBSE', type: 'national', govUrl: 'https://cbseacademic.nic.in' },
     { name: 'GSEB (Gujarat Board)', shortName: 'GSEB', type: 'state', govUrl: 'https://gseb.org' },
+    { name: 'ICSE / ISC', shortName: 'ICSE', type: 'national', govUrl: 'https://cisce.org' },
   ],
   'Delhi (NCT)': [
     { name: 'CBSE', shortName: 'CBSE', type: 'national', govUrl: 'https://cbseacademic.nic.in' },
@@ -173,17 +189,21 @@ export const STATE_BOARDS = {
   'Jammu & Kashmir': [
     { name: 'CBSE', shortName: 'CBSE', type: 'national', govUrl: 'https://cbseacademic.nic.in' },
     { name: 'JKBOSE (J&K Board)', shortName: 'JKBOSE', type: 'state', govUrl: 'https://jkbose.nic.in' },
+    { name: 'ICSE / ISC', shortName: 'ICSE', type: 'national', govUrl: 'https://cisce.org' },
   ],
   'Ladakh': [
     { name: 'CBSE', shortName: 'CBSE', type: 'national', govUrl: 'https://cbseacademic.nic.in' },
     { name: 'JKBOSE (J&K Board)', shortName: 'JKBOSE', type: 'state', govUrl: 'https://jkbose.nic.in' },
+    { name: 'ICSE / ISC', shortName: 'ICSE', type: 'national', govUrl: 'https://cisce.org' },
   ],
   'Lakshadweep': [
     { name: 'CBSE', shortName: 'CBSE', type: 'national', govUrl: 'https://cbseacademic.nic.in' },
+    { name: 'ICSE / ISC', shortName: 'ICSE', type: 'national', govUrl: 'https://cisce.org' },
   ],
   'Puducherry': [
     { name: 'CBSE', shortName: 'CBSE', type: 'national', govUrl: 'https://cbseacademic.nic.in' },
     { name: 'TBSE (Puducherry Board)', shortName: 'PBSE', type: 'state', govUrl: 'https://schooledn.py.gov.in' },
+    { name: 'ICSE / ISC', shortName: 'ICSE', type: 'national', govUrl: 'https://cisce.org' },
   ],
 }
 

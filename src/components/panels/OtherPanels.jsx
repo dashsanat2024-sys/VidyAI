@@ -319,6 +319,7 @@ export function AnalyticsPanel({ showToast }) {
 // ── Admin Settings Panel (Sidebar Configuration) ──────────────────────────
 export function AdminSettingsPanel({ showToast }) {
   const { token } = useAuth()
+  const { refreshSettings } = useApp()
   const [settings, setSettings] = useState({ sidebar: {} })
   const [loading, setLoading]   = useState(false)
   const [saving, setSaving]     = useState(false)
@@ -335,6 +336,8 @@ export function AdminSettingsPanel({ showToast }) {
     { id: 'reports',              label: 'Reports',               group: 'Teach' },
     { id: 'institute',            label: 'Institute',             group: 'Manage' },
     { id: 'analytics',            label: 'Analytics',             group: 'Manage' },
+    { id: 'visitor-log',          label: 'Visitor Log',           group: 'Manage' },
+    { id: 'settings',             label: 'Settings',              group: 'Manage' },
   ]
 
   useEffect(() => {
@@ -375,6 +378,7 @@ export function AdminSettingsPanel({ showToast }) {
       })
       if (res.ok) {
         showToast && showToast('Settings updated', 'success')
+        refreshSettings()
       } else {
         showToast && showToast('Failed to save settings', 'error')
       }
@@ -444,6 +448,91 @@ export function AdminSettingsPanel({ showToast }) {
         <div style={{ marginTop: 24, fontSize: 12, color: 'var(--muted)', textAlign: 'center' }}>
           Changes are saved automatically and applied on next refresh or login.
         </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Visitor Log Panel ──────────────────────────────────────────────────────
+export function VisitorLogPanel({ showToast }) {
+  const { token } = useAuth()
+  const [visitors, setVisitors] = useState([])
+  const [loading, setLoading]   = useState(false)
+
+  const fetchVisitors = async () => {
+    setLoading(true)
+    try {
+      const res = await apiGet('/admin/visitors', token)
+      if (res.ok) {
+        const data = await res.json()
+        setVisitors(data.visitors || [])
+      }
+    } catch (err) { }
+    setLoading(false)
+  }
+
+  useEffect(() => { fetchVisitors() }, [])
+
+  return (
+    <div className="panel active">
+      <div style={{ maxWidth: 1060, margin: '0 auto' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+          <div>
+            <h3 style={{ fontFamily: 'var(--serif)', color: 'var(--indigo)', margin: 0 }}>👥 Visitor Log</h3>
+            <p style={{ color: 'var(--muted)', fontSize: 13, margin: '4px 0 0' }}>
+              Real-time tracking of anonymous visitors and landing page hits
+            </p>
+          </div>
+          <button className="btn-saffron" onClick={fetchVisitors} disabled={loading} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            🔄 Refresh
+          </button>
+        </div>
+
+        {loading ? (
+          <div className="card" style={{ padding: 40, textAlign: 'center' }}><span className="spinner" /></div>
+        ) : visitors.length === 0 ? (
+          <div className="card" style={{ padding: 60, textAlign: 'center' }}>
+            <div style={{ fontSize: 40, marginBottom: 16 }}>🌐</div>
+            <p style={{ color: 'var(--muted)' }}>No visitor data found yet.</p>
+          </div>
+        ) : (
+          <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
+              <thead style={{ background: '#f8fafc', borderBottom: '1px solid #e2e8f0' }}>
+                <tr>
+                  <th style={{ textAlign: 'left', padding: '12px 20px', color: '#64748b', fontWeight: '700', textTransform: 'uppercase', fontSize: '11px' }}>Timestamp</th>
+                  <th style={{ textAlign: 'left', padding: '12px 20px', color: '#64748b', fontWeight: '700', textTransform: 'uppercase', fontSize: '11px' }}>IP / Location</th>
+                  <th style={{ textAlign: 'left', padding: '12px 20px', color: '#64748b', fontWeight: '700', textTransform: 'uppercase', fontSize: '11px' }}>Path</th>
+                  <th style={{ textAlign: 'left', padding: '12px 20px', color: '#64748b', fontWeight: '700', textTransform: 'uppercase', fontSize: '11px' }}>Device / Agent</th>
+                </tr>
+              </thead>
+              <tbody>
+                {visitors.slice(0, 100).map((v, i) => (
+                  <tr key={i} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                    <td style={{ padding: '14px 20px', color: '#0f172a', fontWeight: '600' }}>
+                      {new Date(v.timestamp).toLocaleString()}
+                    </td>
+                    <td style={{ padding: '14px 20px', color: '#64748b' }}>
+                      <div style={{ color: '#0f172a', fontWeight: '500' }}>{v.ip || 'Unknown'}</div>
+                      <div style={{ fontSize: '11px' }}>{v.city ? `${v.city}, ${v.country}` : 'Unknown Location'}</div>
+                    </td>
+                    <td style={{ padding: '14px 20px' }}>
+                      <code style={{ background: '#f1f5f9', padding: '2px 6px', borderRadius: '4px', fontSize: '11px', color: 'var(--indigo)' }}>{v.path || '/'}</code>
+                    </td>
+                    <td style={{ padding: '14px 20px', color: '#64748b', maxWidth: '300px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={v.user_agent}>
+                      {v.user_agent || 'Unknown'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {visitors.length > 100 && (
+              <div style={{ padding: '16px', textAlign: 'center', background: '#f8fafc', color: '#94a3b8', fontSize: '12px' }}>
+                Showing last 100 visitors. Total: {visitors.length}
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   )
