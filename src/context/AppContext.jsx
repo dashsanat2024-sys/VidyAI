@@ -63,8 +63,8 @@ export function AppProvider({ children }) {
       const data3 = await res3.json()
       setAdminStats(data3.stats || {})
 
-      // 4. Load platform settings
-      const res4 = await apiGet('/admin/settings', token)
+      // 4. Load platform settings (accessible to all roles)
+      const res4 = await apiGet('/settings', token)
       if (res4.ok) {
         const data4 = await res4.json()
         setPlatformSettings(data4.settings || { sidebar: {} })

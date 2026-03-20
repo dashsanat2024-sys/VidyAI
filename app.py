@@ -5944,6 +5944,12 @@ def admin_settings():
         db_save(db)
     return jsonify({"settings": db["settings"]})
 
+@app.route("/api/settings", methods=["GET"])
+@auth() # Any logged in user
+def get_settings():
+    db = db_load()
+    return jsonify({"settings": db.get("settings", {})})
+
 # ══════════════════════════════════════════════════════════════════════════════
 #  SPA SERVING (React dist/)
 # ══════════════════════════════════════════════════════════════════════════════
