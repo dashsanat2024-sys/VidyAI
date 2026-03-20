@@ -10,7 +10,6 @@ const ROLES = [
   { key: 'teacher',     label: '👩‍🏫 Teacher',     color: 'green',   reqRoll: false },
   { key: 'tutor',       label: '📚 Tutor',         color: 'green',   reqRoll: false },
   { key: 'parent',      label: '👨‍👩‍👧 Parent',     color: 'indigo',  reqRoll: false },
-  { key: 'school_admin',label: '🏫 School Admin',  color: 'indigo',  reqRoll: false },
 ]
 
 const LOGIN_TABS = [

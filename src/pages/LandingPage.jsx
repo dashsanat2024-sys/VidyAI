@@ -204,9 +204,6 @@ export default function LandingPage() {
           <p className="lp-section-sub">From classroom teachers to students and parents — Parvidya has tools tailored to your role.</p>
           <div className="lp-roles-grid">
             {[
-              { emoji:'🏫', name:'School / College', color:'#e0e7ff', accent:'#4338ca',
-                features:['Multi-board, multi-class setup','Institution-wide performance analytics','Bulk evaluation with parent reports','Teacher & student account management','AI question banks per subject'],
-                cta:'Register School →', role:'school_admin' },
               { emoji:'👩‍🏫', name:'Teacher / Tutor', color:'#dcfce7', accent:'#16a34a',
                 features:['NCERT & state curricula auto-loaded','One-click printable exam papers with keys','AI bulk answer sheet evaluation','Detailed parent email reports','Audio & video lesson creation'],
                 cta:'Join as Teacher →', role:'teacher' },
