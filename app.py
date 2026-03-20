@@ -755,21 +755,24 @@ def _build_ocr_prompt_v2(exam_questions: list) -> str:
         "The student FILLED or SCRIBBLED inside exactly one circle.\n"
         "The circle with the most ink / darkest fill / scribble marks = the answer.\n"
         "An empty/clean circle = NOT selected.\n"
-        "Count circles strictly: skip the dark tab, then 1st=A, 2nd=B, 3rd=C, 4th=D.\n\n"
+        "Count circles strictly: skip the dark tab, then 1st=A, 2nd=B, 3rd=C, 4th=D.\n"
+        "❌ NEVER return \"- A\" or \"A)\" — return ONLY the single letter e.g. \"A\".\n\n"
 
         "WRITTEN LAYOUT (questions: " + subj_ids + "):\n"
         "After the dark green Q-number tab, there are horizontal ruled lines.\n"
-        "Read ALL handwritten text on those lines. Ignore printed labels.\n\n"
+        "READ ALL handwritten text on EVERY ruled line in the box.\n"
+        "Join all lines into ONE string separated by spaces — do NOT stop at the first line.\n"
+        "Ignore printed labels ('Write your answer below:', section headings, etc.)\n\n"
 
         "YOUR TASK:\n"
         "For each question box, identify its Q number from the tab, then extract:\n"
-        "  MCQ → single letter A, B, C, or D (the scribbled/filled circle)\n"
-        "  Written → all handwritten text verbatim\n"
+        "  MCQ → single letter ONLY: A, B, C, or D (the scribbled/filled circle)\n"
+        "  Written → ALL handwritten text across all ruled lines, joined as one string\n"
         "  Blank → omit from JSON\n"
         + question_ref + "\n\n"
 
         "Return ONLY valid JSON (no markdown, no explanation):\n"
-        + '{"answers": {"1":"B","2":"D","3":"B","4":"A","5":"A","6":"C","7":"student text"}}' + "\n"
+        + '{"answers": {"1":"B","2":"D","3":"B","4":"A","5":"A","6":"C","7":"student full written answer across all lines"}}' + "\n"
     )
 
 def _build_ocr_prompt(exam_questions: list) -> str:
@@ -824,13 +827,16 @@ def _build_ocr_prompt(exam_questions: list) -> str:
         "      - Drawing a heavy circle around the letter\n"
         "      - Writing the letter inside or next to the circle\n"
         "  • The FILLED/SCRIBBLED/DARKEST circle = the student's answer\n"
-        "  • A circle with dense pen marks is DEFINITELY selected\n\n"
+        "  • A circle with dense pen marks is DEFINITELY selected\n"
+        "  ❌ NEVER return \"- A\" or \"A)\" — return ONLY the single letter e.g. \"A\".\n\n"
 
         "WRITTEN ANSWER AREA (questions: " + subj_ids + "):\n"
         "  • The label 'Write your answer below:' appears at the top\n"
         "  • Below it are horizontal ruled lines inside the box\n"
         "  • The student writes their answer on these lines\n"
-        "  • Extract ALL handwritten text on the lines\n\n"
+        "  • READ ALL LINES — do NOT stop after the first handwritten line.\n"
+        "  • Join every handwritten line into ONE string separated by spaces.\n"
+        "  • Do NOT include the printed 'Write your answer below:' label.\n\n"
 
         "═══ YOUR TASK ═══\n"
         "For EACH question box you can see:\n"
@@ -839,20 +845,55 @@ def _build_ocr_prompt(exam_questions: list) -> str:
         "  3. For MCQ: identify which of the 4 circles (A/B/C/D) is filled/scribbled\n"
         "     — The one with the most ink/darkest fill is the answer\n"
         "     — Even heavy scribbling inside a circle = that option is selected\n"
-        "  4. For Written: read all handwritten text on the ruled lines\n\n"
+        "  4. For Written: read ALL handwritten text on EVERY ruled line\n\n"
 
         "CRITICAL RULES:\n"
-        "  • For MCQ: return ONLY a single letter — A, B, C, or D\n"
+        "  • For MCQ: return ONLY a single letter — A, B, C, or D. No dashes, no brackets.\n"
         "  • The printed letter inside an empty/clean circle is NOT an answer\n"
         "  • Only a circle with INK MARKS (fill, scribble, circle) = selected\n"
         "  • If two circles seem marked, choose the one with more ink\n"
-        "  • For Written: return the handwritten text ONLY (ignore printed labels)\n"
+        "  • For Written: return ALL handwritten text joined as one string (ignore printed labels)\n"
         "  • If a question has no mark, omit it from the JSON\n"
         + question_ref + "\n\n"
 
         "Return STRICTLY valid JSON:\n"
-        '{"answers": {"1": "B", "2": "D", "7": "Divide the numerator by the denominator"}}' + "\n"
+        '{"answers": {"1": "B", "2": "D", "7": "Divide the numerator by the denominator and write the remainder"}}' + "\n"
         "No markdown, no explanation, no extra keys."
+    )
+
+
+def _build_freeform_handwriting_prompt(exam_questions: list) -> str:
+    """
+    Prompt for PLAIN HANDWRITTEN answer sheets (notebook pages, not printed sheets).
+    No indigo tabs, no bubble circles, no printed labels.
+    Instructs GPT-4o to find question numbers (1, 2, Q1, Q2) anywhere on the page.
+    """
+    q_lines = []
+    for q in sorted(exam_questions, key=lambda x: int(x.get("id", 0))):
+        qtype = "MCQ" if q.get("type", "objective") == "objective" else "Written"
+        q_lines.append(f"  Q{q['id']} [{qtype}]: {str(q.get('question',''))[:80]}")
+    question_ref = "\nQUESTION REFERENCE:\n" + "\n".join(q_lines) if q_lines else ""
+
+    return (
+        "You are reading a PHOTO or SCAN of a student's HANDWRITTEN homework/test.\n"
+        "This is NOT a structured form. It is a plain piece of paper or notebook page.\n\n"
+
+        "═══ YOUR TASK ═══\n"
+        "1. Identify each question by its number (e.g., '1', '2', 'Q1', 'Q2').\n"
+        "2. Extract the student's handwritten answer for that question.\n"
+        "3. MCQ: If the student wrote a letter (A/B/C/D) or circled/underlined one, "
+        "return only that letter.\n"
+        "4. WRITTEN: Extract all handwritten text for that question verbatim.\n"
+        "5. Treat each question independently.\n\n"
+
+        "═══ CRITICAL RULES ═══\n"
+        "- There are NO colored tabs or bubble circles on this page.\n"
+        "- Ignore any scribbles or marks that are not part of an answer.\n"
+        "- If a question is not found or has no answer, omit it from the JSON.\n"
+        + question_ref + "\n\n"
+
+        "Return ONLY valid JSON:\n"
+        '{"answers": {"1": "C", "2": "A", "7": "The square of the hypotenuse is equal to..."}}\n'
     )
 
 
@@ -931,21 +972,33 @@ def _validate_ocr_answers(raw_answers: dict, exam_questions: list) -> Dict[int, 
         # ── Subjective: strip instruction prefixes, then reject obvious noise ──────
         # Strip "Write your answer below:" or "Answer:" prefixes GPT may include
         val = STRIP_PREFIXES.sub("", val).strip()
+        # Normalise newlines → spaces so multi-line handwriting is stored as one string
+        val = re.sub(r"[\r\n]+", " ", val)
+        val = re.sub(r"\s{2,}", " ", val).strip()
         if not val:
             continue
         if NOISE_PATTERNS.search(val):
             log.debug(f"[OCR-VALIDATE] Rejected Q{qid} noise: {val[:60]}")
             continue
+        # Only reject if the ENTIRE value looks like a question (ends with ?)
+        # and has no sentence before it — don't reject long answers that happen
+        # to contain a question phrase at the end.
         if val.endswith("?") and len(val) > 40:
-            log.debug(f"[OCR-VALIDATE] Rejected Q{qid} question-text: {val[:60]}")
-            continue
+            # Check: is there a sentence-ending character before the '?'?
+            # If yes, it's a long answer that ends with a rhetorical question → keep
+            has_prior_sentence = bool(re.search(r'[.!;]', val[:-1]))
+            if not has_prior_sentence:
+                log.debug(f"[OCR-VALIDATE] Rejected Q{qid} question-text: {val[:60]}")
+                continue
         if len(val) < 2:
             continue
         # Reject OCR garble: words with 4+ consecutive consonants = corrupted scan
+        # Use a higher threshold (50%) and minimum 5 words to avoid false rejects
+        # on multi-line answers with some tricky words.
         words = re.findall(r"[a-zA-Z]+", val)
-        if len(words) >= 3:
+        if len(words) >= 5:
             garble = sum(1 for w in words if re.search(r"[bcdfghjklmnpqrstvwxyz]{4,}", w, re.I))
-            if garble / len(words) > 0.40:
+            if garble / len(words) > 0.50:
                 log.debug(f"[OCR-VALIDATE] Rejected Q{qid} garble ({garble}/{len(words)}): {val[:60]}")
                 continue
 
@@ -2013,16 +2066,20 @@ def _ocr_page_parallel(images: list, exam_questions: list, exam: dict,
                 f"MCQ questions on this page: {page_obj_ids}\n"
                 f"Written questions on this page: {page_subj_ids}\n\n"
                 "For each question return the answer:\n"
-                "  MCQ: single letter A, B, C, or D\n"
-                "  Written: all handwritten text on the ruled lines\n"
+                "  MCQ: single letter A, B, C, or D only — NO dashes, NO prefixes.\n"
+                "  Written: READ EVERY handwritten line in the answer box. "
+                "Join ALL lines into ONE string separated by spaces. "
+                "Do NOT stop after the first line. "
+                "Do NOT include printed labels like 'Write your answer below:'.\n"
                 "  Blank: omit from JSON\n\n"
+                "CRITICAL for MCQ: return ONLY the letter e.g. \"B\" — never \"- B\" or \"B)\"\n"
                 "Return ONLY valid JSON: "
-                + '{"answers": {"1":"B","2":"D","7":"student wrote..."}}' 
+                + '{"answers": {"1":"B","2":"D","7":"student wrote full answer across all lines"}}' 
             )
 
             _openai_limiter.wait()
             resp = client.chat.completions.create(
-                model=OPENAI_MODEL, temperature=0, max_tokens=800,
+                model=OPENAI_MODEL, temperature=0, max_tokens=3000,
                 response_format={"type": "json_object"},
                 messages=[{"role": "user", "content": [
                     {"type": "text", "text": full_page_prompt},
@@ -2033,7 +2090,7 @@ def _ocr_page_parallel(images: list, exam_questions: list, exam: dict,
                 ]}]
             )
             raw_content = resp.choices[0].message.content
-            log.info(f"[PAGE-OCR] page {page_idx+1} full-page raw: {raw_content[:300]}")
+            log.info(f"[PAGE-OCR] page {page_idx+1} full-page raw: {raw_content[:400]}")
             raw_full = json.loads(raw_content)
             page_answers = _validate_ocr_answers(raw_full.get("answers", {}), exam_questions)
 
@@ -2188,6 +2245,14 @@ def _extract_answers(path: str, exam_questions: list = None, exam: dict = None):
             re.search(r"Write\s+your\s+answer\s+below", raw_text, re.IGNORECASE)
         ))
 
+        # ── Detect plain handwritten scan (no text layer, no VidyAI markers) ──
+        # If the PDF has near-zero text but contains pages, it's an image scan.
+        IS_LIKELY_SCANNED_IMAGE = bool(
+            not IS_BLANK_PAPER and
+            not IS_SCANNED_ANSWER_SHEET and
+            (not raw_text.strip() or len(raw_text.strip()) < 50)
+        )
+
         # ── Exam ID mismatch detection ────────────────────────────────────────
         # The answer sheet prints "Exam ID: XXXXXXXX" in the header.
         # If the scanned sheet's Exam ID doesn't match the selected exam,
@@ -2232,24 +2297,11 @@ def _extract_answers(path: str, exam_questions: list = None, exam: dict = None):
             except Exception as _gpt_txt_err:
                 print(f"[PDF-TEXT-GPT] {_gpt_txt_err}")
 
-        # ── Path B: Scanned / handwritten PDF ────────────────────────────────
-        # PRIMARY: Image-diff approach.
-        # Generate a blank version of the question paper from exam data,
-        # subtract it from the scanned image → isolates pure handwriting pixels.
-        # Send per-question crops (containing ONLY ink) to GPT-4o for OCR.
-        # This is the only reliable approach when printed text and handwriting
-        # coexist — prompt engineering alone cannot separate them.
-        if IS_BLANK_PAPER or IS_SCANNED_ANSWER_SHEET:
-            log.info(
-                f"[PDF-OCR] Scanned answer sheet detected "
-                f"(IS_BLANK_PAPER={IS_BLANK_PAPER}, "
-                f"IS_SCANNED_ANSWER_SHEET={IS_SCANNED_ANSWER_SHEET}) "
-                "— using vision OCR, skipping text layer"
-            )
-
-        if exam_questions:
+        # ── Path B1: Scanned VidyAI Answer Sheet ──────────────────────────────
+        # Use image-diff against the template to isolate ink.
+        if (IS_BLANK_PAPER or IS_SCANNED_ANSWER_SHEET) and exam_questions:
+            log.info(f"[PDF-OCR] Structured VidyAI sheet detected — using image-diff")
             try:
-                # Use full exam dict if available for accurate blank PDF layout
                 _exam_for_diff = exam if exam else {
                     "questions":   exam_questions,
                     "school_name": "", "subject": "", "class": "",
@@ -2259,13 +2311,27 @@ def _extract_answers(path: str, exam_questions: list = None, exam: dict = None):
                 }
                 diff_answers = _diff_and_ocr_answers(path, _exam_for_diff)
                 if diff_answers:
-                    print(f"[PDF-OCR] Image-diff extracted {len(diff_answers)} answers: "
-                          f"{list(diff_answers.keys())}")
                     return diff_answers, "image_diff_ocr"
-                else:
-                    print("[PDF-OCR] Image-diff found no ink — trying fallback")
             except Exception as _diff_err:
-                print(f"[PDF-OCR] Image-diff failed: {_diff_err}")
+                log.warning(f"[PDF-OCR] Image-diff failed: {_diff_err}")
+
+        # ── Path B2: Plain Handwritten Notebook Scan ─────────────────────────
+        # Use freeform prompt without diff (no template to subtract).
+        if IS_LIKELY_SCANNED_IMAGE and exam_questions:
+            log.info(f"[PDF-OCR] Plain handwritten scan detected — using freeform OCR")
+            try:
+                from pdf2image import convert_from_path
+                images = convert_from_path(path, dpi=200)
+                # Use _ocr_page_parallel but with freeform prompt
+                # Note: we can't easily pass a custom prompt to _ocr_page_parallel
+                # without modifying it, but Path C handles this well too.
+                # For now, let's fall through to Path C which is whole-page vision.
+                pass
+            except Exception:
+                # poppler missing — try sending page 1 directly to Vision
+                log.info("[PDF-OCR] Poppler missing — falling back to Vision direct")
+                prompt = _build_freeform_handwriting_prompt(exam_questions)
+                return _vision_extract(path, prompt), "vision_ocr_freeform"
 
         # ── Path C: GPT-4o whole-page vision with preprocessing ──────────────
         # Fallback when diff fails (e.g. alignment issues, very light handwriting)
@@ -2276,8 +2342,11 @@ def _extract_answers(path: str, exam_questions: list = None, exam: dict = None):
             combined: Dict[int, str] = {}
             client = _oai.OpenAI(api_key=OPENAI_API_KEY)
 
-            # Use anti-tab-confusion prompt (dark Q-number tab ≠ bubble)
-            prompt = _build_ocr_prompt_v2(exam_questions)
+            # Use appropriate prompt based on sheet type
+            if IS_LIKELY_SCANNED_IMAGE:
+                prompt = _build_freeform_handwriting_prompt(exam_questions)
+            else:
+                prompt = _build_ocr_prompt_v2(exam_questions)
 
             for img in images:
                 # Upscale for readability, boost contrast but keep colour
@@ -2354,8 +2423,16 @@ def _extract_answers(path: str, exam_questions: list = None, exam: dict = None):
             preprocessed.save(buf, format="PNG", optimize=False)
             img_b64 = base64.b64encode(buf.getvalue()).decode()
 
-            # Use anti-tab-confusion prompt (dark Q-number tab ≠ bubble)
-            prompt = _build_ocr_prompt_v2(exam_questions)
+            # Use a combined "Universal" prompt for images that handles both
+            # structured VidyAI sheets and plain notebooks, since we can't
+            # detect text layers on raw images.
+            prompt = (
+                _build_ocr_prompt_v2(exam_questions) +
+                "\n\n--- NOTE ---\n"
+                "If this is NOT a structured VidyAI sheet (i.e., no indigo/green tabs),\n"
+                "simply find the question numbers (1, 2, Q1, Q2) anywhere on the page\n"
+                "and extract the handwritten answers verbatim."
+            )
 
             client = _oai.OpenAI(api_key=OPENAI_API_KEY)
             resp = client.chat.completions.create(
@@ -5135,7 +5212,17 @@ def _generate_evaluation_report_pdf(ev: dict, exam: dict) -> bytes:
                 qid      = int(qr.get("question_id", 0))
                 correct  = qr.get("is_correct", False)
                 q_text   = str(exam_qs.get(qid,{}).get("question",""))[:55]
-                stud_ans = str(qr.get("student_answer","—"))
+                # Sanitize: strip newlines, collapse whitespace, treat bare-dash
+                # (OCR artifact) as blank so it renders as em-dash, not "-\nA"
+                raw_sa   = str(qr.get("student_answer", "") or "")
+                raw_sa   = re.sub(r"[\r\n]+", " ", raw_sa).strip()
+                raw_sa   = re.sub(r"\s+", " ", raw_sa)
+                # If value is just '-' or '--' (OCR noise) treat as missing
+                stud_ans = raw_sa if (raw_sa and raw_sa not in {"-", "--", "—"}) else "—"
+                # If value still has leading dash+space like "- A", extract the letter
+                m_dash = re.match(r'^[-–—]\s*([A-D])\b', stud_ans, re.IGNORECASE)
+                if m_dash:
+                    stud_ans = m_dash.group(1).upper()
                 awarded_m= qr.get("awarded_marks",0)
                 max_m    = qr.get("max_marks",0)
                 bg       = "#f0fdf4" if correct else "#fef2f2"
