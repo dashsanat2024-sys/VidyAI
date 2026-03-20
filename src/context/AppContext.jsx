@@ -18,6 +18,7 @@ export function AppProvider({ children }) {
   const [syllabi,      setSyllabi]      = useState([])
   const [docs,         setDocs]         = useState([])
   const [adminStats,   setAdminStats]   = useState({})
+  const [platformSettings, setPlatformSettings] = useState({ sidebar: {} })
   const [activeSyllabus, setActiveSyllabus] = useState(null)
 
   const setActivePanel = useCallback((id) => {
@@ -62,6 +63,13 @@ export function AppProvider({ children }) {
       const data3 = await res3.json()
       setAdminStats(data3.stats || {})
 
+      // 4. Load platform settings
+      const res4 = await apiGet('/admin/settings', token)
+      if (res4.ok) {
+        const data4 = await res4.json()
+        setPlatformSettings(data4.settings || { sidebar: {} })
+      }
+
       setRefreshKey(k => k + 1)
     } catch (err) {
       console.error('[AppContext] refreshData failed:', err)
@@ -84,6 +92,7 @@ export function AppProvider({ children }) {
       syllabi, setSyllabi, addSyllabus, removeSyllabus,
       docs, setDocs,
       adminStats, setAdminStats,
+      platformSettings, setPlatformSettings,
       activeSyllabus, setActiveSyllabus,
       refreshData, refreshKey
     }}>

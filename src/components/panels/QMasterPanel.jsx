@@ -10,6 +10,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useAuth } from '../../context/AuthContext'
 import { useApp }  from '../../context/AppContext'
+import SharedCurriculumSelector from '../shared/CurriculumSelector'
 
 const API = import.meta.env.VITE_API_URL || ''
 
@@ -149,71 +150,23 @@ function StepBar({ step }) {
 
 // ── Step 1: Cascading curriculum selector ─────────────────────────────────────
 function CurriculumSelector({ token, onComplete }) {
-  const [metadata, setMetadata]     = useState(null)   // full CURRICULUM_DATA
-  const [state, setState]           = useState('')
-  const [board, setBoard]           = useState('')
-  const [cls, setCls]               = useState('')
-  const [subject, setSubject]       = useState('')
-  const [chapters, setChapters]     = useState([])
+  const [chapters, setChapters]       = useState([])
   const [selChapters, setSelChapters] = useState([])   // selected chapter subset
-  const [syllabusId, setSyllabusId] = useState('')
+  const [syllabusId, setSyllabusId]   = useState('')
   const [syllabusName, setSyllabusName] = useState('')
-  const [loadingChapters, setLoadingChapters] = useState(false)
-  const [error, setError]           = useState('')
+  const [meta, setMeta]               = useState(null) // { state, board, cls, subject }
 
-  // Load full curriculum tree once
-  useEffect(() => {
-    apiFetch('/curriculum/metadata', {}, token)
-      .then(d => setMetadata(d.metadata || {}))
-      .catch(e => setError(e.message))
-  }, [token])
-
-  // Derived lists from selections
-  const states  = metadata ? Object.keys(metadata).sort() : []
-  const boards  = (metadata && state) ? Object.keys(metadata[state] || {}) : []
-  const classes = (metadata && state && board)
-    ? Object.keys(metadata[state]?.[board] || {}).sort((a, b) => {
-        const na = parseInt(a.replace(/\D/g,''))
-        const nb = parseInt(b.replace(/\D/g,''))
-        return na - nb
-      })
-    : []
-  const subjects = (metadata && state && board && cls)
-    ? (metadata[state]?.[board]?.[cls] || [])
-    : []
-
-  // Reset downstream when upstream changes
-  const handleState = (v) => {
-    setState(v); setBoard(''); setCls(''); setSubject('')
-    setChapters([]); setSelChapters([]); setSyllabusId('')
-  }
-  const handleBoard = (v) => {
-    setBoard(v); setCls(''); setSubject('')
-    setChapters([]); setSelChapters([]); setSyllabusId('')
-  }
-  const handleClass = (v) => {
-    setCls(v); setSubject('')
-    setChapters([]); setSelChapters([]); setSyllabusId('')
-  }
-  const handleSubject = async (v) => {
-    setSubject(v); setChapters([]); setSelChapters([]); setSyllabusId('')
-    if (!v) return
-    setLoadingChapters(true); setError('')
-    try {
-      const d = await apiFetch('/curriculum/chapters', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ board, class: cls, subject: v }),
-      }, token)
-      setChapters(d.chapters || [])
-      setSyllabusId(d.syllabus_id || '')
-      setSyllabusName(d.name || '')
-      setSelChapters([])   // reset — teacher picks which chapters to include
-    } catch (e) {
-      setError(e.message)
-    } finally {
-      setLoadingChapters(false)
-    }
+  const handleSelectionComplete = (data) => {
+    setChapters(data.chapters || [])
+    setSyllabusId(data.syllabus_id || '')
+    setSyllabusName(data.name || '')
+    setMeta({
+      state: data.state,
+      board: data.board,
+      cls: data.classNum,
+      subject: data.subject
+    })
+    setSelChapters([]) // reset
   }
 
   const toggleChapter = (ch) => {
@@ -223,18 +176,18 @@ function CurriculumSelector({ token, onComplete }) {
   }
 
   const handleContinue = () => {
-    if (!syllabusId || !subject) return
+    if (!syllabusId || !meta?.subject) return
     onComplete({
       syllabusId,
       syllabusName,
-      state, board, cls, subject,
+      ...meta,
       chapters: selChapters.length > 0 ? selChapters : chapters,
       selectedChapters: selChapters,
       allChapters: chapters,
     })
   }
 
-  const ready = syllabusId && subject
+  const ready = syllabusId && meta?.subject
 
   return (
     <div style={S.card}>
@@ -243,84 +196,36 @@ function CurriculumSelector({ token, onComplete }) {
         <span style={{ fontSize: '20px' }}>🗺️</span> Select Curriculum
       </div>
 
-      {error && (
-        <div style={{ padding: '10px 14px', borderRadius: '8px', marginBottom: '14px',
-          background: C.redLight, color: C.red, fontSize: '13px',
-          border: `1px solid ${C.redBorder}` }}>⚠️ {error}</div>
-      )}
+      <SharedCurriculumSelector 
+        token={token} 
+        onComplete={handleSelectionComplete} 
+        buttonLabel="Fetch Syllabus Chapters"
+      />
 
-      {/* 4-column grid: State | Board | Class | Subject */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)',
-        gap: '12px', marginBottom: '16px' }}>
-
-        {/* State */}
-        <div>
-          <label style={S.label}>State / Region</label>
-          <select style={S.select} value={state} onChange={e => handleState(e.target.value)}>
-            <option value="">— State —</option>
-            {states.map(s => <option key={s} value={s}>{s}</option>)}
-          </select>
-        </div>
-
-        {/* Board */}
-        <div>
-          <label style={S.label}>Board</label>
-          <select style={S.select} value={board}
-            onChange={e => handleBoard(e.target.value)} disabled={!state}>
-            <option value="">— Board —</option>
-            {boards.map(b => <option key={b} value={b}>{b}</option>)}
-          </select>
-        </div>
-
-        {/* Class */}
-        <div>
-          <label style={S.label}>Class</label>
-          <select style={S.select} value={cls}
-            onChange={e => handleClass(e.target.value)} disabled={!board}>
-            <option value="">— Class —</option>
-            {classes.map(c => <option key={c} value={c}>{c}</option>)}
-          </select>
-        </div>
-
-        {/* Subject — auto-populated from class selection */}
-        <div>
-          <label style={S.label}>
-            Subject
-            {loadingChapters && (
-              <span style={{ marginLeft: '6px', display: 'inline-block',
-                ...S.spinner }} />
-            )}
-          </label>
-          <select style={S.select} value={subject}
-            onChange={e => handleSubject(e.target.value)} disabled={!cls}>
-            <option value="">— Subject —</option>
-            {subjects.map(s => <option key={s} value={s}>{s}</option>)}
-          </select>
-        </div>
-      </div>
-
-      {/* Summary pill when all four are selected */}
-      {state && board && cls && subject && (
+      {/* Summary pill when selected */}
+      {meta && (
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px',
-          padding: '8px 14px', borderRadius: '8px', marginBottom: '16px',
+          padding: '12px 14px', borderRadius: '10px', marginTop: '16px', marginBottom: '16px',
           background: C.purpleLight, border: `1px solid ${C.purpleBorder}` }}>
           <span style={{ fontSize: '14px' }}>📚</span>
-          <span style={{ fontWeight: '600', color: C.purple, fontSize: '13px' }}>
-            {board} · {cls} · {subject}
-          </span>
-          <span style={{ color: C.slate, fontSize: '12px', marginLeft: 'auto' }}>
-            {state}
-          </span>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontWeight: '700', color: C.purple, fontSize: '13px' }}>
+              {meta.board} · Class {meta.cls} · {meta.subject}
+            </div>
+            <div style={{ fontSize: '11px', color: C.slate, marginTop: '2px' }}>
+               {meta.state} · {syllabusName}
+            </div>
+          </div>
         </div>
       )}
 
       {/* Chapter selection */}
       {chapters.length > 0 && (
-        <div>
+        <div style={{ marginTop: '10px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between',
             alignItems: 'center', marginBottom: '10px' }}>
             <label style={{ ...S.label, marginBottom: 0 }}>
-              Chapters ({selChapters.length === 0
+              Specify Chapters ({selChapters.length === 0
                 ? `All ${chapters.length} selected`
                 : `${selChapters.length} of ${chapters.length} selected`})
             </label>
@@ -363,11 +268,9 @@ function CurriculumSelector({ token, onComplete }) {
           marginTop: '18px', padding: '13px', fontSize: '15px' }),
           opacity: ready ? 1 : 0.5, cursor: ready ? 'pointer' : 'not-allowed' }}
         onClick={handleContinue}
-        disabled={!ready || loadingChapters}
+        disabled={!ready}
       >
-        {loadingChapters
-          ? <><span style={S.spinner} /> Loading chapters…</>
-          : <>Continue to Question Configuration →</>}
+        Continue to Question Configuration →
       </button>
     </div>
   )

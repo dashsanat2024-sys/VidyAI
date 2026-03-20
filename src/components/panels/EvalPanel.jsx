@@ -293,14 +293,14 @@ function TemplateDownloads({ examId, token }) {
 
 
 // ── Subcomponent: ExamSelector ────────────────────────────────────────────────
-function ExamSelector({ token, value, onChange }) {
+function ExamSelector({ token, value, onChange, showToast }) {
   const [exams, setExams]   = useState([])
   const [loading, setLoading] = useState(true)
+  const [deleting, setDeleting] = useState(false)
   const [error, setError]   = useState('')
 
   const load = () => {
     setLoading(true); setError('')
-    // Try /api/exams first (new alias), fall back to /api/questions (legacy)
     apiFetch('/exams', {}, token)
       .then(d => setExams(d.exams || []))
       .catch(() =>
@@ -313,29 +313,58 @@ function ExamSelector({ token, value, onChange }) {
 
   useEffect(() => { load() }, [token])
 
-  // Build a readable label: prefer syllabus_name, then subject+class, then topic
+  const handleDelete = async () => {
+    if (!value) return
+    if (!window.confirm('Are you sure you want to delete this exam? This cannot be undone.')) return
+    setDeleting(true)
+    try {
+      await apiFetch(`/exams/${value}`, { method: 'DELETE' }, token)
+      showToast('Exam deleted successfully', 'success')
+      onChange('')
+      load()
+    } catch (e) {
+      showToast('Failed to delete: ' + e.message, 'error')
+    } finally {
+      setDeleting(false)
+    }
+  }
+
+  // Build a readable label: include exam_id and syllabus details
   const examLabel = (e) => {
+    const id    = e.exam_id || 'ID'
     const name  = e.syllabus_name || e.subject || ''
     const cls   = e.class || e.class_name || ''
     const board = e.board || ''
     const meta  = [board, cls].filter(Boolean).join(' ')
     const counts = `${e.objective_count ?? 0}obj + ${e.subjective_count ?? 0}subj`
     const marks  = e.total_marks ? ` · ${e.total_marks}m` : ''
-    const date   = e.exam_date ? ` · ${e.exam_date}` : ''
-    return `${name}${meta ? ' — ' + meta : ''} [${counts}${marks}${date}]`
+    return `[${id}] ${name}${meta ? ' — ' + meta : ''} (${counts}${marks})`
   }
 
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
         <label style={S.label}>Select Exam *</label>
-        <button
-          onClick={load}
-          style={{ fontSize: '11px', color: '#6d28d9', background: 'none',
-            border: 'none', cursor: 'pointer', padding: '0 0 4px' }}
-        >
-          ↻ Refresh
-        </button>
+        <div style={{ display: 'flex', gap: '12px' }}>
+          {value && (
+            <button
+              onClick={handleDelete}
+              disabled={deleting}
+              style={{ fontSize: '11px', color: '#dc2626', background: 'none',
+                border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}
+            >
+              {deleting ? 'Deleting...' : '🗑 Remove'}
+            </button>
+          )}
+          <button
+            onClick={load}
+            disabled={loading}
+            style={{ fontSize: '11px', color: '#6d28d9', background: 'none',
+              border: 'none', cursor: 'pointer' }}
+          >
+            ↻ Refresh
+          </button>
+        </div>
       </div>
       {error && (
         <div style={{ fontSize: '12px', color: '#dc2626', marginBottom: '6px' }}>
@@ -346,7 +375,7 @@ function ExamSelector({ token, value, onChange }) {
         style={S.select}
         value={value}
         onChange={e => onChange(e.target.value)}
-        disabled={loading}
+        disabled={loading || deleting}
       >
         <option value="">
           {loading ? 'Loading exams…' : exams.length === 0 ? '— No exams saved yet —' : '— Choose an exam —'}
@@ -784,7 +813,7 @@ function SingleEvalTab({ token, showToast }) {
         <>
           <div style={S.card}>
             <div style={S.sectionTitle}>Exam & Student Details</div>
-            <ExamSelector token={token} value={examId} onChange={setExamId} />
+            <ExamSelector token={token} value={examId} onChange={setExamId} showToast={showToast} />
             {examData && (
               <>
                 <div style={{ marginTop: '10px', padding: '10px 14px', borderRadius: '8px',
@@ -916,25 +945,27 @@ function SingleEvalTab({ token, showToast }) {
             />
           </div>
 
-          {parentEmail && (
-            <div style={{ ...S.card, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <div>
-                <div style={{ fontWeight: '600', color: '#374151', fontSize: '14px' }}>
-                  📧 Send Report to Parent
-                </div>
-                <div style={{ fontSize: '13px', color: '#94a3b8', marginTop: '2px' }}>
-                  {parentEmail}
-                </div>
-              </div>
+          <div style={S.card}>
+            <div style={{ fontWeight: '600', color: '#374151', fontSize: '14px', marginBottom: '12px' }}>
+              📧 Send Report to Parent
+            </div>
+            <div style={{ display: 'flex', gap: '10px' }}>
+              <input 
+                style={{ ...S.input, flex: 1 }} 
+                type="email" 
+                value={parentEmail}
+                onChange={e => setParentEmail(e.target.value)} 
+                placeholder="parent@email.com" 
+              />
               <button
-                style={S.btn('primary')}
+                style={{ ...S.btn('primary'), whiteSpace: 'nowrap' }}
                 onClick={handleEmailReport}
-                disabled={emailSending}
+                disabled={emailSending || !parentEmail}
               >
                 {emailSending ? 'Sending…' : 'Send Email Report'}
               </button>
             </div>
-          )}
+          </div>
         </>
       )}
     </div>
@@ -986,7 +1017,7 @@ function MultiStudentTab({ token, showToast }) {
               📚 Upload a single PDF containing answer sheets from <strong>multiple students</strong>.
               The system will automatically detect and separate each student's answers.
             </div>
-            <ExamSelector token={token} value={examId} onChange={setExamId} />
+            <ExamSelector token={token} value={examId} onChange={setExamId} showToast={showToast} />
             <div style={{ marginTop: '14px' }}>
               <FileDropZone file={file} onChange={setFile} accept=".pdf"
                 label="Drop combined answer sheet PDF here" />
@@ -1102,7 +1133,7 @@ function BulkEvalTab({ token, showToast }) {
         <>
           <div style={S.card}>
             <div style={S.sectionTitle}>Bulk Upload — One File Per Student</div>
-            <ExamSelector token={token} value={examId} onChange={setExamId} />
+            <ExamSelector token={token} value={examId} onChange={setExamId} showToast={showToast} />
             <div style={{ marginTop: '14px' }}>
               <input ref={fileRef} type="file" multiple accept=".pdf,.png,.jpg,.jpeg,.webp"
                 style={{ display: 'none' }}

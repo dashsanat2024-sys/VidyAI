@@ -33,12 +33,13 @@ const NAV = [
     items: [
       { id: 'institute', icon: '🏫', label: 'Institute'  },
       { id: 'analytics', icon: '📉', label: 'Analytics'  },
+      { id: 'settings',  icon: '⚙️', label: 'Settings'   },
     ],
   },
 ]
 
 export default function Sidebar({ isOpen, onClose }) {
-  const { activePanel, setActivePanel } = useApp()
+  const { activePanel, setActivePanel, platformSettings } = useApp()
   const { me: user, logout }           = useAuth()
   const role = user?.role || 'student'
 
@@ -74,12 +75,23 @@ export default function Sidebar({ isOpen, onClose }) {
           {NAV.map(group => {
             // Role-gate entire group
             if (group.roles && !group.roles.includes(role)) return null
+            
+            // Check if ANY item in group is visible
+            const visibleItems = group.items.filter(item => {
+              if (item.roles && !item.roles.includes(role)) return false
+              // Settings always visible for admin
+              if (item.id === 'settings' && (role === 'admin' || role === 'school_admin')) return true
+              // Check platform visibility settings
+              if (platformSettings?.sidebar?.[item.id] === false) return false
+              return true
+            })
+
+            if (visibleItems.length === 0) return null
+
             return (
               <div key={group.group}>
                 <div className="nav-group-label">{group.group}</div>
-                {group.items.map(item => {
-                  // Per-item role gate
-                  if (item.roles && !item.roles.includes(role)) return null
+                {visibleItems.map(item => {
                   const active = activePanel === item.id
                   return (
                     <div

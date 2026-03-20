@@ -315,3 +315,136 @@ export function AnalyticsPanel({ showToast }) {
     </div>
   )
 }
+
+// ── Admin Settings Panel (Sidebar Configuration) ──────────────────────────
+export function AdminSettingsPanel({ showToast }) {
+  const { token } = useAuth()
+  const [settings, setSettings] = useState({ sidebar: {} })
+  const [loading, setLoading]   = useState(false)
+  const [saving, setSaving]     = useState(false)
+
+  // Define the sidebar items that can be toggled
+  const SIDEBAR_ITEMS = [
+    { id: 'dashboard',            label: 'Dashboard',            group: 'Learn' },
+    { id: 'chat',                 label: 'AI Tutor',              group: 'Learn' },
+    { id: 'curriculum',           label: 'Curriculum Hub',        group: 'Learn' },
+    { id: 'interactive-practice', label: 'Practice Mode',         group: 'Learn' },
+    { id: 'qmaster',              label: 'Question Master',       group: 'Teach' },
+    { id: 'qgen',                 label: 'Quick QGen',            group: 'Teach' },
+    { id: 'eval',                 label: 'Evaluate',              group: 'Teach' },
+    { id: 'reports',              label: 'Reports',               group: 'Teach' },
+    { id: 'institute',            label: 'Institute',             group: 'Manage' },
+    { id: 'analytics',            label: 'Analytics',             group: 'Manage' },
+  ]
+
+  useEffect(() => {
+    fetchSettings()
+  }, [])
+
+  const fetchSettings = async () => {
+    setLoading(true)
+    try {
+      const res = await apiGet('/admin/settings', token)
+      if (res.ok) {
+        const data = await res.json()
+        // Ensure sidebar object exists
+        const sidebar = data.settings?.sidebar || {}
+        setSettings({ ...data.settings, sidebar })
+      }
+    } catch { }
+    setLoading(false)
+  }
+
+  const toggleVisibility = async (itemId) => {
+    const newSidebar = { ...settings.sidebar }
+    // If it's undefined or true, it's visible. Toggle to false.
+    // If it's false, toggle to true.
+    newSidebar[itemId] = newSidebar[itemId] === false ? true : false
+    
+    setSettings(prev => ({ ...prev, sidebar: newSidebar }))
+    
+    setSaving(true)
+    try {
+      const res = await fetch('/api/admin/settings', {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ sidebar: newSidebar })
+      })
+      if (res.ok) {
+        showToast && showToast('Settings updated', 'success')
+      } else {
+        showToast && showToast('Failed to save settings', 'error')
+      }
+    } catch {
+      showToast && showToast('Failed to save settings', 'error')
+    }
+    setSaving(false)
+  }
+
+  return (
+    <div className="panel active">
+      <div style={{ maxWidth: 800, margin: '0 auto' }}>
+        <h3 style={{ fontFamily: 'var(--serif)', color: 'var(--indigo)', marginBottom: 10 }}>⚙️ Admin Settings</h3>
+        <p style={{ color: 'var(--muted)', fontSize: 13, marginBottom: 24 }}>
+          Configure platform-wide settings and sidebar menu visibility.
+        </p>
+
+        <div className="card" style={{ padding: 24 }}>
+          <h4 style={{ marginBottom: 16, borderBottom: '1px solid #f1f5f9', paddingBottom: 10 }}>Sidebar Menu Visibility</h4>
+          <p style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 20 }}>
+            Toggle which menus are visible in the sidebar. Note: Admin-only menus like "Institute" and "Analytics" will always be hidden for non-admins regardless of these settings.
+          </p>
+
+          {loading ? (
+            <div style={{ textAlign: 'center', padding: '40px 0' }}><span className="spinner" /></div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              {['Learn', 'Teach', 'Manage'].map(group => (
+                <div key={group} style={{ marginBottom: 12 }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--indigo)', textTransform: 'uppercase', marginBottom: 10, letterSpacing: '0.05em' }}>
+                    {group} Group
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 10 }}>
+                    {SIDEBAR_ITEMS.filter(item => item.group === group).map(item => {
+                      const isVisible = settings.sidebar[item.id] !== false
+                      return (
+                        <div key={item.id} 
+                          style={{ 
+                            display: 'flex', alignItems: 'center', justifyContent: 'space-between', 
+                            padding: '10px 14px', borderRadius: 10, border: '1px solid #e2e8f0',
+                            background: isVisible ? '#fff' : '#f8fafc',
+                            opacity: isVisible ? 1 : 0.7
+                          }}>
+                          <span style={{ fontSize: 13, fontWeight: 600 }}>{item.label}</span>
+                          <button 
+                            onClick={() => toggleVisibility(item.id)}
+                            disabled={saving}
+                            style={{ 
+                              padding: '4px 10px', fontSize: 11, fontWeight: 700, borderRadius: 6, cursor: 'pointer',
+                              border: 'none',
+                              background: isVisible ? '#d1fae5' : '#fee2e2',
+                              color: isVisible ? '#065f46' : '#991b1b',
+                              minWidth: 60
+                            }}>
+                            {isVisible ? 'Visible' : 'Hidden'}
+                          </button>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+        
+        <div style={{ marginTop: 24, fontSize: 12, color: 'var(--muted)', textAlign: 'center' }}>
+          Changes are saved automatically and applied on next refresh or login.
+        </div>
+      </div>
+    </div>
+  )
+}

@@ -3,9 +3,11 @@ import { useAuth } from '../../context/AuthContext'
 import { useApp } from '../../context/AppContext'
 import { apiPost } from '../../utils/api'
 
+import CurriculumSelector from '../shared/CurriculumSelector'
+
 export default function InteractivePracticePanel({ showToast }) {
   const { token } = useAuth()
-  const { syllabi, activeSyllabus, removeSyllabus } = useApp()
+  const { syllabi, activeSyllabus, removeSyllabus, addSyllabus } = useApp()
 
   const [phase, setPhase]             = useState('setup')
   const [selectedSyl, setSelectedSyl] = useState('')
@@ -19,12 +21,39 @@ export default function InteractivePracticePanel({ showToast }) {
   const [feedbacks, setFeedbacks]     = useState({})
   const [deleting, setDeleting]       = useState(false)
 
+  // Knowledge Source details for display
+  const [sourceMeta, setSourceMeta]   = useState(null)
+
   useEffect(() => {
-    if (activeSyllabus?.id && !selectedSyl) setSelectedSyl(activeSyllabus.id)
+    if (activeSyllabus?.id && !selectedSyl) {
+      setSelectedSyl(activeSyllabus.id)
+      setSourceMeta({
+        name: activeSyllabus.name,
+        board: activeSyllabus.board,
+        classNum: activeSyllabus.class_name || activeSyllabus.class,
+        subject: activeSyllabus.subject
+      })
+    }
   }, [activeSyllabus])
 
-  // Only own syllabi — no cross-user bleeding (AppContext already filters, but extra guard)
-  const ownSyllabi = syllabi   // already scoped in AppContext
+  const handleSelectionComplete = (data) => {
+    setSelectedSyl(data.syllabus_id)
+    setSourceMeta({
+      name: data.name,
+      board: data.board,
+      classNum: data.classNum,
+      subject: data.subject
+    })
+    // Also register in AppContext if not already there
+    addSyllabus({
+      id: data.syllabus_id,
+      name: data.name,
+      board: data.board,
+      class: data.classNum,
+      subject: data.subject
+    })
+    showToast(`Syllabus loaded: ${data.name}`, 'success')
+  }
 
   const handleDeleteSyllabus = async () => {
     if (!selectedSyl) { showToast('Select a syllabus to remove', 'warning'); return }
@@ -34,7 +63,12 @@ export default function InteractivePracticePanel({ showToast }) {
       const res = await fetch(`/api/syllabi/${selectedSyl}`, {
         method: 'DELETE', headers: { Authorization: `Bearer ${token}` }
       })
-      if (res.ok) { removeSyllabus(selectedSyl); setSelectedSyl(''); showToast('Syllabus removed', 'success') }
+      if (res.ok) { 
+        removeSyllabus(selectedSyl)
+        setSelectedSyl('')
+        setSourceMeta(null)
+        showToast('Syllabus removed', 'success') 
+      }
       else { const d = await res.json(); showToast(d.error || 'Failed', 'error') }
     } catch { showToast('Failed to remove', 'error') }
     setDeleting(false)
@@ -132,14 +166,30 @@ export default function InteractivePracticePanel({ showToast }) {
             </div>
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 16, marginBottom: 20 }}>
-            <div className="fg">
-              <label>Knowledge Source</label>
-              <select className="fi sel" value={selectedSyl} onChange={e => setSelectedSyl(e.target.value)}>
-                <option value="">— Select Syllabus —</option>
-                {ownSyllabi.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-              </select>
+          <div style={{ background: '#f8fafc', padding: '20px', borderRadius: '12px', border: '1px solid #e2e8f0', marginBottom: '24px' }}>
+             <h4 style={{ fontSize: '13px', fontWeight: '700', color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '16px' }}>
+                1. Select Curriculum
+             </h4>
+             <CurriculumSelector token={token} onComplete={handleSelectionComplete} buttonLabel="Load Practice Knowledge" />
+          </div>
+
+          {selectedSyl && sourceMeta && (
+            <div style={{ background: 'var(--indigo3)', padding: '16px', borderRadius: '12px', border: '1px solid var(--indigo2)', marginBottom: '24px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div>
+                   <div style={{ fontSize: '11px', fontWeight: '700', color: 'var(--indigo)', textTransform: 'uppercase', marginBottom: '4px' }}>Target Syllabus</div>
+                   <div style={{ fontWeight: '700', color: 'var(--text)' }}>{sourceMeta.name}</div>
+                   <div style={{ fontSize: '12px', color: 'var(--muted)' }}>{sourceMeta.board} · Class {sourceMeta.classNum} · {sourceMeta.subject}</div>
+                </div>
+                <button onClick={handleDeleteSyllabus} disabled={deleting}
+                  style={{ padding: '8px 12px', background: '#fee2e2', border: '1px solid #fca5a5', borderRadius: 8, color: '#991b1b', fontSize: 11, fontWeight: 700, cursor: 'pointer', fontFamily: 'var(--sans)' }}>
+                  {deleting ? '…' : 'Remove'}
+                </button>
+              </div>
             </div>
+          )}
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 24 }}>
             <div className="fg">
               <label>Question Type</label>
               <select className="fi sel" value={qType} onChange={e => setQType(e.target.value)}>
@@ -156,15 +206,9 @@ export default function InteractivePracticePanel({ showToast }) {
             </div>
           </div>
 
-          <button className="btn-submit indigo" onClick={generate} disabled={loading}>
+          <button className="btn-submit indigo" onClick={generate} disabled={loading || !selectedSyl}>
             {loading ? <><span className="spin" />Generating Questions…</> : '🚀 Start Practice Session →'}
           </button>
-          {selectedSyl && (
-            <button onClick={handleDeleteSyllabus} disabled={deleting}
-              style={{ marginTop: 10, padding: '8px 18px', background: '#fee2e2', border: '1px solid #fca5a5', borderRadius: 8, color: '#991b1b', fontSize: 12, fontWeight: 700, cursor: 'pointer', fontFamily: 'var(--sans)', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-              {deleting ? '…' : '🗑 Remove selected syllabus'}
-            </button>
-          )}
         </div>
       </div>
     </div>
