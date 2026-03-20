@@ -167,12 +167,3 @@ export default function CurriculumSelector({ token, onComplete, buttonLabel = "L
     </div>
   )
 }
-
-      {error && (
-        <div style={{ color: C.red, fontSize: '13px', padding: '10px', background: C.redLight, borderRadius: '8px', border: `1px solid ${C.redBorder}`, marginTop: '8px' }}>
-          ⚠️ {error}
-        </div>
-      )}
-    </div>
-  )
-}
