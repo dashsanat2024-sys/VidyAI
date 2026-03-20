@@ -336,7 +336,9 @@ def _coerce_mcq_answer(student_answer: str, options: Dict[str, str]) -> str:
     s = _normalize(_strip_answer_prefix(student_answer))
     if not s:
         return ""
-    m = re.match(r"^(?:option\s*)?[\(\[\{]?\s*([a-d])\s*[\)\]\}]?$", s, flags=re.IGNORECASE)
+    # Handle common prefixes: "Answer: A", " - A", "B)", "(C)"
+    # Matches: "a", "- a", "(b)", "option c", " - d"
+    m = re.match(r"^(?:option\s*)?[-–—\s\(\[\{]*([a-d])[\s\)\]\}]*$", s, flags=re.IGNORECASE)
     if m:
         return m.group(1).upper()
     for k, v in (options or {}).items():
@@ -642,11 +644,12 @@ def _evaluate_answers(exam: dict, submitted: Dict[int, str], roll_no: str = "") 
         total_possible += max_m
 
         if qtype == "objective":
+            coerced = _coerce_mcq_answer(student, q.get("options", {}))
             correct = _objective_is_correct(q, student)
             awarded = max_m if correct else 0.0
             total_awarded += awarded
             evals.append({
-                "question_id": qid, "type": "objective", "student_answer": student,
+                "question_id": qid, "type": "objective", "student_answer": coerced,
                 "valid_answers": q.get("valid_answers", []), "is_correct": correct,
                 "awarded_marks": awarded, "max_marks": max_m,
                 "feedback": "Correct ✓" if correct else "Incorrect ✗"
@@ -2066,11 +2069,10 @@ def _ocr_page_parallel(images: list, exam_questions: list, exam: dict,
                 f"MCQ questions on this page: {page_obj_ids}\n"
                 f"Written questions on this page: {page_subj_ids}\n\n"
                 "For each question return the answer:\n"
-                "  MCQ: single letter A, B, C, or D only — NO dashes, NO prefixes.\n"
-                "  Written: READ EVERY handwritten line in the answer box. "
+                "  Written: READ EVERY SINGLE HANDWRITTEN LINE in the answer box. "
                 "Join ALL lines into ONE string separated by spaces. "
-                "Do NOT stop after the first line. "
-                "Do NOT include printed labels like 'Write your answer below:'.\n"
+                "⚠️ EXTREMELY IMPORTANT: Do NOT stop after the first line. "
+                "Extract ALL handwritten text across all ruled lines.\n"
                 "  Blank: omit from JSON\n\n"
                 "CRITICAL for MCQ: return ONLY the letter e.g. \"B\" — never \"- B\" or \"B)\"\n"
                 "Return ONLY valid JSON: "
@@ -4494,9 +4496,9 @@ def evaluate_sheet():
     # ── Cache check (skip OCR if identical file already evaluated) ────────────
     fhash  = _file_hash(str(path))
     cached = _cache_get(fhash, exam_id)
-    if cached:
-        log.info(f"[EVAL] Cache hit for {fn} — returning cached result")
-        return jsonify({"cached": True, **cached})
+    # if cached:
+    #     log.info(f"[EVAL] Cache hit for {fn} — returning cached result")
+    #     return jsonify({"cached": True, **cached})
 
     # ── Async path (Celery available) ─────────────────────────────────────────
     if CELERY_OK:
