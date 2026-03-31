@@ -7,7 +7,7 @@
  * The saved Exam ID links directly to Evaluation Central for grading.
  */
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useAuth } from '../../context/AuthContext'
 import { useApp }  from '../../context/AppContext'
 import SharedCurriculumSelector from '../shared/CurriculumSelector'
@@ -150,11 +150,43 @@ function StepBar({ step }) {
 
 // ── Step 1: Cascading curriculum selector ─────────────────────────────────────
 function CurriculumSelector({ token, onComplete }) {
+  const [sourceMode, setSourceMode] = useState('curriculum')  // 'curriculum' | 'upload'
   const [chapters, setChapters]       = useState([])
-  const [selChapters, setSelChapters] = useState([])   // selected chapter subset
+  const [selChapters, setSelChapters] = useState([])
   const [syllabusId, setSyllabusId]   = useState('')
   const [syllabusName, setSyllabusName] = useState('')
-  const [meta, setMeta]               = useState(null) // { state, board, cls, subject }
+  const [meta, setMeta]               = useState(null)
+  const [uploadLoading, setUploadLoading] = useState(false)
+  const [uploadedName,  setUploadedName]  = useState('')
+  const uploadRef = useRef(null)
+
+  const handleDocUpload = async (e) => {
+    const file = e.target.files[0]
+    if (!file) return
+    setUploadLoading(true)
+    try {
+      const fd = new FormData()
+      fd.append('file', file)
+      fd.append('syllabus_name', file.name.replace(/\.[^/.]+$/, ''))
+      const res = await fetch(`/api/upload`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        body: fd,
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Upload failed')
+      setSyllabusId(data.syllabus_id || '')
+      setSyllabusName(data.syllabus_name || file.name)
+      setUploadedName(data.syllabus_name || file.name)
+      setChapters(data.chapters || [])
+      setSelChapters([])
+      setMeta({ state: '', board: 'Uploaded Document', cls: '', subject: file.name.replace(/\.[^/.]+$/, '') })
+    } catch (err) {
+      alert(err.message || 'Upload failed')
+    }
+    setUploadLoading(false)
+    if (uploadRef.current) uploadRef.current.value = ''
+  }
 
   const handleSelectionComplete = (data) => {
     setChapters(data.chapters || [])
@@ -176,50 +208,99 @@ function CurriculumSelector({ token, onComplete }) {
   }
 
   const handleContinue = () => {
-    if (!syllabusId || !meta?.subject) return
+    if (!syllabusId) return
+    const completeMeta = meta || { state: '', board: '', cls: '', subject: syllabusName }
     onComplete({
       syllabusId,
       syllabusName,
-      ...meta,
+      ...completeMeta,
       chapters: selChapters.length > 0 ? selChapters : chapters,
       selectedChapters: selChapters,
       allChapters: chapters,
     })
   }
 
-  const ready = syllabusId && meta?.subject
+  const ready = !!syllabusId
 
   return (
     <div style={S.card}>
-      <div style={{ fontSize: '15px', fontWeight: '700', color: '#0f172a', marginBottom: '18px',
-        display: 'flex', alignItems: 'center', gap: '8px' }}>
-        <span style={{ fontSize: '20px' }}>🗺️</span> Select Curriculum
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '18px' }}>
+        <div style={{ fontSize: '15px', fontWeight: '700', color: '#0f172a',
+          display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <span style={{ fontSize: '20px' }}>🗺️</span> Select Curriculum
+        </div>
+        {/* Source mode toggle */}
+        <div style={{ display: 'flex', gap: '6px' }}>
+          <button
+            style={{ ...S.btn(sourceMode === 'curriculum' ? 'primary' : 'ghost', { fontSize: '11px', padding: '5px 12px' }) }}
+            onClick={() => setSourceMode('curriculum')}>
+            📚 Curriculum
+          </button>
+          <button
+            style={{ ...S.btn('ghost', { fontSize: '11px', padding: '5px 12px',
+              background: sourceMode === 'upload' ? C.amberLight : undefined,
+              borderColor: sourceMode === 'upload' ? C.amber : undefined,
+              color: sourceMode === 'upload' ? C.amber : undefined }) }}
+            onClick={() => setSourceMode('upload')}>
+            📎 Upload Doc
+          </button>
+        </div>
       </div>
 
-      <SharedCurriculumSelector 
-        token={token} 
-        onComplete={handleSelectionComplete} 
-        buttonLabel="Fetch Syllabus Chapters"
-      />
+      {/* ── Curriculum flow ── */}
+      {sourceMode === 'curriculum' && (
+        <>
+          <SharedCurriculumSelector
+            token={token}
+            onComplete={handleSelectionComplete}
+            buttonLabel="Fetch Syllabus Chapters"
+          />
+          {meta && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px',
+              padding: '12px 14px', borderRadius: '10px', marginTop: '16px', marginBottom: '16px',
+              background: C.purpleLight, border: `1px solid ${C.purpleBorder}` }}>
+              <span style={{ fontSize: '14px' }}>📚</span>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontWeight: '700', color: C.purple, fontSize: '13px' }}>
+                  {meta.board} · Class {meta.cls} · {meta.subject}
+                </div>
+                <div style={{ fontSize: '11px', color: C.slate, marginTop: '2px' }}>
+                  {meta.state} · {syllabusName}
+                </div>
+              </div>
+            </div>
+          )}
+        </>
+      )}
 
-      {/* Summary pill when selected */}
-      {meta && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px',
-          padding: '12px 14px', borderRadius: '10px', marginTop: '16px', marginBottom: '16px',
-          background: C.purpleLight, border: `1px solid ${C.purpleBorder}` }}>
-          <span style={{ fontSize: '14px' }}>📚</span>
-          <div style={{ flex: 1 }}>
-            <div style={{ fontWeight: '700', color: C.purple, fontSize: '13px' }}>
-              {meta.board} · Class {meta.cls} · {meta.subject}
-            </div>
-            <div style={{ fontSize: '11px', color: C.slate, marginTop: '2px' }}>
-               {meta.state} · {syllabusName}
-            </div>
+      {/* ── Upload Document flow ── */}
+      {sourceMode === 'upload' && (
+        <div style={{ marginBottom: '16px' }}>
+          <p style={{ fontSize: '13px', color: C.slate, marginBottom: '14px', lineHeight: 1.6 }}>
+            Upload any PDF, Word, or text document — Arthavi will generate questions directly from its content.
+          </p>
+          <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
+            <button
+              style={S.btn('primary', { opacity: uploadLoading ? 0.7 : 1 })}
+              onClick={() => uploadRef.current?.click()}
+              disabled={uploadLoading}>
+              {uploadLoading ? '⏳ Processing…' : '📎 Choose File'}
+            </button>
+            <span style={{ fontSize: '11px', color: C.slate }}>PDF, DOCX, TXT, MD supported</span>
           </div>
+          <input ref={uploadRef} type="file" accept=".pdf,.docx,.txt,.md"
+            style={{ display: 'none' }} onChange={handleDocUpload} />
+          {uploadedName && (
+            <div style={{ marginTop: '12px', padding: '10px 14px', background: C.greenLight,
+              border: `1px solid ${C.greenBorder}`, borderRadius: '8px', fontSize: '13px',
+              color: C.greenDark, display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span>✅</span> <strong>{uploadedName}</strong> — ready
+            </div>
+          )}
         </div>
       )}
 
-      {/* Chapter selection */}
+      {/* Chapter selection (shown for both modes when chapters available) */}
       {chapters.length > 0 && (
         <div style={{ marginTop: '10px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between',
@@ -293,6 +374,9 @@ function QuestionConfig({ curriculum, token, user, onGenerated, onBack }) {
   const totalMarks = objCount * objMarks + subjCount * subjMarks
 
   const handleGenerate = async () => {
+    const today = new Date().toISOString().slice(0, 10)
+    if (!duration || duration < 1) { setError('Please enter a valid duration (minimum 1 minute)'); return }
+    if (examDate && examDate < today) { setError('Exam date cannot be a past date'); return }
     setLoading(true); setError('')
     try {
       const body = {
@@ -454,12 +538,13 @@ function QuestionConfig({ curriculum, token, user, onGenerated, onBack }) {
           <div>
             <label style={S.label}>Exam Date</label>
             <input style={S.input} type="date" value={examDate}
+              min={new Date().toISOString().slice(0, 10)}
               onChange={e => setExamDate(e.target.value)} />
           </div>
           <div>
             <label style={S.label}>Duration (minutes)</label>
-            <input style={S.input} type="number" value={duration} min={15} step={15}
-              onChange={e => setDuration(+e.target.value)} />
+            <input style={S.input} type="number" value={duration} min={1} max={300} step={5}
+              onChange={e => setDuration(Math.max(1, +e.target.value))} />
           </div>
         </div>
 
@@ -480,10 +565,18 @@ function QuestionConfig({ curriculum, token, user, onGenerated, onBack }) {
 }
 
 // ── QuestionCard: collapsible question display ─────────────────────────────────
-function QuestionCard({ q, onDelete }) {
+function QuestionCard({ q, onDelete, onMarksChange, onCriteriaChange }) {
   const [open, setOpen] = useState(false)
+  const [editingMarks, setEditingMarks] = useState(false)
+  const [criteriaVal, setCriteriaVal]   = useState(q.evaluation_criteria || '')
   const isObj = q.type === 'objective'
   const correct = q.answer?.toUpperCase()
+
+  const commitMarks = (raw) => {
+    setEditingMarks(false)
+    const v = parseFloat(raw)
+    if (!isNaN(v) && v > 0 && v !== q.marks) onMarksChange?.(v)
+  }
 
   return (
     <div style={{ border: `1px solid ${C.slateBorder}`, borderRadius: '10px',
@@ -494,7 +587,7 @@ function QuestionCard({ q, onDelete }) {
         background: open ? (isObj ? C.indigoLight : C.greenLight) : '#fafafa' }}
         onClick={() => setOpen(o => !o)}>
         <div style={{ width: '26px', height: '26px', borderRadius: '6px', flexShrink: 0,
-          background: isObj ? C.indigo : C.green,
+          background: q.source === 'custom' ? C.amber : (isObj ? C.indigo : C.green),
           display: 'flex', alignItems: 'center', justifyContent: 'center',
           fontWeight: '700', fontSize: '11px', color: '#fff' }}>
           Q{q.id}
@@ -509,9 +602,32 @@ function QuestionCard({ q, onDelete }) {
             color: isObj ? C.indigo : C.green, fontWeight: '600', border: `1px solid ${isObj ? C.indigoBorder : C.greenBorder}` }}>
             {isObj ? 'MCQ' : 'Written'}
           </span>
-          <span style={{ fontSize: '11px', color: C.slate, fontWeight: '600' }}>
-            {q.marks}m
-          </span>
+          {q.source === 'custom' && (
+            <span style={{ fontSize: '10px', padding: '2px 7px', borderRadius: '999px',
+              background: C.amberLight, color: C.amber, fontWeight: '700',
+              border: `1px solid ${C.amberBorder}` }}>Custom</span>
+          )}
+          {editingMarks ? (
+            <input
+              type="number" min={0.5} step={0.5} defaultValue={q.marks} autoFocus
+              style={{ width: '52px', padding: '2px 6px', borderRadius: '6px',
+                border: `1.5px solid ${C.purple}`, fontSize: '12px', fontWeight: '700',
+                outline: 'none', textAlign: 'center' }}
+              onClick={e => e.stopPropagation()}
+              onBlur={e => commitMarks(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') commitMarks(e.target.value); e.stopPropagation() }}
+            />
+          ) : (
+            <span
+              style={{ fontSize: '12px', color: C.purple, fontWeight: '700', cursor: 'pointer',
+                padding: '2px 8px', borderRadius: '6px',
+                background: C.purpleLight, border: `1px solid ${C.purpleBorder}` }}
+              title="Click to edit marks"
+              onClick={e => { e.stopPropagation(); setEditingMarks(true) }}
+            >
+              {q.marks}m ✏️
+            </span>
+          )}
           <span style={{ fontSize: '12px', color: C.slate }}>{open ? '▲' : '▼'}</span>
         </div>
       </div>
@@ -561,11 +677,24 @@ function QuestionCard({ q, onDelete }) {
               <strong>Explanation:</strong> {q.explanation}
             </div>
           )}
-          {q.evaluation_criteria && (
-            <div style={{ fontSize: '12px', padding: '7px 12px', borderRadius: '7px',
-              background: C.amberLight, border: `1px solid ${C.amberBorder}`,
-              color: '#92400e', marginBottom: '7px', lineHeight: 1.5 }}>
-              <strong>Marking Criteria:</strong> {q.evaluation_criteria}
+          {/* Editable marking criteria for written/subjective questions */}
+          {!isObj && (
+            <div style={{ marginBottom: '10px' }}>
+              <label style={{ ...S.label, color: C.amber, marginBottom: '4px' }}>
+                ✦ Marking Criteria / Rubric
+              </label>
+              <textarea
+                rows={3}
+                value={criteriaVal}
+                placeholder="e.g. 1m for correct definition · 2m for explanation with example · 1m for diagram"
+                style={{ ...S.input, resize: 'vertical', lineHeight: 1.5, fontSize: '12px',
+                  width: '100%', boxSizing: 'border-box' }}
+                onChange={e => setCriteriaVal(e.target.value)}
+                onBlur={() => onCriteriaChange?.(criteriaVal)}
+              />
+              <div style={{ fontSize: '10px', color: C.slate, marginTop: '2px' }}>
+                Auto-saved on focus-out · Shown in answer key · Used by AI evaluator
+              </div>
             </div>
           )}
 
@@ -579,11 +708,133 @@ function QuestionCard({ q, onDelete }) {
   )
 }
 
+// ── Custom Question Form ────────────────────────────────────────────────────────
+function CustomQuestionForm({ onAdd, onCancel }) {
+  const [qType,    setQType]    = useState('objective')
+  const [question, setQuestion] = useState('')
+  const [opts,     setOpts]     = useState({ A: '', B: '', C: '', D: '' })
+  const [answer,   setAnswer]   = useState('A')
+  const [marks,    setMarks]    = useState(1)
+  const [criteria, setCriteria] = useState('')
+
+  const valid = question.trim() && (qType === 'subjective' || (opts.A.trim() && opts.B.trim()))
+
+  const handleAdd = () => {
+    if (!valid) return
+    const q = { type: qType, question: question.trim(), marks: parseFloat(marks) || 1, source: 'custom' }
+    if (qType === 'objective') {
+      q.options = Object.fromEntries(Object.entries(opts).filter(([, v]) => v.trim()))
+      q.answer  = answer
+    } else {
+      q.evaluation_criteria = criteria
+      q.answer = criteria || '(Teacher-defined)'
+    }
+    onAdd(q)
+  }
+
+  return (
+    <div style={{ ...S.card, border: `2px solid ${C.purpleBorder}`, background: C.purpleLight, margin: '0 0 14px' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
+        <div style={{ fontWeight: '700', color: C.purple, fontSize: '14px' }}>➕ Add Custom Question</div>
+        <button style={S.btn('ghost', { fontSize: '12px', padding: '4px 10px' })} onClick={onCancel}>✕ Cancel</button>
+      </div>
+
+      {/* Question type selector */}
+      <div style={{ display: 'flex', gap: '8px', marginBottom: '14px' }}>
+        {[['objective','MCQ / Objective', C.indigo, C.indigoLight, C.indigoBorder],
+          ['subjective','Written / Subjective', C.green, C.greenLight, C.greenBorder]
+        ].map(([v, l, c, bg, br]) => (
+          <span key={v} style={S.chip(qType === v, c, bg, br)} onClick={() => setQType(v)}>{l}</span>
+        ))}
+      </div>
+
+      {/* Question text */}
+      <div style={{ marginBottom: '12px' }}>
+        <label style={S.label}>Question *</label>
+        <textarea rows={3} value={question} placeholder="Type your question here…"
+          style={{ ...S.input, resize: 'vertical', lineHeight: 1.5 }}
+          onChange={e => setQuestion(e.target.value)} />
+      </div>
+
+      {/* MCQ options */}
+      {qType === 'objective' && (
+        <>
+          <div style={{ marginBottom: '10px' }}>
+            <label style={S.label}>Answer Options (A & B required)</label>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+              {['A','B','C','D'].map(k => (
+                <div key={k} style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <span
+                    style={{ width: '22px', height: '22px', borderRadius: '50%', flexShrink: 0,
+                      background: answer === k ? C.green : C.indigoLight,
+                      color: answer === k ? '#fff' : C.indigo,
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      fontWeight: '700', fontSize: '11px', cursor: 'pointer', userSelect: 'none' }}
+                    onClick={() => setAnswer(k)}>{k}</span>
+                  <input style={{ ...S.input, flex: 1 }}
+                    placeholder={`Option ${k}${k === 'A' || k === 'B' ? ' *' : ''}`}
+                    value={opts[k]} onChange={e => setOpts(o => ({ ...o, [k]: e.target.value }))} />
+                </div>
+              ))}
+            </div>
+          </div>
+          <div style={{ marginBottom: '12px' }}>
+            <label style={S.label}>Correct Answer</label>
+            <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+              {['A','B','C','D'].filter(k => opts[k].trim()).map(k => (
+                <span key={k} style={S.chip(answer === k, C.green, C.greenLight, C.greenBorder)}
+                  onClick={() => setAnswer(k)}>{k}: {opts[k].slice(0,18)}</span>
+              ))}
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* Subjective marking criteria */}
+      {qType === 'subjective' && (
+        <div style={{ marginBottom: '12px' }}>
+          <label style={{ ...S.label, color: C.amber }}>Marking Criteria / Rubric</label>
+          <textarea rows={3} value={criteria}
+            placeholder="e.g. 1m: Correct definition · 2m: Explanation with example · 1m: Diagram"
+            style={{ ...S.input, resize: 'vertical', lineHeight: 1.5, fontSize: '13px' }}
+            onChange={e => setCriteria(e.target.value)} />
+          <div style={{ fontSize: '11px', color: C.slate, marginTop: '3px' }}>
+            Used by AI evaluator and printed on the answer key.
+          </div>
+        </div>
+      )}
+
+      {/* Marks + submit */}
+      <div style={{ display: 'flex', alignItems: 'flex-end', gap: '12px', marginBottom: '14px' }}>
+        <div style={{ flex: '0 0 110px' }}>
+          <label style={S.label}>Marks *</label>
+          <input style={S.input} type="number" min={0.5} step={0.5}
+            value={marks} onChange={e => setMarks(e.target.value)} />
+        </div>
+        <div style={{ flex: 1, fontSize: '12px', color: valid ? C.green : C.slate, paddingBottom: '2px' }}>
+          {valid ? '✅ Ready to add' : (qType === 'objective' ? 'Fill question + at least options A & B' : 'Fill in the question text')}
+        </div>
+      </div>
+
+      <div style={{ display: 'flex', gap: '8px' }}>
+        <button
+          style={{ ...S.btn('primary', { flex: 1, justifyContent: 'center' }),
+            opacity: valid ? 1 : 0.5, cursor: valid ? 'pointer' : 'not-allowed' }}
+          onClick={handleAdd} disabled={!valid}>
+          ✅ Add to Question Paper
+        </button>
+        <button style={S.btn('ghost')} onClick={onCancel}>Cancel</button>
+      </div>
+    </div>
+  )
+}
+
 // ── Step 3: Review questions + print actions ───────────────────────────────────
 function ReviewAndPrint({ questions, examId, examMeta, token, onBack, onRegenerate, showToast, navigateTo }) {
   const [saving, setSaving]       = useState(false)
   const [savedId, setSavedId]     = useState(examId)   // generate-questions auto-saves
   const [qs, setQs]               = useState(questions)
+  const [showAddQ, setShowAddQ]   = useState(false)
 
   const objQs  = qs.filter(q => q.type === 'objective')
   const subjQs = qs.filter(q => q.type !== 'objective')
@@ -592,6 +843,22 @@ function ReviewAndPrint({ questions, examId, examMeta, token, onBack, onRegenera
   const handleDelete = (idx) => {
     setQs(prev => prev.filter((_, i) => i !== idx).map((q, i) => ({ ...q, id: i + 1 })))
     setSavedId(null)   // invalidate — need to re-save after edits
+  }
+
+  const handleAddQuestion = (q) => {
+    setQs(prev => [...prev, { ...q, id: prev.length + 1 }])
+    setSavedId(null)
+    setShowAddQ(false)
+  }
+
+  const handleMarksChange = (qId, newMarks) => {
+    setQs(prev => prev.map(q => q.id === qId ? { ...q, marks: newMarks } : q))
+    setSavedId(null)
+  }
+
+  const handleCriteriaChange = (qId, criteria) => {
+    setQs(prev => prev.map(q => q.id === qId ? { ...q, evaluation_criteria: criteria } : q))
+    setSavedId(null)
   }
 
   const handleSave = async () => {
@@ -774,15 +1041,28 @@ function ReviewAndPrint({ questions, examId, examMeta, token, onBack, onRegenera
         <div style={{ display: 'flex', justifyContent: 'space-between',
           alignItems: 'center', marginBottom: '14px' }}>
           <div style={{ fontWeight: '700', color: '#0f172a', fontSize: '15px' }}>
-            Questions
+            Questions ({qs.length})
           </div>
-          {savedId && (
-            <button style={{ ...S.btn('ghost', { fontSize: '11px', padding: '5px 12px' }) }}
-              onClick={handleSave} disabled={saving}>
-              {saving ? '…' : '💾 Re-save after edits'}
+          <div style={{ display: 'flex', gap: '8px' }}>
+            {savedId && (
+              <button style={{ ...S.btn('ghost', { fontSize: '11px', padding: '5px 12px' }) }}
+                onClick={handleSave} disabled={saving}>
+                {saving ? '…' : '💾 Re-save after edits'}
+              </button>
+            )}
+            <button
+              style={S.btn(showAddQ ? 'ghost' : 'success', { fontSize: '12px', padding: '6px 14px' })}
+              onClick={() => setShowAddQ(s => !s)}>
+              {showAddQ ? '✕ Cancel' : '➕ Add Custom Question'}
             </button>
-          )}
+          </div>
         </div>
+        {showAddQ && (
+          <CustomQuestionForm
+            onAdd={handleAddQuestion}
+            onCancel={() => setShowAddQ(false)}
+          />
+        )}
 
         {objQs.length > 0 && (
           <>
@@ -791,7 +1071,9 @@ function ReviewAndPrint({ questions, examId, examMeta, token, onBack, onRegenera
             </div>
             {objQs.map((q, i) => (
               <QuestionCard key={q.id} q={q}
-                onDelete={() => handleDelete(qs.findIndex(x => x.id === q.id))} />
+                onDelete={() => handleDelete(qs.findIndex(x => x.id === q.id))}
+                onMarksChange={(m) => handleMarksChange(q.id, m)}
+                onCriteriaChange={(c) => handleCriteriaChange(q.id, c)} />
             ))}
           </>
         )}
@@ -802,7 +1084,9 @@ function ReviewAndPrint({ questions, examId, examMeta, token, onBack, onRegenera
             </div>
             {subjQs.map((q, i) => (
               <QuestionCard key={q.id} q={q}
-                onDelete={() => handleDelete(qs.findIndex(x => x.id === q.id))} />
+                onDelete={() => handleDelete(qs.findIndex(x => x.id === q.id))}
+                onMarksChange={(m) => handleMarksChange(q.id, m)}
+                onCriteriaChange={(c) => handleCriteriaChange(q.id, c)} />
             ))}
           </>
         )}

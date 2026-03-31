@@ -2,61 +2,66 @@
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
 /*
- * PAARTHIVI SMART LEARNING — Design System
- * Brand colours extracted from logo:
- *   Primary:   Purple #7C3AED → #4F46E5 (violet-indigo gradient — the P symbol)
- *   Secondary: Cyan-Blue #2563EB → #0EA5E9 (circuit/tech elements)
- *   Accent:    Bright violet #8B5CF6 (sparkle highlight)
- *   Neutral:   Slate-based backgrounds
+ * ARTHAVI SMART LEARNING — Design System
+ * Brand Palette — Exact colors from Arthavi.png
+ *   Primary:     Dark Indigo     #1B1A3E  — sidebar, footer, dark sections
+ *   Secondary:   Purple          #6B52B0  — buttons, key CTA
+ *   Accent:      Blue            #04A0E8  — links, accent UI
+ *   Light Purple: Lavender       #9B73EF  — highlights, gradients
+ *   Background:  Light Grey      #F5F7FB  — main page body
+ *   Text:        Dark Grey       #1A1A1A  — body copy
  */
 :root {
-  /* ── Brand — Purple (primary) ── */
-  --brand:       #6D28D9;   /* deep violet — logo top of P */
-  --brand2:      #7C3AED;   /* violet */
-  --brand3:      #8B5CF6;   /* medium violet */
-  --brand-light: #EDE9FE;   /* lavender tint for backgrounds */
-  --brand-dark:  #4C1D95;   /* darkest purple for sidebar */
+  /* ── Brand — Purple (secondary/CTA) ── */
+  --brand:       #6B52B0;   /* Purple — brand primary / buttons */
+  --brand2:      #4A3890;   /* Dark Purple — hover/active */
+  --brand3:      #04A0E8;   /* Blue — accent / links */
+  --brand-light: #F0EAFF;   /* Very light purple tint — card/tag bg */
+  --brand-dark:  #1B1A3E;   /* Dark Indigo — sidebar, footer */
 
-  /* ── Brand — Blue (secondary) ── */
-  --blue:        #2563EB;   /* logo "Smart Learning" text */
-  --blue2:       #0EA5E9;   /* logo circuit elements / cyan-blue */
-  --blue-light:  #DBEAFE;   /* light blue tint */
+  /* ── Accent (synonyms for panel compatibility) ── */
+  --accent:      #04A0E8;
+  --accent-light:#E0F4FF;
+  --accent-dark: #9B73EF;
 
-  /* ── Semantic ── */
-  --green:  #047857;
-  --red:    #B91C1C;
-  --amber:  #92400E;
-  --yellow: #F59E0B;
-
-  /* ── Neutrals ── */
-  --bg:     #F8F7FF;   /* very slight lavender tint — feels brand-aligned */
-  --paper:  #F0EEFF;   /* soft lavender paper */
-  --warm:   #DDD6FE;   /* lavender border */
-  --text:   #1E1B4B;   /* deep indigo text — from logo "Paarthivi" */
-  --muted:  #6B7280;
-  --muted2: #9CA3AF;
-  --white:  #FFFFFF;
-
-  /* ── Legacy aliases (keeps panels working without change) ── */
-  --saffron:      var(--brand2);
-  --saffron2:     var(--brand3);
+  /* ── Legacy aliases (keeps all panels working without change) ── */
+  --blue:        #4A3890;
+  --blue2:       #04A0E8;
+  --blue-light:  #F0EAFF;
+  --saffron:      var(--brand);
+  --saffron2:     var(--brand2);
   --saffron-light:var(--brand-light);
   --indigo:       var(--brand-dark);
   --indigo2:      var(--brand2);
   --indigo3:      var(--brand-light);
   --cream:        var(--bg);
 
+  /* ── Semantic ── */
+  --green:  #047857;
+  --red:    #B91C1C;
+  --amber:  #92400E;
+  --yellow: #D4AF37;
+
+  /* ── Neutrals ── */
+  --bg:     #F5F7FB;   /* Light Grey — main background */
+  --paper:  #EDF0F7;   /* Light tint — section bg */
+  --warm:   #D4D9E4;   /* Light border */
+  --text:   #1A1A1A;   /* Dark Grey — body text */
+  --muted:  #6B6B6B;   /* Medium grey — secondary text */
+  --muted2: #9E9E9E;
+  --white:  #FFFFFF;
+
   /* ── Typography ── */
-  --serif: 'DM Serif Display', serif;
-  --sans:  'Outfit', sans-serif;
+  --serif: 'Poppins', 'Inter', system-ui, sans-serif;
+  --sans:  'Poppins', 'Inter', system-ui, sans-serif;
   --mono:  'JetBrains Mono', monospace;
 
   /* ── Spacing & shape ── */
   --r:        16px;
   --radius:   12px;
   --sidebar-w:244px;
-  --shadow:   0 4px 24px rgba(109,40,217,.08);
-  --shadow2:  0 12px 48px rgba(109,40,217,.15);
+  --shadow:   0 4px 24px rgba(107,82,176,.09);
+  --shadow2:  0 12px 48px rgba(107,82,176,.16);
 }
 
 html { scroll-behavior: smooth; }
@@ -104,7 +109,7 @@ body::before {
   cursor: pointer;
   transition: .2s;
 }
-.btn-saffron:hover { transform: translateY(-1px); box-shadow: 0 4px 16px rgba(109,40,217,.4); }
+.btn-saffron:hover { transform: translateY(-1px); box-shadow: 0 4px 16px rgba(107,82,176,.4); }
 .btn-saffron:disabled { opacity: .6; cursor: not-allowed; transform: none; }
 .btn-submit {
   width: 100%; padding: 13px; border: none; border-radius: 12px;
@@ -113,7 +118,7 @@ body::before {
   justify-content: center; gap: 8px; margin-top: 8px;
 }
 .btn-submit.indigo  { background: linear-gradient(135deg, var(--brand-dark), var(--brand2)); color: #fff; }
-.btn-submit.indigo:hover { box-shadow: 0 4px 18px rgba(109,40,217,.4); }
+.btn-submit.indigo:hover { box-shadow: 0 4px 18px rgba(107,82,176,.4); }
 .btn-submit.saffron { background: linear-gradient(135deg, var(--brand), var(--brand3)); color: #fff; }
 .btn-submit.green   { background: linear-gradient(135deg, #047857, #10b981); color: #fff; }
 .btn-submit:disabled { opacity: .6; cursor: not-allowed; }
@@ -126,7 +131,7 @@ body::before {
   font-family: var(--sans); font-size: 14px; color: var(--text);
   background: #fff; outline: none; transition: .2s; width: 100%;
 }
-.fi:focus { border-color: var(--brand2); box-shadow: 0 0 0 3px rgba(124,58,237,.1); }
+.fi:focus { border-color: var(--brand2); box-shadow: 0 0 0 3px rgba(107,82,176,.12); }
 .fi.sel { appearance: none; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%236B7280' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 14px center; padding-right: 38px; }
 .frow { display: flex; gap: 12px; }
 .frow .fg { flex: 1; }
@@ -151,7 +156,7 @@ body::before {
 
 /* ── CHIPS ── */
 .chips-wrap { display: flex; flex-wrap: wrap; gap: 8px; }
-.chip { padding: 6px 14px; border-radius: 50px; background: var(--paper); border: 1.5px solid var(--warm); font-size: 12px; font-weight: 600; cursor: pointer; transition: .15s; color: var(--text); user-select: none; }
+.chip { padding: 6px 14px; border-radius: 50px; background: var(--paper); border: 1.5px solid var(--warm); font-size: 12px; font-weight: 400; cursor: pointer; transition: .15s; color: var(--text); user-select: none; }
 .chip.selected, .chip:hover { background: var(--brand-light); border-color: var(--brand2); color: var(--brand); }
 
 /* ── STATS GRID ── */
@@ -161,12 +166,12 @@ body::before {
 .stat-val { font-family: var(--serif); font-size: 30px; color: var(--text); line-height: 1; }
 
 /* ══════════════════════════════════════════════════
-   SIDEBAR — Paarthivi brand gradient
-   Matches logo: deep violet → electric violet → blue
+   SIDEBAR — Arthavi brand: Deep Navy (Premium)
+   Solid navy gradient — logo glows on dark
    ══════════════════════════════════════════════════ */
 .sidebar {
   width: var(--sidebar-w);
-  background: linear-gradient(180deg, #2D1B69 0%, #4C1D95 40%, #1E3A8A 100%);
+  background: linear-gradient(180deg, #121230 0%, #1B1A3E 45%, #2A2858 100%);
   display: flex; flex-direction: column; flex-shrink: 0;
   height: 100vh; overflow-y: auto; transition: transform .25s ease;
 }
@@ -189,9 +194,9 @@ body::before {
 }
 .nav-item:hover { background: rgba(255,255,255,.1); color: #fff; }
 .nav-item.active {
-  background: linear-gradient(135deg, rgba(139,92,246,.5), rgba(14,165,233,.3));
+  background: linear-gradient(135deg, rgba(107,82,176,.55), rgba(74,56,144,.4));
   color: #fff;
-  border-left: 3px solid var(--brand3);
+  border-left: 3px solid #6B52B0;
   padding-left: 9px;
 }
 .nav-item-icon { width: 20px; text-align: center; font-size: 15px; }
@@ -215,12 +220,12 @@ body::before {
 .topbar {
   height: 58px;
   display: flex; align-items: center; padding: 0 20px;
-  background: #fff;
-  border-bottom: 2px solid var(--brand-light);
+  background: #F4F0FF;
+  border-bottom: 2px solid rgba(107,82,176,.18);
   gap: 14px; flex-shrink: 0;
-  box-shadow: 0 1px 8px rgba(109,40,217,.06);
+  box-shadow: 0 1px 8px rgba(107,82,176,.08);
 }
-.topbar h2 { color: var(--brand-dark); font-size: 16px; font-weight: 700; }
+.topbar h2 { color: #1B1A3E; font-size: 16px; font-weight: 700; }
 
 /* ── MODAL ── */
 .modal-alert { padding: 10px 14px; border-radius: 8px; font-size: 13px; }
@@ -276,30 +281,30 @@ body::before {
 }
 .teacher-avatar-box {
   width: 100%; height: 380px;
-  background: linear-gradient(135deg, #4C1D95, #1E3A8A);
+  background: linear-gradient(135deg, #2F2F2F, #3A3A3A);
   border-radius: 20px; display: flex; flex-direction: column;
   align-items: center; justify-content: center;
-  box-shadow: 0 20px 50px rgba(109,40,217,.4);
-  border: 3px solid rgba(139,92,246,.3);
+  box-shadow: 0 20px 50px rgba(183,110,121,.4);
+  border: 3px solid rgba(183,110,121,.35);
   position: relative; overflow: hidden;
 }
 .avatar-icon {
   font-size: 90px; margin-bottom: 16px;
-  filter: drop-shadow(0 0 20px rgba(139,92,246,.5));
+  filter: drop-shadow(0 0 20px rgba(183,110,121,.5));
   animation: gentle-bob 3s ease-in-out infinite;
 }
 .mouth-anim { width:40px; height:10px; background:white; border-radius:5px; margin-top:10px; opacity:0; }
 .speaking .mouth-anim { opacity:1; animation:speaking-pulse 0.2s infinite alternate; }
 .slide-stage {
-  background: rgba(139,92,246,.08); border-radius: 20px;
+  background: rgba(183,110,121,.07); border-radius: 20px;
   min-height: 380px; padding: 32px;
   display: flex; flex-direction: column; justify-content: center;
-  border: 1px solid rgba(139,92,246,.2);
+  border: 1px solid rgba(183,110,121,.2);
   position: relative; word-break: break-word; overflow-wrap: break-word;
 }
 .slide-title {
   font-family: var(--serif); font-size: clamp(18px, 3vw, 28px);
-  color: #A78BFA; margin-bottom: 18px;
+  color: #B76E79; margin-bottom: 18px;
   opacity: 0; transform: translateY(20px);
   transition: all 0.6s cubic-bezier(0.16,1,0.3,1); word-break: break-word;
 }
@@ -368,14 +373,15 @@ body::before {
 @keyframes pd          { 0%,100%{opacity:1} 50%{opacity:.3} }
 @keyframes spin        { to{transform:rotate(360deg)} }
 @keyframes fadeIn      { from{opacity:0} to{opacity:1} }
+@keyframes ocrPulse    { 0%{width:15%;opacity:.7} 50%{width:85%;opacity:1} 100%{width:15%;opacity:.7} }
 
 
 /* ── ACTIVE SYLLABUS PILL ── */
 .active-syl-pill {
   display: flex; align-items: center; gap: 6px;
   padding: 4px 12px; border-radius: 50px;
-  background: var(--brand-light); border: 1px solid var(--brand3);
-  font-size: 12px; font-weight: 600; color: var(--brand);
+  background: rgba(107,82,176,.1); border: 1px solid rgba(107,82,176,.25);
+  font-size: 12px; font-weight: 600; color: #4A3890;
   max-width: 280px; overflow: hidden; white-space: nowrap;
 }
 .active-syl-pill span { overflow: hidden; text-overflow: ellipsis; }
@@ -383,10 +389,10 @@ body::before {
 /* ── MOBILE MENU BUTTON (topbar) ── */
 .mobile-menu-btn {
   display: none; background: none; border: none;
-  font-size: 22px; cursor: pointer; color: var(--brand);
+  font-size: 22px; cursor: pointer; color: #1B1A3E;
   padding: 4px; border-radius: 6px; transition: .15s;
 }
-.mobile-menu-btn:hover { background: var(--brand-light); }
+.mobile-menu-btn:hover { background: rgba(107,82,176,.1); }
 
 /* ── RESPONSIVE ── */
 @media (max-width: 768px) {
@@ -394,6 +400,7 @@ body::before {
   .sidebar.open { transform:translateX(0); }
   .sb-overlay.show { display:block; }
   .mobile-menu-btn { display:block; }
+  .topbar-brand { display:none !important; }
   .stats-grid { grid-template-columns:1fr 1fr; }
   .video-container { grid-template-columns: 1fr; gap: 20px; }
   .teacher-avatar-box { width: 100%; height: 200px; }

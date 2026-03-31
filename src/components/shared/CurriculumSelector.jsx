@@ -71,7 +71,8 @@ export default function CurriculumSelector({ token, onComplete, buttonLabel = "L
           state,
           board: board,
           class: `Class ${classNum}`,
-          subject
+          subject,
+          medium: 'English'
         })
       })
       const data = await res.json()

@@ -1,10 +1,38 @@
 export const API_BASE = '/api'
 
 export async function apiFetch(path, options = {}, token = '') {
-  const headers = { 'Content-Type': 'application/json', ...options.headers }
+  const headers = { ...options.headers }
   if (token) headers['Authorization'] = `Bearer ${token}`
+
+  // Only set Content-Type for non-FormData bodies (FormData needs browser to set boundary)
+  const isFormData = options.body instanceof FormData
+  if (!isFormData && !headers['Content-Type']) {
+    headers['Content-Type'] = 'application/json'
+  }
+
   const res = await fetch(API_BASE + path, { ...options, headers })
-  return res
+
+  // Parse JSON response
+  let data
+  try {
+    data = await res.json()
+  } catch {
+    data = {}
+  }
+
+  // Throw on non-2xx status with structured error
+  if (!res.ok) {
+    const err = new Error(data.error || `Request failed (${res.status})`)
+    err.status = res.status
+    err.data = data
+    // Broadcast quota-exceeded so any panel automatically shows the warning toast
+    if (res.status === 429 && data.quota_exceeded) {
+      window.dispatchEvent(new CustomEvent('quota:exceeded', { detail: data }))
+    }
+    throw err
+  }
+
+  return data
 }
 
 export async function apiGet(path, token) {
@@ -16,12 +44,7 @@ export async function apiPost(path, body, token) {
 }
 
 export async function apiPostForm(path, formData, token) {
-  const res = await fetch(API_BASE + path, {
-    method: 'POST',
-    headers: { 'Authorization': `Bearer ${token}` },
-    body: formData,
-  })
-  return res
+  return apiFetch(path, { method: 'POST', body: formData }, token)
 }
 
 // ── Speech Synthesis — fixed for Chrome, Safari, macOS ──────────────────────

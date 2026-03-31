@@ -40,6 +40,7 @@ const MODE_LABELS = {
   vision_ocr_pdf:     { label: 'Vision OCR',         color: '#2563eb', title: 'GPT-4o Vision on scanned PDF pages' },
   vision_ocr_enhanced:{ label: 'Enhanced Vision',    color: '#7c3aed', title: 'Contrast-enhanced GPT-4o Vision' },
   vision_ocr:         { label: 'Vision OCR',         color: '#2563eb', title: 'GPT-4o Vision on image' },
+  vision_ocr_consensus: { label: 'Vision Consensus', color: '#16a34a', title: 'GPT-4o Vision with 3-read majority vote for MCQ' },
   parsed_pdf:         { label: 'Text Extraction',    color: '#0891b2', title: 'Text layer extracted from digital PDF' },
   gpt_text_parse:     { label: 'GPT Text Parse',     color: '#9333ea', title: 'GPT parsed raw PDF text layer' },
   llm_text_extract:   { label: 'LLM Extraction',     color: '#d97706', title: 'GPT-4o-mini extracted from text layer' },
@@ -47,6 +48,7 @@ const MODE_LABELS = {
   multi_student_gpt4o:{ label: 'Multi-Student',      color: '#0891b2', title: 'Multi-student PDF split and evaluated' },
   multi_student_parallel:{ label: 'Parallel OCR',   color: '#16a34a', title: 'Parallel multi-student evaluation' },
   multi_student_celery:  { label: 'Async Multi',    color: '#7c3aed', title: 'Async Celery multi-student evaluation' },
+  manual_text_entry:     { label: 'Text Entry',      color: '#059669', title: 'Answers typed directly — no OCR needed' },
 }
 
 // ── Styles ────────────────────────────────────────────────────────────────────
@@ -652,13 +654,13 @@ function AsyncPoller({ taskId, token, onComplete, onError }) {
 
   useEffect(() => {
     let attempts = 0
-    const MAX = 120   // 2 min max polling
+    const MAX = 400   // 10 min max polling (optimized backend should finish in 1-2 min)
 
     intervalRef.current = setInterval(async () => {
       attempts++
       if (attempts > MAX) {
         clearInterval(intervalRef.current)
-        onError('Evaluation timed out. Please try again.')
+        onError('Evaluation taking longer than expected. Your answer sheet is being processed in the background. Check back in a few moments.')
         return
       }
 
@@ -704,6 +706,253 @@ function AsyncPoller({ taskId, token, onComplete, onError }) {
             {progress}%
           </div>
         </div>
+      )}
+    </div>
+  )
+}
+
+// ── Tab: Type Answers (no OCR) ────────────────────────────────────────────────
+function TextEvalTab({ token, showToast }) {
+  const { navigateTo } = useApp()
+  const [examId, setExamId]       = useState('')
+  const [examData, setExamData]   = useState(null)
+  const [answers, setAnswers]     = useState({})
+  const [rollNo, setRollNo]       = useState('')
+  const [studentName, setStudentName] = useState('')
+  const [parentEmail, setParentEmail] = useState('')
+  const [loading, setLoading]     = useState(false)
+  const [result, setResult]       = useState(null)
+  const [error, setError]         = useState('')
+  const [emailSending, setEmailSending] = useState(false)
+
+  useEffect(() => {
+    if (!examId) { setExamData(null); setAnswers({}); return }
+    apiFetch(`/exams/${examId}`, {}, token)
+      .then(d => { setExamData(d); setAnswers({}) })
+      .catch(() => {})
+  }, [examId, token])
+
+  const setAnswer = (qid, val) => setAnswers(prev => ({ ...prev, [qid]: val }))
+
+  const answeredCount = examData
+    ? examData.questions.filter(q => (answers[q.id] || '').trim()).length
+    : 0
+
+  const handleSubmit = async () => {
+    if (!examId) return showToast('Please select an exam', 'error')
+    if (answeredCount === 0) return showToast('Please answer at least one question', 'error')
+    setError(''); setResult(null); setLoading(true)
+    try {
+      const data = await apiFetch('/evaluate/text', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          exam_id: examId, answers, student_name: studentName,
+          roll_no: rollNo, parent_email: parentEmail,
+        }),
+      }, token)
+      setResult(data)
+      showToast('Evaluation complete!', 'success')
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const handleEmailReport = async () => {
+    if (!result || !parentEmail) return
+    setEmailSending(true)
+    try {
+      await apiFetch('/evaluations/send-report', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          evaluation_id: result.evaluation_id,
+          parent_email: parentEmail, student_name: studentName, exam_meta: examData,
+        }),
+      }, token)
+      showToast(`Report sent to ${parentEmail}`, 'success')
+    } catch (e) {
+      showToast('Failed to send: ' + e.message, 'error')
+    } finally {
+      setEmailSending(false)
+    }
+  }
+
+  const handleReset = () => {
+    setResult(null); setAnswers({}); setError('')
+    setRollNo(''); setStudentName(''); setParentEmail('')
+  }
+
+  return (
+    <div>
+      {!result && (
+        <>
+          <div style={S.card}>
+            <div style={S.sectionTitle}>Exam & Student Details</div>
+            <ExamSelector token={token} value={examId} onChange={setExamId} showToast={showToast} />
+            {examData && (
+              <div style={{ marginTop: '10px', padding: '10px 14px', borderRadius: '8px',
+                background: '#ecfdf5', border: '1px solid #a7f3d0', fontSize: '13px', color: '#065f46' }}>
+                ✏️ {examData.syllabus_name} — {examData.total_marks} marks,{' '}
+                {examData.objective_count} MCQ + {examData.subjective_count} written
+              </div>
+            )}
+            <div style={{ ...S.formRow, marginTop: '14px' }}>
+              <div>
+                <label style={S.label}>Student Name</label>
+                <input style={S.input} value={studentName}
+                  onChange={e => setStudentName(e.target.value)} placeholder="e.g. Rahul Sharma" />
+              </div>
+              <div>
+                <label style={S.label}>Roll Number</label>
+                <input style={S.input} value={rollNo}
+                  onChange={e => setRollNo(e.target.value)} placeholder="e.g. 42" />
+              </div>
+            </div>
+            <div>
+              <label style={S.label}>Parent Email (for report)</label>
+              <input style={S.input} type="email" value={parentEmail}
+                onChange={e => setParentEmail(e.target.value)} placeholder="parent@email.com" />
+            </div>
+          </div>
+
+          {/* Questions inline */}
+          {examData && examData.questions && (
+            <div style={S.card}>
+              <div style={S.sectionTitle}>
+                Answer the Questions ({answeredCount}/{examData.questions.length} answered)
+              </div>
+              {examData.questions.map((q, i) => {
+                const isObj = q.type === 'objective'
+                return (
+                  <div key={q.id} style={{
+                    padding: '16px', marginBottom: '14px', borderRadius: '12px',
+                    background: (answers[q.id] || '').trim() ? '#f0fdf4' : '#f8fafc',
+                    border: `1px solid ${(answers[q.id] || '').trim() ? '#a7f3d0' : '#e2e8f0'}`,
+                    transition: 'all .2s',
+                  }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
+                      <span style={{ fontWeight: '700', color: '#0f172a', fontSize: '14px' }}>
+                        Q{q.id}. {q.question}
+                      </span>
+                      <span style={{ fontSize: '12px', color: '#94a3b8', whiteSpace: 'nowrap', marginLeft: '12px' }}>
+                        [{q.weightage || q.marks || 1} mark{(q.weightage || q.marks || 1) > 1 ? 's' : ''}]
+                      </span>
+                    </div>
+                    {isObj && q.options ? (
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginTop: '6px' }}>
+                        {Object.entries(q.options).sort().map(([key, text]) => (
+                          <button key={key} onClick={() => setAnswer(q.id, key)} style={{
+                            padding: '8px 16px', borderRadius: '8px', cursor: 'pointer',
+                            fontFamily: 'inherit', fontSize: '13px', fontWeight: '500',
+                            border: answers[q.id] === key ? '2px solid #6d28d9' : '1px solid #d1d5db',
+                            background: answers[q.id] === key ? '#eef2ff' : '#fff',
+                            color: answers[q.id] === key ? '#6d28d9' : '#374151',
+                            transition: 'all .15s',
+                          }}>
+                            <strong>{key})</strong> {text}
+                          </button>
+                        ))}
+                      </div>
+                    ) : (
+                      <textarea
+                        rows={3}
+                        style={{ ...S.input, minHeight: '80px', resize: 'vertical' }}
+                        value={answers[q.id] || ''}
+                        onChange={e => setAnswer(q.id, e.target.value)}
+                        placeholder="Type the student's answer here..."
+                      />
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          )}
+
+          {error && <div style={S.alert('error')}>{error}</div>}
+
+          <button
+            style={{ ...S.btn('primary'), width: '100%', padding: '14px' }}
+            onClick={handleSubmit}
+            disabled={loading || !examId || answeredCount === 0}
+          >
+            {loading ? '⏳ Grading…' : `✅ Grade ${answeredCount} Answer${answeredCount !== 1 ? 's' : ''}`}
+          </button>
+        </>
+      )}
+
+      {/* Result */}
+      {result && (
+        <>
+          <div style={S.card}>
+            <div style={{ display: 'flex', justifyContent: 'space-between',
+              alignItems: 'center', marginBottom: '20px' }}>
+              <div>
+                <h3 style={{ margin: '0 0 6px', fontSize: '18px', fontWeight: '700', color: '#0f172a' }}>
+                  📊 Evaluation Report
+                </h3>
+                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                  {result.student_name && (
+                    <span style={{ fontSize: '13px', color: '#64748b' }}>👤 {result.student_name}</span>
+                  )}
+                  {result.roll_no && (
+                    <span style={{ fontSize: '13px', color: '#64748b' }}>· Roll: {result.roll_no}</span>
+                  )}
+                  <ExtractionBadge mode={result.extraction_mode} />
+                </div>
+              </div>
+              <button style={S.btn('ghost')} onClick={handleReset}>← New Evaluation</button>
+              <button
+                style={{ ...S.btn('ghost'), color: '#6d28d9', border: '1.5px solid #c7d2fe', background: '#eef2ff' }}
+                onClick={() => navigateTo('reports')}
+              >📈 All Reports</button>
+            </div>
+
+            <ScoreSummary result={result.result || {}} />
+
+            <div style={{ ...S.card, margin: '16px 0', border: '2px solid #eef2ff', background: '#fcfdff' }}>
+              <div style={{ fontWeight: '700', color: '#4338ca', fontSize: '14px', marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                📧 Send Report to Parent
+              </div>
+              <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+                <input style={{ ...S.input, flex: '1 1 250px' }} type="email" value={parentEmail}
+                  onChange={e => setParentEmail(e.target.value)} placeholder="parent@email.com" />
+                <button
+                  style={{ ...S.btn('primary'), whiteSpace: 'nowrap', flex: '1 1 150px' }}
+                  onClick={handleEmailReport} disabled={emailSending || !parentEmail}
+                >
+                  {emailSending ? '⏳ Sending…' : '🚀 Send Email Report'}
+                </button>
+              </div>
+            </div>
+
+            <div style={S.progressBar()}>
+              <div style={S.progressFill(result.result?.percentage || 0)} />
+            </div>
+
+            {result.evaluation_id && (
+              <div style={{ marginTop: '14px', display: 'flex', alignItems: 'center',
+                gap: '10px', padding: '12px 14px', background: '#f8fafc',
+                borderRadius: '10px', border: '1px solid #e2e8f0' }}>
+                <span style={{ fontSize: '13px', color: '#374151', flex: 1 }}>📄 Detailed report (PDF)</span>
+                <a
+                  href={`${API}/api/evaluations/report/${result.evaluation_id}?token=${token}`}
+                  target="_blank" rel="noopener noreferrer"
+                  style={{ ...S.btn('primary'), textDecoration: 'none', fontSize: '12px', padding: '7px 14px', display: 'inline-flex' }}
+                >Download Report</a>
+              </div>
+            )}
+          </div>
+
+          <div style={S.card}>
+            <QuestionTable
+              questions={examData?.questions || []}
+              questionWise={result.result?.question_wise || []}
+            />
+          </div>
+        </>
       )}
     </div>
   )
@@ -813,8 +1062,14 @@ function SingleEvalTab({ token, showToast }) {
       {/* Form */}
       {!result && !taskId && (
         <>
+          <div style={{ background: '#f0fdf4', border: '1px solid #86efac', borderRadius: '10px',
+            padding: '12px 16px', marginBottom: '14px', fontSize: '13px', color: '#166534' }}>
+            <strong>📋 Upload Scan (Single Student)</strong> — Upload a scanned or photographed answer sheet for
+            one student. Select the exam, optionally enter student details, and get an AI-graded report
+            with a per-question breakdown and optional email delivery to parents.
+          </div>
           <div style={S.card}>
-            <div style={S.sectionTitle}>Exam & Student Details</div>
+            <div style={S.sectionTitle}>Exam &amp; Student Details</div>
             <ExamSelector token={token} value={examId} onChange={setExamId} showToast={showToast} />
             {examData && (
               <>
@@ -848,10 +1103,8 @@ function SingleEvalTab({ token, showToast }) {
           <div style={S.card}>
             <div style={S.sectionTitle}>Upload Answer Sheet</div>
             <div style={{ ...S.alert('info'), marginBottom: '16px' }}>
-              💡 <strong>Upload the filled Answer Sheet PDF</strong> (scanned or photographed).{' '}
-              Use the <em>Answer Sheet PDF</em> template above — it has large bubble circles for MCQ
-              and ruled boxes for written answers, making OCR reliable.{' '}
-              Accepts: scanned PDF, JPG, PNG, WEBP.
+              💡 <strong>Upload the filled Answer Sheet</strong> (scanned or photographed).{' '}
+              Accepts: PDF, JPG, PNG, WEBP. Works with printed answer sheets AND handwritten notebook pages.
             </div>
             <FileDropZone file={file} onChange={setFile} />
           </div>
@@ -1010,16 +1263,39 @@ function MultiStudentTab({ token, showToast }) {
     }
   }
 
+  const downloadCSV = () => {
+    if (!result) return
+    const rows = [['Student Name', 'Roll No', 'Marks Awarded', 'Total Marks', 'Percentage', 'Result']]
+    ;(result.evaluations || []).forEach((ev, i) => {
+      rows.push([
+        ev.student_name || `Student ${i + 1}`,
+        ev.roll_no || '',
+        ev.result?.total_awarded ?? 0,
+        ev.result?.total_possible ?? 0,
+        `${ev.result?.percentage || 0}%`,
+        ev.result?.is_pass ? 'Pass' : 'Fail',
+      ])
+    })
+    const csv = rows.map(r => r.map(v => `"${v}"`).join(',')).join('\n')
+    const blob = new Blob([csv], { type: 'text/csv' })
+    const url  = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url; a.download = `class_results_${new Date().toISOString().slice(0,10)}.csv`
+    a.click(); URL.revokeObjectURL(url)
+  }
+
   return (
     <div>
       {!result && !taskId && (
         <>
+          <div style={{ background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: '10px',
+            padding: '12px 16px', marginBottom: '14px', fontSize: '13px', color: '#1e40af' }}>
+            <strong>👥 Multi-Student PDF</strong> — Upload a single PDF containing answer sheets from
+            multiple students (e.g. a scanned class booklet). The system auto-detects student boundaries
+            by reading page headers and question numbering, then evaluates each student independently.
+          </div>
           <div style={S.card}>
             <div style={S.sectionTitle}>Combined Answer Sheet PDF</div>
-            <div style={{ ...S.alert('info'), marginBottom: '16px' }}>
-              📚 Upload a single PDF containing answer sheets from <strong>multiple students</strong>.
-              The system will automatically detect and separate each student's answers.
-            </div>
             <ExamSelector token={token} value={examId} onChange={setExamId} showToast={showToast} />
             <div style={{ marginTop: '14px' }}>
               <FileDropZone file={file} onChange={setFile} accept=".pdf"
@@ -1037,22 +1313,37 @@ function MultiStudentTab({ token, showToast }) {
       {taskId && !result && (
         <div style={S.card}>
           <AsyncPoller taskId={taskId} token={token}
-            onComplete={d => { setResult(d); setTaskId(null); showToast('Done!', 'success') }}
+            onComplete={d => {
+              if ((d.student_count || 0) === 0) {
+                setError('No student answers could be detected in this PDF. Ensure the PDF contains clearly visible handwritten answer sheets with student names/roll numbers at the top of each section.')
+                setTaskId(null)
+              } else {
+                setResult(d); setTaskId(null); showToast(`${d.student_count} students evaluated`, 'success')
+              }
+            }}
             onError={m => { setError(m); setTaskId(null) }} />
         </div>
       )}
 
       {result && (
         <div style={S.card}>
+          {/* Header */}
           <div style={{ display: 'flex', justifyContent: 'space-between',
-            alignItems: 'center', marginBottom: '20px' }}>
+            alignItems: 'center', marginBottom: '20px', flexWrap: 'wrap', gap: '10px' }}>
             <h3 style={{ margin: 0, fontSize: '18px', fontWeight: '700' }}>
               Class Results — {result.student_count} Students
             </h3>
-            <button style={S.btn('ghost')} onClick={() => { setResult(null); setFile(null) }}>
-              ← New Batch
-            </button>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <button style={{ ...S.btn('ghost'), fontSize: '12px' }} onClick={downloadCSV}>
+                ⬇ Download CSV
+              </button>
+              <button style={S.btn('ghost')} onClick={() => { setResult(null); setFile(null) }}>
+                ← New Batch
+              </button>
+            </div>
           </div>
+
+          {/* Summary stats */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: '12px', marginBottom: '20px' }}>
             {[
               { label: 'Class Average', value: `${result.class_average}%`, color: '#6d28d9' },
@@ -1067,32 +1358,50 @@ function MultiStudentTab({ token, showToast }) {
               </div>
             ))}
           </div>
-          {(result.evaluations || []).map((ev, i) => (
-            <div key={ev.evaluation_id} style={{ padding: '14px 16px', borderRadius: '10px',
-              border: '1px solid #e2e8f0', marginBottom: '8px', background: '#fff',
-              display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <div>
-                <span style={{ fontWeight: '600', color: '#0f172a' }}>
-                  {ev.student_name || `Student ${i+1}`}
+
+          {/* Table header */}
+          <div style={{ display: 'grid', gridTemplateColumns: '2fr 0.8fr 1.2fr 0.8fr 0.8fr',
+            gap: '8px', padding: '8px 12px', background: '#f1f5f9', borderRadius: '8px',
+            marginBottom: '6px', fontSize: '11px', fontWeight: '700', color: '#64748b',
+            textTransform: 'uppercase' }}>
+            <span>Student</span>
+            <span>Roll</span>
+            <span>Marks</span>
+            <span style={{ textAlign: 'right' }}>Score</span>
+            <span style={{ textAlign: 'center' }}>Result</span>
+          </div>
+
+          {/* Student rows */}
+          {(result.evaluations || []).map((ev, i) => {
+            const pass = ev.result?.is_pass
+            const pct  = ev.result?.percentage || 0
+            return (
+              <div key={ev.evaluation_id} style={{ display: 'grid',
+                gridTemplateColumns: '2fr 0.8fr 1.2fr 0.8fr 0.8fr',
+                gap: '8px', padding: '12px', borderRadius: '8px',
+                border: `1px solid ${pass ? '#dcfce7' : '#fee2e2'}`,
+                background: pass ? '#f0fdf4' : '#fff5f5',
+                marginBottom: '6px', alignItems: 'center' }}>
+                <span style={{ fontWeight: '600', color: '#0f172a', fontSize: '14px' }}>
+                  {ev.student_name || `Student ${i + 1}`}
                 </span>
-                {ev.roll_no && (
-                  <span style={{ fontSize: '12px', color: '#94a3b8', marginLeft: '8px' }}>
-                    Roll: {ev.roll_no}
-                  </span>
-                )}
+                <span style={{ color: '#64748b', fontSize: '13px' }}>
+                  {ev.roll_no || '—'}
+                </span>
+                <span style={{ color: '#374151', fontSize: '13px' }}>
+                  {ev.result?.total_awarded ?? '—'} / {ev.result?.total_possible ?? '—'}
+                </span>
+                <span style={{ fontWeight: '800', color: pass ? '#16a34a' : '#dc2626',
+                  textAlign: 'right', fontSize: '15px' }}>
+                  {pct}%
+                </span>
+                <span style={{ textAlign: 'center', fontSize: '12px', fontWeight: '700',
+                  color: pass ? '#16a34a' : '#dc2626' }}>
+                  {pass ? '✓ Pass' : '✗ Fail'}
+                </span>
               </div>
-              <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
-                <span style={{ fontWeight: '700',
-                  color: ev.result?.is_pass ? '#16a34a' : '#dc2626' }}>
-                  {ev.result?.percentage || 0}%
-                </span>
-                <span style={{ fontSize: '12px',
-                  color: ev.result?.is_pass ? '#16a34a' : '#dc2626', fontWeight: '600' }}>
-                  {ev.result?.is_pass ? '✓ Pass' : '✗ Fail'}
-                </span>
-              </div>
-            </div>
-          ))}
+            )
+          })}
         </div>
       )}
     </div>
@@ -1130,10 +1439,37 @@ function BulkEvalTab({ token, showToast }) {
     }
   }
 
+  const downloadCSV = () => {
+    if (!result) return
+    const rows = [['Student Name', 'Roll No', 'Marks Awarded', 'Total Marks', 'Percentage', 'Result']]
+    ;(result.results || []).forEach((r, i) => {
+      rows.push([
+        r.student_name || `Student ${i + 1}`,
+        r.roll_no || '',
+        r.total_awarded ?? 0,
+        r.total_possible ?? 0,
+        `${r.percentage || 0}%`,
+        r.is_pass ? 'Pass' : 'Fail',
+      ])
+    })
+    const csv = rows.map(r => r.map(v => `"${v}"`).join(',')).join('\n')
+    const blob = new Blob([csv], { type: 'text/csv' })
+    const url  = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url; a.download = `bulk_results_${new Date().toISOString().slice(0,10)}.csv`
+    a.click(); URL.revokeObjectURL(url)
+  }
+
   return (
     <div>
       {!result && !taskId && (
         <>
+          <div style={{ background: '#fef9c3', border: '1px solid #fde047', borderRadius: '10px',
+            padding: '12px 16px', marginBottom: '14px', fontSize: '13px', color: '#854d0e' }}>
+            <strong>📁 Bulk Upload (Multi-File)</strong> — Upload separate files for each student
+            at once. Each file should contain one student's answer sheet (PDF, JPG, PNG, WEBP).
+            All files are processed simultaneously and graded together into a class report.
+          </div>
           <div style={S.card}>
             <div style={S.sectionTitle}>Bulk Upload — One File Per Student</div>
             <ExamSelector token={token} value={examId} onChange={setExamId} showToast={showToast} />
@@ -1184,13 +1520,19 @@ function BulkEvalTab({ token, showToast }) {
 
       {result && (
         <div style={S.card}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+            marginBottom: '16px', flexWrap: 'wrap', gap: '10px' }}>
             <h3 style={{ margin: 0, fontSize: '18px', fontWeight: '700' }}>
               Bulk Results — {result.total} evaluated
             </h3>
-            <button style={S.btn('ghost')} onClick={() => { setResult(null); setFiles([]) }}>
-              ← New Batch
-            </button>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <button style={{ ...S.btn('ghost'), fontSize: '12px' }} onClick={downloadCSV}>
+                ⬇ Download CSV
+              </button>
+              <button style={S.btn('ghost')} onClick={() => { setResult(null); setFiles([]) }}>
+                ← New Batch
+              </button>
+            </div>
           </div>
           {(result.failures || []).length > 0 && (
             <div style={{ ...S.alert('warning'), marginBottom: '12px' }}>
@@ -1198,24 +1540,48 @@ function BulkEvalTab({ token, showToast }) {
               {result.failures.map(f => f.file).join(', ')}
             </div>
           )}
-          {(result.results || []).map((r, i) => (
-            <div key={r.evaluation_id || i} style={{ padding: '12px 16px', borderRadius: '10px',
-              border: '1px solid #e2e8f0', marginBottom: '8px', background: '#fff',
-              display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span style={{ fontWeight: '600', color: '#0f172a' }}>
-                Roll: {r.roll_no || `#${i+1}`}
-              </span>
-              <div style={{ display: 'flex', gap: '12px' }}>
-                <span style={{ fontSize: '13px', color: '#64748b' }}>
-                  {r.total_awarded}/{r.total_possible} marks
+
+          {/* Table header */}
+          <div style={{ display: 'grid', gridTemplateColumns: '2fr 0.8fr 1.2fr 0.8fr 0.8fr',
+            gap: '8px', padding: '8px 12px', background: '#f1f5f9', borderRadius: '8px',
+            marginBottom: '6px', fontSize: '11px', fontWeight: '700', color: '#64748b',
+            textTransform: 'uppercase' }}>
+            <span>Student</span>
+            <span>Roll</span>
+            <span>Marks</span>
+            <span style={{ textAlign: 'right' }}>Score</span>
+            <span style={{ textAlign: 'center' }}>Result</span>
+          </div>
+
+          {(result.results || []).map((r, i) => {
+            const pass = r.is_pass
+            return (
+              <div key={r.evaluation_id || i} style={{ display: 'grid',
+                gridTemplateColumns: '2fr 0.8fr 1.2fr 0.8fr 0.8fr',
+                gap: '8px', padding: '12px', borderRadius: '8px',
+                border: `1px solid ${pass ? '#dcfce7' : '#fee2e2'}`,
+                background: pass ? '#f0fdf4' : '#fff5f5',
+                marginBottom: '6px', alignItems: 'center' }}>
+                <span style={{ fontWeight: '600', color: '#0f172a', fontSize: '14px' }}>
+                  {r.student_name || `Student ${i + 1}`}
                 </span>
-                <span style={{ fontWeight: '700',
-                  color: r.is_pass ? '#16a34a' : '#dc2626' }}>
-                  {r.percentage}% {r.is_pass ? '✓' : '✗'}
+                <span style={{ color: '#64748b', fontSize: '13px' }}>
+                  {r.roll_no || '—'}
+                </span>
+                <span style={{ fontSize: '13px', color: '#374151' }}>
+                  {r.total_awarded} / {r.total_possible}
+                </span>
+                <span style={{ fontWeight: '800', textAlign: 'right',
+                  color: pass ? '#16a34a' : '#dc2626', fontSize: '15px' }}>
+                  {r.percentage}%
+                </span>
+                <span style={{ textAlign: 'center', fontSize: '12px', fontWeight: '700',
+                  color: pass ? '#16a34a' : '#dc2626' }}>
+                  {pass ? '✓ Pass' : '✗ Fail'}
                 </span>
               </div>
-            </div>
-          ))}
+            )
+          })}
         </div>
       )}
     </div>
@@ -1225,10 +1591,11 @@ function BulkEvalTab({ token, showToast }) {
 // ── Main EvalPanel ─────────────────────────────────────────────────────────────
 export default function EvalPanel({ showToast }) {
   const { token } = useAuth()
-  const [tab, setTab] = useState('single')
+  const [tab, setTab] = useState('text')
 
   const tabs = [
-    { id: 'single', label: '📋 Single Student' },
+    { id: 'text',   label: '✍️ Type Answers' },
+    { id: 'single', label: '📋 Single Scan' },
     { id: 'multi',  label: '👥 Multi-Student PDF' },
     { id: 'bulk',   label: '📁 Bulk Upload' },
   ]
@@ -1256,6 +1623,7 @@ export default function EvalPanel({ showToast }) {
       </div>
 
       <div style={S.body}>
+        {tab === 'text'   && <TextEvalTab token={token} showToast={showToast} />}
         {tab === 'single' && <SingleEvalTab token={token} showToast={showToast} />}
         {tab === 'multi'  && <MultiStudentTab token={token} showToast={showToast} />}
         {tab === 'bulk'   && <BulkEvalTab token={token} showToast={showToast} />}

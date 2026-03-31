@@ -15,6 +15,7 @@ API base:     http://localhost:5001/api/...
 import os, json, re, uuid, hashlib, random, base64, shutil, smtplib
 import logging
 import time as _time
+import requests as _requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -75,12 +76,16 @@ BULK_DIR  = DB_DIR / "bulk_evaluations"
 for _d in [DATA_F.parent, UPL_DIR, DB_DIR, EXAMS_DIR, EVAL_DIR, BULK_DIR]:
     _d.mkdir(parents=True, exist_ok=True)
 
-ALLOWED = {"pdf","txt","md","mp3","mp4","wav","m4a","jpg","jpeg","png","webp"}
+ALLOWED = {"pdf","txt","md","docx","doc","mp3","mp4","wav","m4a","ogg","jpg","jpeg","png","webp"}
 
 # ── Flask ─────────────────────────────────────────────────────────────────────
 app = Flask(__name__, static_folder="dist", static_url_path="")
 CORS(app, resources={r"/api/*": {"origins": "*"}})
-app.config["MAX_CONTENT_LENGTH"] = 100 * 1024 * 1024
+app.config["MAX_CONTENT_LENGTH"] = 200 * 1024 * 1024  # 200 MB
+
+@app.errorhandler(413)
+def too_large(e):
+    return jsonify({"error": "File too large. Maximum upload size is 200 MB. For audio files, keep under 25 MB for best results."}), 413
 
 # ── Structured logging ────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -105,8 +110,10 @@ try:
         task_serializer="json", result_serializer="json",
         accept_content=["json"], task_track_started=True,
     )
-    # Quick connectivity check
-    celery_app.control.inspect(timeout=1).ping()
+    # Quick connectivity check — verify at least one worker is responding
+    _ping_result = celery_app.control.inspect(timeout=2).ping()
+    if not _ping_result:
+        raise RuntimeError("No Celery workers are active (broker reachable but no workers)")
     CELERY_OK = True
     log.info("Celery/Redis connected ✓ — async evaluation enabled")
 except Exception as _ce:
@@ -203,12 +210,20 @@ M_SESSIONS        = "sessions"
 M_PRACTICE_HIST   = "practice_history"
 
 # ── MongoDB helpers ────────────────────────────────────────────────────────────
+def _stringify_keys(obj):
+    """Recursively convert integer dict keys to strings for MongoDB compatibility."""
+    if isinstance(obj, dict):
+        return {str(k): _stringify_keys(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_stringify_keys(i) for i in obj]
+    return obj
+
 def _mongo_save(col: str, data, key: str = "registry_data"):
     """Upsert a document in a MongoDB collection."""
     if not MONGO_OK:
         return
     try:
-        mongo_db[col].update_one({"_key": key}, {"$set": {"data": data, "_key": key}}, upsert=True)
+        mongo_db[col].update_one({"_key": key}, {"$set": {"data": _stringify_keys(data), "_key": key}}, upsert=True)
     except Exception as e:
         print(f"[MONGO] Save error ({col}/{key}): {e}")
 
@@ -229,7 +244,7 @@ def _mongo_insert(col: str, doc: dict):
         return
     try:
         doc.pop("_id", None)
-        mongo_db[col].insert_one(doc)
+        mongo_db[col].insert_one(_stringify_keys(doc))
     except Exception as e:
         print(f"[MONGO] Insert error ({col}): {e}")
 
@@ -319,6 +334,26 @@ def _boot_load():
     }
     print(f"[BOOT] Registry loaded: {counts}")
 
+    # ── Role migration: school_admin → admin/institute_admin, tutor → teacher ──
+    try:
+        _db = db_load()
+        changed = False
+        for u in _db.get("users", []):
+            if u.get("role") == "school_admin":
+                if u.get("email") == "admin@vidyai.in":
+                    u["role"] = "admin"
+                else:
+                    u["role"] = "institute_admin"
+                changed = True
+            elif u.get("role") == "tutor":
+                u["role"] = "teacher"
+                changed = True
+        if changed:
+            db_save(_db)
+            print("[BOOT] Migrated legacy roles (school_admin/tutor)")
+    except Exception as _me:
+        print(f"[BOOT] Role migration skipped: {_me}")
+
 # ── Utility helpers ────────────────────────────────────────────────────────────
 def _hash(pw: str)  -> str: return hashlib.sha256(pw.encode()).hexdigest()
 def _uid()          -> str: return "u" + uuid.uuid4().hex[:8]
@@ -333,18 +368,77 @@ def _strip_answer_prefix(text: str) -> str:
     return re.sub(r"^(?:ans(?:wer)?|response|student\s*ans(?:wer)?)\s*[:\-]\s*", "", str(text or "").strip(), flags=re.IGNORECASE).strip()
 
 def _coerce_mcq_answer(student_answer: str, options: Dict[str, str]) -> str:
-    s = _normalize(_strip_answer_prefix(student_answer))
-    if not s:
+    """IMPROVED: Properly handles dash-prefixed answers like '- A'"""
+    if not student_answer:
         return ""
-    # Handle common prefixes: "Answer: A", " - A", "B)", "(C)"
-    # Matches: "a", "- a", "(b)", "option c", " - d"
-    m = re.match(r"^(?:option\s*)?[-–—\s\(\[\{]*([a-d])[\s\)\]\}]*$", s, flags=re.IGNORECASE)
-    if m:
-        return m.group(1).upper()
-    for k, v in (options or {}).items():
-        if _normalize(v) == s:
-            return str(k).strip().upper()
-    return student_answer.strip()
+    
+    s = str(student_answer).strip()
+    
+    # Remove answer prefixes
+    s = re.sub(r'^(?:ans(?:wer)?|response|student\s*ans(?:wer)?)\s*[:\-]\s*', '', s, flags=re.IGNORECASE)
+    
+    # Remove all whitespace for matching
+    s_clean = re.sub(r'\s+', '', s)
+    
+    # Handle dash prefix: "-A" or "- A" or "— B"
+    dash_match = re.match(r'^[-–—]\s*([A-D])', s, re.IGNORECASE)
+    if dash_match:
+        return dash_match.group(1).upper()
+    
+    # Single letter with optional brackets: "A", "(B)", "[C]"
+    letter_match = re.match(r'^[\(\{\[]?\s*([A-D])\s*[\)\}\]]?$', s, re.IGNORECASE)
+    if letter_match:
+        return letter_match.group(1).upper()
+    
+    # Word format: "option A", "choice B"
+    word_match = re.search(r'(?:option|choice|answer)\s+([A-D])', s, re.IGNORECASE)
+    if word_match:
+        return word_match.group(1).upper()
+    
+    # Find any A-D letter
+    any_letter = re.search(r'\b([A-D])\b', s, re.IGNORECASE)
+    if any_letter:
+        return any_letter.group(1).upper()
+    
+    # Check against option text
+    if options:
+        for k, v in options.items():
+            if _normalize(v) == _normalize(s):
+                return k.upper()
+    
+    return s
+
+def _clean_subjective_answer(text: str) -> str:
+    """
+    Clean and normalize subjective answer text:
+    - Remove OCR garbage
+    - Combine multiple lines properly
+    - Remove duplicate spaces
+    - Preserve complete answer
+    """
+    if not text:
+        return ""
+    
+    # Replace newlines and multiple spaces with single space
+    cleaned = re.sub(r'[\r\n]+', ' ', text)
+    cleaned = re.sub(r'\s+', ' ', cleaned)
+    
+    # Remove common OCR artifacts
+    cleaned = re.sub(r'[•\*#|→←↑↓]', '', cleaned)
+    
+    # Remove instruction text that might have been captured
+    cleaned = re.sub(r'Write\s+your\s+answer\s+below\s*[:\-]?\s*', '', cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r'Answer\s*[:\-]\s*', '', cleaned, flags=re.IGNORECASE)
+    
+    # Strip leading/trailing punctuation and spaces
+    cleaned = cleaned.strip()
+    
+    # If the answer seems incomplete (very short), it might be an extraction error
+    # Log warning but keep it
+    if len(cleaned) < 5 and cleaned and not cleaned.isdigit():
+        log.warning(f"Potentially incomplete subjective answer: {cleaned}")
+    
+    return cleaned
 
 def _question_valid_answers(q: dict) -> List[str]:
     vals = q.get("valid_answers", [])
@@ -393,9 +487,50 @@ def _objective_is_correct(q: dict, student_answer: str) -> bool:
         valid_norm.add(_normalize(options[student_upper]))
 
     return bool(student_norm and student_norm in valid_norm)
+
 def _dtype(ext: str)-> str:
     return {"pdf":"PDF","txt":"Text","md":"Text","mp3":"Audio","wav":"Audio",
             "m4a":"Audio","mp4":"Video","jpg":"Image","jpeg":"Image","png":"Image"}.get(ext, "File")
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  QUOTA / USAGE-LIMIT SYSTEM — feature names, defaults, helpers, decorator
+# ══════════════════════════════════════════════════════════════════════════════
+QUOTA_FEATURES: dict[str, str] = {
+    "curriculum_load":    "Load Chapters",
+    "curriculum_tool":    "Curriculum Tools (Summarise / Flashcards / etc.)",
+    "summarise":          "Summarise",
+    "flashcards":         "Flashcards",
+    "video_explanation":  "Video Explanation",
+    "practice_generate":  "Practice Questions",
+    "practice_evaluate":  "Practice Evaluation",
+    "chat":               "AI Tutor Chat",
+    "generate_questions": "Generate Questions",
+    "evaluate":           "Evaluate Answers",
+    "uk_curriculum":      "UK Curriculum Tools",
+}
+_UNLIMITED = -1   # sentinel: no daily limit
+_DEFAULT_ROLE_QUOTAS: dict[str, dict[str, int]] = {
+    "student": {
+        "curriculum_load": 10, "curriculum_tool": 10, "summarise": 5,
+        "flashcards": 5, "video_explanation": 3,
+        "practice_generate": 10, "practice_evaluate": 20,
+        "chat": 30, "generate_questions": 0, "evaluate": 0, "uk_curriculum": 5,
+    },
+    "parent": {
+        "curriculum_load": 5, "curriculum_tool": 5, "summarise": 3,
+        "flashcards": 3, "video_explanation": 2,
+        "practice_generate": 5, "practice_evaluate": 10,
+        "chat": 15, "generate_questions": 0, "evaluate": 0, "uk_curriculum": 3,
+    },
+    "teacher": {
+        "curriculum_load": 50, "curriculum_tool": 30, "summarise": 20,
+        "flashcards": 20, "video_explanation": 10,
+        "practice_generate": 50, "practice_evaluate": 100,
+        "chat": 100, "generate_questions": 30, "evaluate": 100, "uk_curriculum": 50,
+    },
+    "institute_admin": {f: _UNLIMITED for f in QUOTA_FEATURES},
+    "admin":           {f: _UNLIMITED for f in QUOTA_FEATURES},
+}
 
 # ── Default database seed ──────────────────────────────────────────────────────
 def _default_db() -> dict:
@@ -407,11 +542,14 @@ def _default_db() -> dict:
             {"id":"u2","name":"Dr. Priya Sharma","email":"teacher@vidyai.in",
              "pw_hash":_hash("password"),"role":"teacher","institution":"Demo School",
              "joined":_now()[:10],"docs":0,"status":"active"},
-            {"id":"u3","name":"Rajesh Kumar","email":"admin@vidyai.in",
-             "pw_hash":_hash("password"),"role":"school_admin","institution":"Demo School",
+            {"id":"u3","name":"Platform Admin","email":"admin@vidyai.in",
+             "pw_hash":_hash("password"),"role":"admin","institution":"",
              "joined":_now()[:10],"docs":0,"status":"active"},
             {"id":"u4","name":"Meena Iyer","email":"parent@vidyai.in",
              "pw_hash":_hash("password"),"role":"parent","institution":"",
+             "joined":_now()[:10],"docs":0,"status":"active"},
+            {"id":"u5","name":"Rajesh Kumar","email":"institute@vidyai.in",
+             "pw_hash":_hash("password"),"role":"institute_admin","institution":"Demo School",
              "joined":_now()[:10],"docs":0,"status":"active"},
         ],
         "documents": [],
@@ -428,7 +566,18 @@ def _default_db() -> dict:
             "show_answer_explanations":True,
             "otp_required_for_signup": True,
             "email_reports_enabled":   True,
-        }
+        },
+        # ── Quota configuration ─────────────────────────────────────────────
+        # role_defaults: {role: {feature: daily_limit}}  (-1 = unlimited, 0 = blocked)
+        # institution_overrides: {inst_name: {user_daily: {feature: int}, inst_daily: {feature: int}}}
+        # user_overrides: {uid: {feature: daily_limit}}
+        "quota_config": {
+            "role_defaults": _DEFAULT_ROLE_QUOTAS,
+            "institution_overrides": {},
+            "user_overrides": {},
+        },
+        # ── Usage counters (date → users/institutions → feature → count) ────
+        "usage_counters": {},
     }
 
 # ── DB load / save with MongoDB primary + JSON fallback ───────────────────────
@@ -472,6 +621,151 @@ def db_log(db: dict, uid: str, action: str, detail: str):
         "action": action, "detail": detail, "ts": _now()
     })
     db["activity"] = db["activity"][:200]
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  QUOTA HELPERS
+# ══════════════════════════════════════════════════════════════════════════════
+def _qc_load() -> dict:
+    """Return the quota_config section from DB, merging any missing role defaults."""
+    db  = db_load()
+    qc  = db.get("quota_config", {})
+    if not qc.get("role_defaults"):
+        qc["role_defaults"] = _DEFAULT_ROLE_QUOTAS
+    if "institution_overrides" not in qc:
+        qc["institution_overrides"] = {}
+    if "user_overrides" not in qc:
+        qc["user_overrides"] = {}
+    return qc
+
+def _qc_save(qc: dict):
+    db = db_load()
+    db["quota_config"] = qc
+    db_save(db)
+
+def _quota_today() -> str:
+    from datetime import date as _date
+    return _date.today().isoformat()
+
+def _get_effective_limit(user: dict, feature: str) -> tuple:
+    """
+    Returns (user_daily_limit, institution_pool_limit).
+    -1 = unlimited. None for pool = no pool limit.
+    Priority: user_override > institution_user_daily > role_default.
+    """
+    uid  = user["id"]
+    role = user.get("role", "student")
+    inst = (user.get("institution") or "").strip()
+    qc   = _qc_load()
+
+    user_daily      = qc.get("user_overrides", {}).get(uid, {}).get(feature)
+    inst_user_daily = None
+    inst_pool       = None
+    if inst:
+        inst_cfg        = qc.get("institution_overrides", {}).get(inst, {})
+        inst_user_daily = inst_cfg.get("user_daily", {}).get(feature)
+        inst_pool       = inst_cfg.get("inst_daily", {}).get(feature)
+
+    role_cfg = (qc.get("role_defaults") or _DEFAULT_ROLE_QUOTAS)
+    role_defaults = role_cfg.get(role, _DEFAULT_ROLE_QUOTAS.get("student", {}))
+    role_default  = role_defaults.get(feature, 0)
+
+    effective_user = (user_daily       if user_daily      is not None else
+                      inst_user_daily  if inst_user_daily is not None else
+                      role_default)
+    return effective_user, inst_pool
+
+def _get_today_usage(uid: str, inst: str) -> dict:
+    """Returns {'user': {feature: count}, 'inst': {feature: count}} for today."""
+    today = _quota_today()
+    db    = db_load()
+    day   = db.get("usage_counters", {}).get(today, {})
+    return {
+        "user": day.get("users", {}).get(uid, {}),
+        "inst": day.get("institutions", {}).get(inst, {}) if inst else {},
+    }
+
+def _increment_usage(uid: str, inst: str, feature: str):
+    """Increment daily usage counters for user (and institution if set)."""
+    from datetime import date as _date, timedelta as _td
+    today  = _quota_today()
+    cutoff = (_date.today() - _td(days=32)).isoformat()
+    db     = db_load()
+    if "usage_counters" not in db:
+        db["usage_counters"] = {}
+    # Prune old days
+    db["usage_counters"] = {k: v for k, v in db["usage_counters"].items() if k >= cutoff}
+    if today not in db["usage_counters"]:
+        db["usage_counters"][today] = {"users": {}, "institutions": {}}
+    day = db["usage_counters"][today]
+    # Ensure user entry exists
+    if uid not in day["users"]:
+        day["users"][uid] = {}
+    day["users"][uid][feature] = day["users"][uid].get(feature, 0) + 1
+    # Same for institution
+    if inst:
+        if inst not in day["institutions"]:
+            day["institutions"][inst] = {}
+        day["institutions"][inst][feature] = day["institutions"][inst].get(feature, 0) + 1
+    db_save(db)
+
+def check_and_use_quota(user: dict, feature: str) -> tuple:
+    """
+    Check quota; increment if allowed.
+    Returns (allowed: bool, message: str, remaining: int).
+    remaining == -1 means unlimited.
+    """
+    uid        = user["id"]
+    inst       = (user.get("institution") or "").strip()
+    u_limit, i_pool = _get_effective_limit(user, feature)
+    counts     = _get_today_usage(uid, inst)
+    u_used     = counts["user"].get(feature, 0)
+    i_used     = counts["inst"].get(feature, 0)
+    feat_label = QUOTA_FEATURES.get(feature, feature)
+
+    if u_limit == 0:
+        return (False,
+                f"'{feat_label}' is not available for your role. "
+                "Contact your administrator.", 0)
+    if u_limit != _UNLIMITED and u_used >= u_limit:
+        return (False,
+                f"Daily limit reached for '{feat_label}' ({u_limit}/day). "
+                "Your quota resets at midnight.", 0)
+    if i_pool is not None and i_pool != _UNLIMITED and i_used >= i_pool:
+        return (False,
+                f"Your institution's daily quota for '{feat_label}' is exhausted "
+                f"({i_pool} uses/day across all users). Try again tomorrow.", 0)
+
+    _increment_usage(uid, inst, feature)
+    remaining = (u_limit - u_used - 1) if u_limit != _UNLIMITED else _UNLIMITED
+    return True, "ok", remaining
+
+def quota(feature: str):
+    """
+    Decorator: enforces per-user and per-institution daily quotas.
+    Must be stacked BELOW @auth() so request.user is available.
+
+    Usage:
+        @app.post("/api/endpoint")
+        @auth()
+        @quota('feature_name')
+        def my_endpoint():
+    """
+    def decorator(fn):
+        @wraps(fn)
+        def wrapper(*args, **kwargs):
+            user = getattr(request, "user", None)
+            if user:
+                allowed, msg, _remaining = check_and_use_quota(user, feature)
+                if not allowed:
+                    return jsonify({
+                        "error":         msg,
+                        "quota_exceeded": True,
+                        "feature":        feature,
+                        "feature_label":  QUOTA_FEATURES.get(feature, feature),
+                    }), 429
+            return fn(*args, **kwargs)
+        return wrapper
+    return decorator
 
 # ── Email helper ───────────────────────────────────────────────────────────────
 def send_email_report(to_email: str, subject: str, results: list) -> bool:
@@ -554,8 +848,95 @@ def _load_vs(did: str):
         return vector_stores.get(did)
     return None
 
+# Tracks OCR background indexing status: did -> 'indexing' | 'ready' | 'failed'
+ocr_status: dict = {}
+
+
+def _run_ocr_background(path: Path, did: str, syl_name: str, fn: str, owner_id: str):
+    """Background thread: OCR scanned PDF pages via Vision API, then build vector store."""
+    import base64, time
+    ocr_status[did] = "indexing"
+    try:
+        import fitz  # PyMuPDF
+    except ImportError:
+        print(f"[OCR] {did}: PyMuPDF not installed")
+        ocr_status[did] = "failed"
+        return
+    client = _oai.OpenAI(api_key=OPENAI_API_KEY)
+    pdf_doc = fitz.open(str(path))
+    total_pages = len(pdf_doc)
+    MAX_OCR_PAGES = 60
+    pages_to_ocr = min(total_pages, MAX_OCR_PAGES)
+    print(f"[OCR] {did}: scanned PDF {total_pages} pages, OCR-ing {pages_to_ocr} pages...")
+    docs = []
+    mat = fitz.Matrix(1.5, 1.5)
+    for i in range(pages_to_ocr):
+        try:
+            page = pdf_doc[i]
+            pix = page.get_pixmap(matrix=mat, colorspace=fitz.csRGB)
+            img_bytes = pix.tobytes("png")
+            b64 = base64.b64encode(img_bytes).decode()
+            for attempt in range(4):
+                try:
+                    resp = client.chat.completions.create(
+                        model="gpt-4o-mini",
+                        messages=[{
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": "Extract all text from this textbook page. Return only the text content."},
+                                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}", "detail": "auto"}}
+                            ]
+                        }],
+                        max_tokens=2000,
+                        timeout=30
+                    )
+                    text = (resp.choices[0].message.content or "").strip()
+                    if text:
+                        docs.append(Document(page_content=text, metadata={"source": str(path), "page": i}))
+                    break
+                except Exception as e:
+                    wait = (attempt + 1) * 3
+                    print(f"[OCR] {did}: page {i} attempt {attempt+1} error: {e}, wait {wait}s")
+                    time.sleep(wait)
+            time.sleep(0.5)  # gentle rate-limit pause between pages
+        except Exception as e:
+            print(f"[OCR] {did}: page {i} render error: {e}")
+    print(f"[OCR] {did}: extracted text from {len(docs)}/{pages_to_ocr} pages")
+    if not docs:
+        ocr_status[did] = "failed"
+        return
+    try:
+        splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=150, separators=["\n\n", "\n", ".", " "])
+        chunks = splitter.split_documents(docs)
+        if not chunks:
+            ocr_status[did] = "failed"
+            return
+        vs = InMemoryVectorStore.from_documents(chunks, _get_emb())
+        vector_stores[did] = vs
+        chapters = _extract_chapters(docs)
+        # Update the registry and db with real chunk count
+        if did in syllabi_registry:
+            syllabi_registry[did]["chunks"] = len(chunks)
+            syllabi_registry[did]["chapters"] = chapters
+            _save_syllabi()
+        db = db_load()
+        for doc in db.get("documents", []):
+            if doc["id"] == did:
+                doc["chunks"] = len(chunks)
+                doc["chapters"] = chapters
+                break
+        db_save(db)
+        ocr_status[did] = "ready"
+        print(f"[OCR] {did}: indexing complete — {len(chunks)} chunks")
+    except Exception as e:
+        print(f"[OCR] {did}: vectorstore error: {e}")
+        import traceback; traceback.print_exc()
+        ocr_status[did] = "failed"
+
+
 def _index_doc(path: Path, did: str, ext: str):
-    """Parse file → chunk → embed → InMemoryVectorStore.  Returns (chunk_count, chapters)."""
+    """Parse file → chunk → embed → InMemoryVectorStore.  Returns (chunk_count, chapters).
+    For scanned PDFs, returns (-1, []) and queues background OCR thread."""
     if not LANGCHAIN_OK or not OPENAI_API_KEY:
         return 0, []
     try:
@@ -563,14 +944,41 @@ def _index_doc(path: Path, did: str, ext: str):
         if ext_l == "pdf":
             import pypdf
             reader = pypdf.PdfReader(str(path))
-            docs = [Document(page_content=p.extract_text(), metadata={"source": str(path), "page": i})
-                    for i, p in enumerate(reader.pages) if p.extract_text()]
+            docs = []
+            for i, page in enumerate(reader.pages):
+                text = page.extract_text() or ""
+                text = text.strip()
+                if text:
+                    docs.append(Document(page_content=text, metadata={"source": str(path), "page": i}))
+            if not docs:
+                # Scanned PDF — start background OCR thread and return immediately
+                print(f"[INDEX] {did}: scanned PDF detected, queuing background OCR...")
+                return -1, []  # signal to caller that OCR is running in background
+            if not docs:
+                return 0, []
+        elif ext_l in {"docx", "doc"}:
+            try:
+                import docx as _docx
+            except ImportError:
+                import subprocess, sys
+                subprocess.check_call([sys.executable, "-m", "pip", "install", "python-docx", "-q"])
+                import docx as _docx
+            document = _docx.Document(str(path))
+            text = "\n\n".join(p.text for p in document.paragraphs if p.text.strip())
+            if not text.strip():
+                return 0, []
+            docs = [Document(page_content=text, metadata={"source": str(path)})]
         elif ext_l in {"txt", "md"}:
-            docs = [Document(page_content=path.read_text(encoding="utf-8"), metadata={"source": str(path)})]
+            text = path.read_text(encoding="utf-8", errors="ignore").strip()
+            if not text:
+                return 0, []
+            docs = [Document(page_content=text, metadata={"source": str(path)})]
         elif ext_l in {"mp3", "mp4", "wav", "m4a", "ogg"}:
             client = _oai.OpenAI(api_key=OPENAI_API_KEY)
             with open(path, "rb") as f:
                 transcript = client.audio.transcriptions.create(model="whisper-1", file=f, response_format="text")
+            if not transcript or not transcript.strip():
+                return 0, []
             docs = [Document(page_content=transcript, metadata={"source": str(path), "type": "transcript"})]
         else:
             return 0, []
@@ -579,12 +987,15 @@ def _index_doc(path: Path, did: str, ext: str):
             chunk_size=1000, chunk_overlap=150, separators=["\n\n", "\n", ".", " "]
         )
         chunks = splitter.split_documents(docs)
+        if not chunks:
+            return 0, []
         vs = InMemoryVectorStore.from_documents(chunks, _get_emb())
         vector_stores[did] = vs
         chapters = _extract_chapters(docs)
         return len(chunks), chapters
     except Exception as e:
         print(f"[INDEX] {did}: {e}")
+        import traceback; traceback.print_exc()
         return 0, []
 
 def _extract_chapters(docs: list) -> list:
@@ -610,10 +1021,15 @@ def _get_chain(syllabus_id: str):
             def __init__(self, sid): self.sid = sid
             def __call__(self, inputs):
                 q    = inputs.get("question", "")
-                name = syllabi_registry.get(self.sid, {}).get("name", "Curriculum")
-                ans  = _llm_text(
-                    f"You are an AI tutor for {name}. Answer helpfully: {q}", mini=True
+                name = syllabi_registry.get(self.sid, {}).get("name", "your curriculum")
+                prompt = (
+                    f"You are Arthavi, a helpful AI tutor. The student has selected: {name}.\n"
+                    f"Answer the following question thoroughly and helpfully. If it is clearly not related to {name}, "
+                    f"start your answer with '⚠️ This topic is not part of your selected syllabus ({name}), but I\\'ll still help:'\n"
+                    f"IMPORTANT: Always give a useful educational answer. Never say there are no materials or refuse.\n\n"
+                    f"Question: {q}\n\nAnswer:"
                 )
+                ans = _llm_text(prompt, mini=True)
                 return {"answer": ans, "source_documents": []}
         return _VirtualChain(syllabus_id)
 
@@ -655,11 +1071,15 @@ def _evaluate_answers(exam: dict, submitted: Dict[int, str], roll_no: str = "") 
                 "feedback": "Correct ✓" if correct else "Incorrect ✗"
             })
         else:
+            # Clean subjective answer before grading
+            student_cleaned = _clean_subjective_answer(student)
+            
             prompt = SUBJECTIVE_GRADING_PROMPT.format(
                 question=q.get("question", ""), max_marks=max_m,
                 valid_answers=json.dumps(q.get("valid_answers", [])),
                 key_points=json.dumps(q.get("answer_key_points", [])),
-                rubric=q.get("evaluation_rubric", ""), student_answer=student
+                rubric=q.get("evaluation_rubric", ""), 
+                student_answer=student_cleaned
             )
             try:
                 grade = _llm_json(prompt, temperature=0)
@@ -668,7 +1088,7 @@ def _evaluate_answers(exam: dict, submitted: Dict[int, str], roll_no: str = "") 
             awarded = max(0.0, min(max_m, float(grade.get("awarded_marks", 0))))
             total_awarded += awarded
             evals.append({
-                "question_id": qid, "type": "subjective", "student_answer": student,
+                "question_id": qid, "type": "subjective", "student_answer": student_cleaned,
                 "valid_answers": q.get("valid_answers", []),
                 "answer_key_points": q.get("answer_key_points", []),
                 "awarded_marks": awarded, "max_marks": max_m,
@@ -712,20 +1132,10 @@ def _preprocess_image_for_ocr(img):
     img = img.filter(ImageFilter.MedianFilter())   # remove scan noise
     return img.convert("RGB")                      # back to RGB for API
 
-
-
 def _build_ocr_prompt_v2(exam_questions: list) -> str:
     """
-    Improved OCR prompt — explicitly addresses the dark Q-number tab confusion.
-
-    Root cause of bubble shift bug:
-    The Q-number tab is solid dark indigo (renders black when scanned).
-    On a full-page scan, GPT-4o sees: [BLACK TAB][A circle][B circle][C circle][D circle]
-    It may count the black tab as a visual element and shift bubble labels by 1,
-    reading B as A, C as B, D as C, etc.
-
-    Fix: explicitly tell GPT the tab is NOT a bubble and to count circles
-    strictly left-to-right AFTER the dark tab.
+    Improved OCR prompt — explicitly addresses the dark Q-number tab confusion
+    and ensures ALL handwritten lines are read.
     """
     obj_qs  = [q for q in exam_questions if q.get("type", "objective") == "objective"]
     subj_qs = [q for q in exam_questions if q.get("type", "objective") != "objective"]
@@ -763,14 +1173,18 @@ def _build_ocr_prompt_v2(exam_questions: list) -> str:
 
         "WRITTEN LAYOUT (questions: " + subj_ids + "):\n"
         "After the dark green Q-number tab, there are horizontal ruled lines.\n"
-        "READ ALL handwritten text on EVERY ruled line in the box.\n"
-        "Join all lines into ONE string separated by spaces — do NOT stop at the first line.\n"
-        "Ignore printed labels ('Write your answer below:', section headings, etc.)\n\n"
+        "⚠️ IMPORTANT: The student's answer often continues across MULTIPLE LINES.\n"
+        "⚠️ Do NOT stop after reading just one line. Read EVERY line in the box.\n"
+        "Read from the first line (just below the 'Write your answer below:' instruction)\n"
+        "to the last line (before the bottom border of the box).\n"
+        "Join ALL lines into ONE string separated by spaces — do NOT stop at the first line.\n"
+        "Ignore printed labels ('Write your answer below:', section headings, etc.)\n"
+        "If the answer spans 10 lines, read ALL 10 lines and combine them.\n\n"
 
         "YOUR TASK:\n"
         "For each question box, identify its Q number from the tab, then extract:\n"
         "  MCQ → single letter ONLY: A, B, C, or D (the scribbled/filled circle)\n"
-        "  Written → ALL handwritten text across all ruled lines, joined as one string\n"
+        "  Written → ALL handwritten text across ALL ruled lines, joined as one string\n"
         "  Blank → omit from JSON\n"
         + question_ref + "\n\n"
 
@@ -837,7 +1251,8 @@ def _build_ocr_prompt(exam_questions: list) -> str:
         "  • The label 'Write your answer below:' appears at the top\n"
         "  • Below it are horizontal ruled lines inside the box\n"
         "  • The student writes their answer on these lines\n"
-        "  • READ ALL LINES — do NOT stop after the first handwritten line.\n"
+        "  ⚠️  READ ALL LINES — do NOT stop after the first handwritten line.\n"
+        "  ⚠️  Students typically write 2-8 sentences across ALL lines.\n"
         "  • Join every handwritten line into ONE string separated by spaces.\n"
         "  • Do NOT include the printed 'Write your answer below:' label.\n\n"
 
@@ -850,12 +1265,20 @@ def _build_ocr_prompt(exam_questions: list) -> str:
         "     — Even heavy scribbling inside a circle = that option is selected\n"
         "  4. For Written: read ALL handwritten text on EVERY ruled line\n\n"
 
+        "⚠️  CRITICAL — EACH QUESTION IS IN ITS OWN SEPARATE BOX ⚠️\n"
+        "The answer sheet has DISTINCT bordered rectangles, one per question.\n"
+        "Q7 has its own box. Q8 has a DIFFERENT box. Q9 has a DIFFERENT box.\n"
+        "Do NOT combine text from Q8's box into Q7's answer or vice versa.\n"
+        "Each box is separated by a visible gap and has its own coloured tab.\n"
+        "Match each answer ONLY to the Q number shown on its tab.\n\n"
+
         "CRITICAL RULES:\n"
         "  • For MCQ: return ONLY a single letter — A, B, C, or D. No dashes, no brackets.\n"
         "  • The printed letter inside an empty/clean circle is NOT an answer\n"
         "  • Only a circle with INK MARKS (fill, scribble, circle) = selected\n"
         "  • If two circles seem marked, choose the one with more ink\n"
         "  • For Written: return ALL handwritten text joined as one string (ignore printed labels)\n"
+        "  • ONLY include text that is inside THAT question's box — do NOT bleed into adjacent boxes\n"
         "  • If a question has no mark, omit it from the JSON\n"
         + question_ref + "\n\n"
 
@@ -863,7 +1286,6 @@ def _build_ocr_prompt(exam_questions: list) -> str:
         '{"answers": {"1": "B", "2": "D", "7": "Divide the numerator by the denominator and write the remainder"}}' + "\n"
         "No markdown, no explanation, no extra keys."
     )
-
 
 def _build_freeform_handwriting_prompt(exam_questions: list) -> str:
     """
@@ -885,18 +1307,64 @@ def _build_freeform_handwriting_prompt(exam_questions: list) -> str:
         "1. Identify each question by its number (e.g., '1', '2', 'Q1', 'Q2').\n"
         "2. Extract the student's handwritten answer for that question.\n"
         "3. MCQ: If the student wrote a letter (A/B/C/D) or circled/underlined one, "
-        "return only that letter.\n"
-        "4. WRITTEN: Extract all handwritten text for that question verbatim.\n"
+        "return ONLY that single letter (A, B, C, or D). Do NOT return dashes or punctuation.\n"
+        "4. WRITTEN (subjective): Extract ALL handwritten text ACROSS ALL LINES for that question.\n"
+        "   - Read line 1, line 2, line 3... ALL lines until the next question number.\n"
+        "   - Join all lines with a single space into ONE continuous string.\n"
+        "   - Do NOT stop at the first line. Do NOT truncate. Capture the FULL answer.\n"
         "5. Treat each question independently.\n\n"
 
-        "═══ CRITICAL RULES ═══\n"
-        "- There are NO colored tabs or bubble circles on this page.\n"
+        "═══ CRITICAL RULES FOR WRITTEN ANSWERS ═══\n"
+        "- A student's written answer often spans 3–10 lines. READ EVERY LINE.\n"
+        "- Start reading from the line immediately after the question number.\n"
+        "- Stop when you see the NEXT question number (e.g., '2.', 'Q2', '2)')\n"
         "- Ignore any scribbles or marks that are not part of an answer.\n"
         "- If a question is not found or has no answer, omit it from the JSON.\n"
+        "- For MCQ: ONLY return a single letter A, B, C, or D — no dashes, no hyphens.\n"
         + question_ref + "\n\n"
 
         "Return ONLY valid JSON:\n"
-        '{"answers": {"1": "C", "2": "A", "7": "The square of the hypotenuse is equal to..."}}\n'
+        '{"answers": {"1": "C", "2": "A", "7": "The square of the hypotenuse is equal to the sum of the squares of the other two sides. This applies only to right-angled triangles and is proved by Pythagoras."}}\n'
+    )
+
+
+def _build_enhanced_ocr_prompt(exam_questions: list) -> str:
+    """Enhanced OCR prompt — color-neutral, structured for scanned handwritten sheets"""
+    q_ref_lines = []
+    for q in sorted(exam_questions, key=lambda x: int(x.get("id", 0))):
+        qid = q.get("id", "?")
+        qtype = q.get("type", "objective")
+        q_text = str(q.get("question", ""))[:120]
+        if qtype == "objective":
+            opts = q.get("options", {})
+            opt_str = "  ".join(f"{k}) {v}" for k, v in opts.items()) if isinstance(opts, dict) else ""
+            q_ref_lines.append(f"  Q{qid} [MCQ]: {q_text}\n    Options: {opt_str}")
+        else:
+            q_ref_lines.append(f"  Q{qid} [Written, max {q.get('weightage', q.get('marks', '?'))} marks]: {q_text}")
+
+    question_ref = "\n".join(q_ref_lines)
+
+    return (
+        "You are an expert at reading HANDWRITTEN student answer sheets.\n"
+        "The image is a scanned page. It may be black-and-white, faded, or slightly skewed.\n\n"
+        "ANSWER SHEET LAYOUT:\n"
+        "- Each question has a label/tab on the left showing the question number.\n"
+        "- MCQ questions: the student marks ONE of four options (A, B, C, D) by filling a circle or writing a letter.\n"
+        "- Written questions: the student writes a free-text answer on ruled lines inside a box.\n\n"
+        "YOUR TASK — extract the student's answer for every question:\n\n"
+        "MCQ rules:\n"
+        "  1. Identify which circle (A/B/C/D) is filled, darkened, or marked.\n"
+        "  2. Return ONLY the single uppercase letter.\n"
+        "  3. The question-number label is NOT an answer — ignore it.\n\n"
+        "Written-answer rules:\n"
+        "  1. Read EVERY handwritten line inside the answer box, top to bottom.\n"
+        "  2. Combine all lines into ONE string separated by spaces.\n"
+        "  3. Do NOT stop after the first line — students often write across many lines.\n"
+        "  4. Preserve the student's actual words even if grammar/spelling is imperfect.\n"
+        "  5. If the box is blank or unreadable, return an empty string.\n\n"
+        "Return ONLY valid JSON — no commentary, no markdown:\n"
+        '{"answers": {"1": "B", "2": "the student wrote this across multiple lines..."}}\n\n'
+        f"QUESTIONS ON THIS SHEET:\n{question_ref}\n"
     )
 
 
@@ -949,13 +1417,14 @@ def _validate_ocr_answers(raw_answers: dict, exam_questions: list) -> Dict[int, 
             continue
 
         # ── MCQ: extract letter from value regardless of surrounding text ──────
-        # Fix 5: Previously dropped valid answers if val was longer than 5 chars.
-        # Now: search for A/B/C/D anywhere in the value (handles "The answer is A",
-        # "(A)", "option A", "A — 3.14", etc.)
         if qid in MCQ_IDS:
             # Pre-check: reject obvious section-header / noise strings first
             if NOISE_PATTERNS.search(val):
                 log.debug(f"[OCR-VALIDATE] Q{qid} MCQ noise rejected: {val[:40]}")
+                continue
+            # Reject standalone dashes or punctuation (no actual letter)
+            if re.match(r'^[\-\u2013\u2014\s\.\/\|]+$', val):
+                log.debug(f"[OCR-VALIDATE] Q{qid} MCQ dash-only rejected: {val[:40]}")
                 continue
             # Primary: look for standalone letter
             m = re.search(r"\b([A-D])\b", val, re.IGNORECASE)
@@ -1010,12 +1479,9 @@ def _validate_ocr_answers(raw_answers: dict, exam_questions: list) -> Dict[int, 
 
     return result
 
-
-
 # ══════════════════════════════════════════════════════════════════════════════
 #  SCANNED ANSWER SHEET: IMAGE-DIFF HANDWRITING EXTRACTION
 # ══════════════════════════════════════════════════════════════════════════════
-
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  PDF TEMPLATE GENERATORS — Answer Sheet, Question Paper, Answer Key
@@ -1036,7 +1502,6 @@ def _pdf_wrap(text, c_per_line=88):
         lines.append(cur)
     return lines or [""]
 
-
 def _pdf_section_bar(c, x, y, w, h, fill_hex, text, text_hex, font_size=9, mm=None):
     """Draw a coloured section header bar with text."""
     from reportlab.lib import colors as _c
@@ -1045,7 +1510,6 @@ def _pdf_section_bar(c, x, y, w, h, fill_hex, text, text_hex, font_size=9, mm=No
     c.setFillColor(_c.HexColor(text_hex))
     c.setFont("Helvetica-Bold", font_size)
     c.drawString(x + 4*mm, y - h*0.62, text)
-
 
 def _draw_answer_sheet_page_header(c, exam, page_num, W, H, mm, colors):
     """
@@ -1142,7 +1606,6 @@ def _draw_answer_sheet_page_header(c, exam, page_num, W, H, mm, colors):
         c.circle(rx, ry, 2.5, fill=1)
 
     return AFTER_HEADER
-
 
 def _generate_answer_sheet_pdf(exam: dict) -> bytes:
     """
@@ -1344,7 +1807,6 @@ def _generate_answer_sheet_pdf(exam: dict) -> bytes:
     except Exception as e:
         log.error(f"[ANSWER-SHEET] Generation failed: {e}", exc_info=True)
         return b""
-
 
 def _generate_question_paper_pdf(exam: dict) -> bytes:
     """
@@ -1601,7 +2063,6 @@ def _generate_question_paper_pdf(exam: dict) -> bytes:
     except Exception as e:
         log.error(f"[QUESTION-PAPER] Generation failed: {e}", exc_info=True)
         return b""
-
 
 def _generate_answer_key_pdf(exam: dict) -> bytes:
     """
@@ -1881,13 +2342,11 @@ def _generate_answer_key_pdf(exam: dict) -> bytes:
         log.error(f"[ANSWER-KEY] Generation failed: {e}", exc_info=True)
         return b""
 
-
 # Keep _generate_blank_answer_sheet_pdf as an alias so _diff_and_ocr_answers
 # generates a blank that MATCHES the new structured answer sheet layout exactly.
 def _generate_blank_answer_sheet_pdf(exam: dict) -> bytes:
     """Alias — generates the same structured answer sheet (blank, no handwriting)."""
     return _generate_answer_sheet_pdf(exam)
-
 
 def _diff_and_ocr_answers(scanned_pdf_path: str, exam: dict) -> Dict[int, str]:
     """
@@ -1918,12 +2377,18 @@ def _diff_and_ocr_answers(scanned_pdf_path: str, exam: dict) -> Dict[int, str]:
 
     # ── Step 2: convert both PDFs to images ──────────────────────────────────
     try:
-        from pdf2image import convert_from_path, convert_from_bytes
         DPI = 200
-        blank_pages  = convert_from_bytes(blank_pdf_bytes, dpi=DPI)
-        scanned_pages = convert_from_path(scanned_pdf_path, dpi=DPI)
+        import fitz as _fitz
+        # Blank PDF from bytes
+        _bdoc = _fitz.open(stream=blank_pdf_bytes, filetype="pdf")
+        blank_pages = [Image.frombytes("RGB", [p.get_pixmap(dpi=DPI).width, p.get_pixmap(dpi=DPI).height], p.get_pixmap(dpi=DPI).samples) for p in _bdoc]
+        _bdoc.close()
+        # Scanned PDF from path
+        _sdoc = _fitz.open(scanned_pdf_path)
+        scanned_pages = [Image.frombytes("RGB", [p.get_pixmap(dpi=DPI).width, p.get_pixmap(dpi=DPI).height], p.get_pixmap(dpi=DPI).samples) for p in _sdoc]
+        _sdoc.close()
     except Exception as e:
-        print(f"[DIFF-OCR] pdf2image failed: {e}")
+        print(f"[DIFF-OCR] PDF→image failed: {e}")
         return {}
 
     log.info(f"[DIFF-OCR] Processing {len(blank_pages)} page(s) in parallel")
@@ -1933,8 +2398,6 @@ def _diff_and_ocr_answers(scanned_pdf_path: str, exam: dict) -> Dict[int, str]:
         exam=exam,
         blank_pages=blank_pages,
     )
-
-
 
 # ── File-hash cache helper ────────────────────────────────────────────────────
 def _file_hash(path: str) -> str:
@@ -1975,7 +2438,6 @@ def _cache_set(file_hash: str, exam_id: str, payload: dict):
         )
     except Exception as e:
         log.warning(f"[CACHE] set error: {e}")
-
 
 def _ocr_page_parallel(images: list, exam_questions: list, exam: dict,
                         blank_pages: list = None) -> Dict[int, str]:
@@ -2056,32 +2518,32 @@ def _ocr_page_parallel(images: list, exam_questions: list, exam: dict,
             page_subj_ids = ", ".join(str(q["id"]) for q in page_qs
                                       if q.get("type","objective") != "objective") or "none"
 
-            full_page_prompt = (
-                "You are reading a SCANNED STUDENT ANSWER SHEET.\n\n"
-                "LAYOUT: Each question has a bordered box with a DARK TAB on the left "
-                "showing the question number (Q1, Q2 etc).\n"
-                "IMPORTANT: The dark tab on the left is NOT a bubble — IGNORE it when "
-                "identifying the answer.\n\n"
-                "MCQ boxes contain 4 circles labelled A B C D reading left to right "
-                "AFTER the dark tab. The student SCRIBBLED/FILLED one circle.\n"
-                "The FILLED/DARKEST/MOST-INKED circle = the answer.\n"
-                "Count circles left-to-right AFTER the tab: 1st=A, 2nd=B, 3rd=C, 4th=D.\n\n"
-                f"MCQ questions on this page: {page_obj_ids}\n"
-                f"Written questions on this page: {page_subj_ids}\n\n"
-                "For each question return the answer:\n"
-                "  Written: READ EVERY SINGLE HANDWRITTEN LINE in the answer box. "
-                "Join ALL lines into ONE string separated by spaces. "
-                "⚠️ EXTREMELY IMPORTANT: Do NOT stop after the first line. "
-                "Extract ALL handwritten text across all ruled lines.\n"
-                "  Blank: omit from JSON\n\n"
-                "CRITICAL for MCQ: return ONLY the letter e.g. \"B\" — never \"- B\" or \"B)\"\n"
-                "Return ONLY valid JSON: "
-                + '{"answers": {"1":"B","2":"D","7":"student wrote full answer across all lines"}}' 
-            )
+            full_page_prompt = """
+            You are reading a SCANNED STUDENT ANSWER SHEET.
+
+            LAYOUT: Each question has a bordered box with a DARK TAB on the left showing Q number.
+
+            MCQ QUESTIONS:
+            - After the dark tab, there are 4 circles labelled A, B, C, D
+            - Student fills one circle
+            - Return ONLY the letter (A, B, C, or D) - no dashes, no brackets
+
+            WRITTEN/SUBJECTIVE QUESTIONS:
+            - After the dark tab, there is a box with multiple ruled lines
+            - ⚠️ IMPORTANT: Students write across MULTIPLE LINES
+            - You MUST read EVERY line from top to bottom
+            - Do NOT stop after the first line
+            - Join ALL lines into ONE string with spaces
+            - If the answer spans 10 lines, read ALL 10 lines
+            - Ignore printed labels like "Write your answer below:"
+
+            Return ONLY valid JSON with answers in format:
+            {"answers": {"1": "B", "2": "Complete answer with all lines..."}}
+            """
 
             _openai_limiter.wait()
             resp = client.chat.completions.create(
-                model=OPENAI_MODEL, temperature=0, max_tokens=3000,
+                model=OPENAI_MODEL, temperature=0, max_tokens=4096,
                 response_format={"type": "json_object"},
                 messages=[{"role": "user", "content": [
                     {"type": "text", "text": full_page_prompt},
@@ -2133,20 +2595,38 @@ def _ocr_page_parallel(images: list, exam_questions: list, exam: dict,
                     crop.save(cbuf, format="PNG", optimize=False)
                     cb64 = base64.b64encode(cbuf.getvalue()).decode()
 
+                    # Build option text reference for this question
+                    q_options = q.get("options", {})
+                    option_lines = ""
+                    if q_options:
+                        option_lines = (
+                            "\nThe answer circles contain these option texts:\n"
+                            + "\n".join(
+                                f"  {k}: {v}" for k, v in sorted(q_options.items())
+                            )
+                            + "\n"
+                        )
+
                     crop_prompt = (
                         f"This image shows ONLY question Q{qid} from a student answer sheet.\n\n"
-                        "On the LEFT is a DARK COLOURED TAB — this is just the question label. "
+                        "On the LEFT is a DARK COLOURED TAB — this is just the question number label. "
                         "DO NOT count this as a bubble or an answer option.\n\n"
-                        "To the RIGHT of the dark tab are EXACTLY FOUR circles in a row:\n"
-                        "  1st circle (leftmost after tab) = option A\n"
-                        "  2nd circle = option B\n"
-                        "  3rd circle = option C\n"
-                        "  4th circle (rightmost) = option D\n\n"
-                        "The student FILLED or SCRIBBLED INSIDE exactly one circle.\n"
-                        "Look for the circle with the most pen ink / darkest fill.\n"
-                        "That circle's label (A, B, C, or D) is the student's answer.\n\n"
+                        "To the RIGHT of the dark tab are EXACTLY FOUR large circles in a row:\n"
+                        "  1st circle (leftmost after tab) has letter 'A' inside = option A\n"
+                        "  2nd circle has letter 'B' inside = option B\n"
+                        "  3rd circle has letter 'C' inside = option C\n"
+                        "  4th circle (rightmost) has letter 'D' inside = option D\n"
+                        + option_lines + "\n"
+                        "The student FILLED or SCRIBBLED INSIDE exactly one circle to mark their answer.\n"
+                        "Look for the circle with the most pen ink / darkest fill / scribble marks.\n"
+                        "That circle's LETTER (A, B, C, or D) is the student's answer.\n\n"
+                        "IMPORTANT — avoid off-by-one errors:\n"
+                        "  - Count circles STRICTLY left to right STARTING from immediately after the dark tab\n"
+                        "  - The 1st circle you encounter (leftmost) = A\n"
+                        "  - The dark tab on the left edge is NOT a circle — skip it entirely\n"
+                        "  - Each circle has its letter printed inside; verify your count matches the letter\n\n"
                         "An empty clean circle = NOT selected.\n"
-                        "A circle with scribble marks = SELECTED.\n\n"
+                        "A circle with scribble marks or thick fill = SELECTED.\n\n"
                         "Return ONLY valid JSON: {\"answer\": \"B\"}\n"
                         "If no circle is filled, return: {\"answer\": \"\"}"
                     )
@@ -2165,7 +2645,7 @@ def _ocr_page_parallel(images: list, exam_questions: list, exam: dict,
                         )
                         crop_raw = json.loads(crop_resp.choices[0].message.content)
                         val = str(crop_raw.get("answer", "")).strip().upper()
-                        m   = re.search(r"([A-D])", val)
+                        m   = re.search(r"([A-D])", val)
                         if m:
                             verified[qid] = m.group(1)
                             log.info(f"[CROP-OCR] Q{qid} crop answer: {m.group(1)}")
@@ -2178,6 +2658,99 @@ def _ocr_page_parallel(images: list, exam_questions: list, exam: dict,
                 if verified:
                     page_answers.update(verified)
                     log.info(f"[CROP-OCR] page {page_idx+1} verified MCQ: {verified}")
+
+            # ── Step 4: Per-question crop for Subjective questions ──────────────
+            # This ensures all handwritten lines are extracted regardless of
+            # whether the full-page pass captured them correctly.
+            subj_qs_on_page = [q for q in page_qs if q.get("type", "objective") != "objective"]
+            if subj_qs_on_page:
+                # Subjective layout geometry after the Section B header.
+                # MCQs occupy: header + n_obj * 31mm  (approx)
+                # Section B bar: 10mm
+                # Subjective box: variable, ~10mm + n_lines*9mm
+                # We estimate n_lines based on marks (~1.8 lines per mark, min 5, max 14)
+                n_obj = len([q for q in exam_questions if q.get("type","objective") == "objective"])
+                # Approximate Y position of section B start
+                HEADER_FRAC   = (55 / 297) if page_idx == 0 else (25 / 297)
+                MCQ_TAKEN_MM  = 10 + n_obj * 31  # header bar + slots
+                SECTION_B_MM  = MCQ_TAKEN_MM + 10  # section B bar
+                LINE_H_MM     = 9
+
+                subj_y_mm = SECTION_B_MM + 10   # after section B bar
+                for q in subj_qs_on_page:
+                    qid     = int(q.get("id", 0))
+                    marks   = float(q.get("marks", q.get("weightage", 1)))
+                    n_lines = min(14, max(5, int(marks * 1.8)))
+                    box_h_mm = 10 + n_lines * LINE_H_MM + 4
+
+                    # Convert mm positions to pixel fractions
+                    y_top_mm = subj_y_mm
+                    y_bot_mm = subj_y_mm + box_h_mm
+                    subj_y_mm += box_h_mm + 5  # gap between boxes
+
+                    y_top = int(H_px * (y_top_mm / 297) - 10)  # small padding
+                    y_bot = int(H_px * (y_bot_mm / 297) + 10)
+                    y_top = max(0, min(y_top, H_px - 10))
+                    y_bot = max(y_top + 20, min(y_bot, H_px))
+
+                    # Only crop if this question doesn't already have a full answer
+                    existing = page_answers.get(qid, "")
+                    if existing and len(existing) > 30:
+                        log.info(f"[SUBJ-CROP] Q{qid} already has answer ({len(existing)} chars), skipping")
+                        continue
+
+                    crop = img.crop((0, y_top, W_px, y_bot))
+                    from PIL import ImageEnhance as _IE2
+                    crop = _IE2.Contrast(crop).enhance(1.4)
+                    sbuf = _io.BytesIO()
+                    crop.save(sbuf, format="PNG", optimize=False)
+                    sb64 = base64.b64encode(sbuf.getvalue()).decode()
+
+                    subj_crop_prompt = f"""
+                    This image shows ONLY question Q{qid} (a written/subjective question) from a student answer sheet.
+
+                    LAYOUT:
+                    - LEFT side: DARK GREEN TAB with question number
+                    - RIGHT side: Box with multiple ruled lines for the answer
+
+                    CRITICAL: The student's answer often spans MULTIPLE LINES (3-10 lines).
+                    You MUST read EVERY handwritten line from top to bottom.
+
+                    INSTRUCTIONS:
+                    1. Start from the first line below the printed instruction
+                    2. Read line 1, line 2, line 3... until the bottom of the box
+                    3. Join ALL lines into ONE string with spaces
+                    4. Preserve the COMPLETE answer - do NOT truncate
+                    5. Do NOT stop after reading just one line
+                    6. Ignore printed text like "Write your answer below:"
+
+                    Return ONLY valid JSON:
+                    {{"answer": "the complete student answer with all lines combined"}}
+
+                    If the box has no writing, return: {{"answer": ""}}
+                    """
+                    try:
+                        _openai_limiter.wait()
+                        subj_resp = client.chat.completions.create(
+                            model=OPENAI_MODEL, temperature=0, max_tokens=1000,
+                            response_format={"type": "json_object"},
+                            messages=[{"role": "user", "content": [
+                                {"type": "text", "text": subj_crop_prompt},
+                                {"type": "image_url", "image_url": {
+                                    "url": f"data:image/png;base64,{sb64}",
+                                    "detail": "high"
+                                }},
+                            ]}]
+                        )
+                        subj_raw = json.loads(subj_resp.choices[0].message.content)
+                        subj_val = str(subj_raw.get("answer", "")).strip()
+                        if subj_val and len(subj_val) > 3:
+                            page_answers[qid] = subj_val
+                            log.info(f"[SUBJ-CROP] Q{qid} → '{subj_val[:80]}'")
+                        else:
+                            log.info(f"[SUBJ-CROP] Q{qid} empty or too short: {subj_val!r}")
+                    except Exception as se:
+                        log.warning(f"[SUBJ-CROP] Q{qid} failed: {se}")
 
             log.info(f"[PAGE-OCR] page {page_idx+1} final: {page_answers}")
             return page_answers
@@ -2197,268 +2770,205 @@ def _ocr_page_parallel(images: list, exam_questions: list, exam: dict,
 
     return combined
 
-
 def _extract_answers(path: str, exam_questions: list = None, exam: dict = None):
-    """Extract student answers from an answer sheet file."""
+    """
+    Extract student answers from a scanned answer sheet (PDF or image).
+    Uses GPT-4o Vision with majority voting (3 reads) for MCQ reliability.
+    """
+    import io as _io
+    from collections import Counter
+    from PIL import Image, ImageEnhance
+
     exam_questions = exam_questions or []
     ext = Path(path).suffix.lower()
 
+    # ── Text files: regex parse ───────────────────────────────────────────────
     if ext in {".txt", ".md"}:
         return _parse_answer_text(Path(path).read_text(encoding="utf-8", errors="ignore")), "parsed_text"
 
+    # ── Convert PDF / image to PIL images ─────────────────────────────────────
+    images = []
     if ext == ".pdf":
-        # ── Detect whether this is a typed digital submission or a
-        #    printed+handwritten scan. Key signal: if the extracted text
-        #    contains blank "Answer: ___" lines, it's the printed question paper
-        #    with no typed answers — skip text extraction and go straight to vision.
-        raw_text = ""
         try:
-            from langchain_community.document_loaders import PyPDFLoader
-            pages = PyPDFLoader(path).load()
-            raw_text = "\n".join(p.page_content for p in pages if p.page_content)
-        except ImportError:
-            try:
-                import pypdf as _pypdf2
-                _r2 = _pypdf2.PdfReader(path)
-                raw_text = "\n".join((p.extract_text() or "") for p in _r2.pages)
-            except Exception:
-                pass
-        except Exception:
-            pass
-
-        IS_BLANK_PAPER = bool(raw_text and re.search(
-            r"Answer\s*:\s*_{3,}", raw_text, re.IGNORECASE
-        ))
-
-        # ── Detect scanned VidyAI answer sheet (has embedded scanner OCR) ──────
-        # When a scanned PDF goes through scanner software, the scanner embeds a
-        # garbled OCR text layer. This text contains our printed header markers
-        # ("ANSWER SHEET", "SECTION A — OBJECTIVE", "Mark ONE correct answer:")
-        # even though those are printed text, not student answers.
-        # We must detect this case and go straight to vision OCR — never Path A.
-        IS_SCANNED_ANSWER_SHEET = bool(raw_text and (
-            # Our answer sheet header is always present
-            re.search(r"ANSWER\s+SHEET", raw_text, re.IGNORECASE) or
-            # Our section markers
-            (re.search(r"SECTION\s+[AB]\s*[—–-]\s*(OBJECTIVE|SUBJECTIVE)", raw_text, re.IGNORECASE)
-             and re.search(r"Exam\s+ID", raw_text, re.IGNORECASE)) or
-            # Bubble instruction text
-            re.search(r"Mark\s+ONE\s+correct\s+answer", raw_text, re.IGNORECASE) or
-            re.search(r"Write\s+your\s+answer\s+below", raw_text, re.IGNORECASE)
-        ))
-
-        # ── Detect plain handwritten scan (no text layer, no VidyAI markers) ──
-        # If the PDF has near-zero text but contains pages, it's an image scan.
-        IS_LIKELY_SCANNED_IMAGE = bool(
-            not IS_BLANK_PAPER and
-            not IS_SCANNED_ANSWER_SHEET and
-            (not raw_text.strip() or len(raw_text.strip()) < 50)
-        )
-
-        # ── Exam ID mismatch detection ────────────────────────────────────────
-        # The answer sheet prints "Exam ID: XXXXXXXX" in the header.
-        # If the scanned sheet's Exam ID doesn't match the selected exam,
-        # return an informative error instead of silently producing wrong results.
-        if exam and raw_text:
-            id_match = re.search(r"Exam\s+ID[:\s]+([a-f0-9]{8,12})", raw_text, re.IGNORECASE)
-            if id_match:
-                sheet_exam_id = id_match.group(1).lower().strip()
-                selected_id   = str(exam.get("exam_id", "")).lower().strip()
-                if sheet_exam_id and selected_id and sheet_exam_id != selected_id:
-                    log.warning(
-                        f"[EXAM-ID-MISMATCH] Sheet has Exam ID '{sheet_exam_id}' "
-                        f"but selected exam is '{selected_id}'"
-                    )
-                    return {}, f"exam_id_mismatch:{sheet_exam_id}:{selected_id}"
-
-        # ── Path A: Typed/digital answer submission ───────────────────────────
-        # Skip entirely if this is a scanned answer sheet — the text layer is
-        # garbled scanner OCR of our printed headers, not student answers.
-        if raw_text.strip() and not IS_BLANK_PAPER and not IS_SCANNED_ANSWER_SHEET:
-            ans = _parse_answer_text(raw_text)
-            if ans:
-                return ans, "parsed_pdf"
-            # Regex missed — let GPT parse the raw text
-            try:
-                client = _oai.OpenAI(api_key=OPENAI_API_KEY)
-                gpt_resp = client.chat.completions.create(
-                    model=OPENAI_MINI, temperature=0,
-                    response_format={"type": "json_object"},
-                    messages=[{"role": "user", "content": (
-                        _build_ocr_prompt(exam_questions) +
-                        "\n\nRaw text from the PDF (contains both question text and "
-                        "student answers — extract ONLY the student answers):\n\n" +
-                        raw_text[:5000]
-                    )}]
-                )
-                raw_gpt = json.loads(gpt_resp.choices[0].message.content)
-                gpt_ans = {int(k): str(v).strip() for k, v in raw_gpt.get("answers", {}).items()
-                           if str(k).isdigit() and str(v).strip()}
-                if gpt_ans:
-                    return gpt_ans, "gpt_text_parse"
-            except Exception as _gpt_txt_err:
-                print(f"[PDF-TEXT-GPT] {_gpt_txt_err}")
-
-        # ── Path B1: Scanned VidyAI Answer Sheet ──────────────────────────────
-        # Use image-diff against the template to isolate ink.
-        if (IS_BLANK_PAPER or IS_SCANNED_ANSWER_SHEET) and exam_questions:
-            log.info(f"[PDF-OCR] Structured VidyAI sheet detected — using image-diff")
-            try:
-                _exam_for_diff = exam if exam else {
-                    "questions":   exam_questions,
-                    "school_name": "", "subject": "", "class": "",
-                    "board": "", "exam_date": "",
-                    "total_marks": sum(float(q.get("marks", q.get("weightage", 1)))
-                                       for q in exam_questions),
-                }
-                diff_answers = _diff_and_ocr_answers(path, _exam_for_diff)
-                if diff_answers:
-                    return diff_answers, "image_diff_ocr"
-            except Exception as _diff_err:
-                log.warning(f"[PDF-OCR] Image-diff failed: {_diff_err}")
-
-        # ── Path B2: Plain Handwritten Notebook Scan ─────────────────────────
-        # Use freeform prompt without diff (no template to subtract).
-        if IS_LIKELY_SCANNED_IMAGE and exam_questions:
-            log.info(f"[PDF-OCR] Plain handwritten scan detected — using freeform OCR")
+            import fitz as _fitz
+            doc = _fitz.open(path)
+            for page in doc:
+                pix = page.get_pixmap(dpi=400)
+                images.append(Image.frombytes("RGB", [pix.width, pix.height], pix.samples))
+            doc.close()
+            log.info(f"[OCR] PDF → {len(images)} page images at 400 DPI")
+        except Exception as e:
+            log.warning(f"[OCR] PyMuPDF failed, trying pdf2image: {e}")
             try:
                 from pdf2image import convert_from_path
-                images = convert_from_path(path, dpi=200)
-                # Use _ocr_page_parallel but with freeform prompt
-                # Note: we can't easily pass a custom prompt to _ocr_page_parallel
-                # without modifying it, but Path C handles this well too.
-                # For now, let's fall through to Path C which is whole-page vision.
-                pass
-            except Exception:
-                # poppler missing — try sending page 1 directly to Vision
-                log.info("[PDF-OCR] Poppler missing — falling back to Vision direct")
-                prompt = _build_freeform_handwriting_prompt(exam_questions)
-                return _vision_extract(path, prompt), "vision_ocr_freeform"
-
-        # ── Path C: GPT-4o whole-page vision with preprocessing ──────────────
-        # Fallback when diff fails (e.g. alignment issues, very light handwriting)
+                images = convert_from_path(path, dpi=400)
+                log.info(f"[OCR] pdf2image → {len(images)} pages")
+            except Exception as e2:
+                log.error(f"[OCR] All PDF converters failed: {e2}")
+                return {}, f"pdf_conversion_failed: {str(e2)[:100]}"
+    elif ext in {".png", ".jpg", ".jpeg", ".webp"}:
         try:
-            from pdf2image import convert_from_path
-            import io as _io
-            images = convert_from_path(path, dpi=250)
-            combined: Dict[int, str] = {}
-            client = _oai.OpenAI(api_key=OPENAI_API_KEY)
+            images = [Image.open(path).convert("RGB")]
+        except Exception as e:
+            return {}, f"image_load_failed: {str(e)[:100]}"
+    else:
+        return {}, "unsupported_type"
 
-            # Use appropriate prompt based on sheet type
-            if IS_LIKELY_SCANNED_IMAGE:
-                prompt = _build_freeform_handwriting_prompt(exam_questions)
+    if not images:
+        return {}, "no_images"
+
+    # ── Preprocess & encode each page ─────────────────────────────────────────
+    encoded_images = []
+    for img in images:
+        if img.mode != "RGB":
+            img = img.convert("RGB")
+        if img.width < 2000:
+            scale = 2000 / img.width
+            img = img.resize((2000, int(img.height * scale)), Image.LANCZOS)
+        img = ImageEnhance.Sharpness(img).enhance(2.0)
+        img = ImageEnhance.Contrast(img).enhance(1.5)
+        buf = _io.BytesIO()
+        img.save(buf, format="PNG")
+        encoded_images.append(base64.b64encode(buf.getvalue()).decode())
+
+    # ── Build question reference for prompt ───────────────────────────────────
+    mcq_ids = set()
+    q_lines = []
+    for q in sorted(exam_questions, key=lambda x: int(x.get("id", 0))):
+        qid = q.get("id")
+        qtype = q.get("type", "objective")
+        qtext = str(q.get("question", ""))[:120]
+        if qtype == "objective":
+            mcq_ids.add(int(qid))
+            opts = q.get("options", {})
+            opt_str = " | ".join(f"{k}) {v}" for k, v in sorted(opts.items())) if isinstance(opts, dict) else ""
+            q_lines.append(f"  Q{qid} [MCQ]: {qtext}\n    Options: {opt_str}")
+        else:
+            q_lines.append(f"  Q{qid} [Written, {q.get('weightage', q.get('marks', '?'))} marks]: {qtext}")
+
+    q_block = "\n".join(q_lines)
+
+    # ── Build image content (reused across calls) ─────────────────────────────
+    img_content = []
+    for i, b64 in enumerate(encoded_images):
+        if len(encoded_images) > 1:
+            img_content.append({"type": "text", "text": f"--- Page {i+1} of {len(encoded_images)} ---"})
+        img_content.append({
+            "type": "image_url",
+            "image_url": {"url": f"data:image/png;base64,{b64}", "detail": "high"}
+        })
+
+    # ── Helper: one Vision call ───────────────────────────────────────────────
+    def _call_vision(prompt_text: str) -> dict:
+        content = [{"type": "text", "text": prompt_text}] + img_content
+        client = _oai.OpenAI(api_key=OPENAI_API_KEY)
+        _openai_limiter.wait()
+        resp = client.chat.completions.create(
+            model=OPENAI_MODEL, temperature=0, max_tokens=4096, timeout=120,
+            response_format={"type": "json_object"},
+            messages=[{"role": "user", "content": content}],
+        )
+        raw = resp.choices[0].message.content
+        return json.loads(raw)
+
+    # ── Pass 1: Full extraction (MCQ + subjective) ────────────────────────────
+    full_prompt = (
+        "You are a handwriting recognition expert reading a scanned student answer sheet. "
+        "Extract the student's answer for each question.\n\n"
+        "QUESTIONS ON THIS EXAM:\n" + q_block + "\n\n"
+        "RULES:\n"
+        "- For MCQ questions: Look carefully at the answer area. The student may have filled a bubble, "
+        "circled a letter, ticked/checked an option, or written a letter by hand. "
+        "Return ONLY a single uppercase letter (A, B, C, or D) based on what you physically see.\n"
+        "- For Written questions: return the COMPLETE handwritten answer.\n"
+        "  Read ALL lines top-to-bottom. Do NOT stop after the first line.\n"
+        "  Join all lines into one string separated by spaces.\n"
+        "- If a question has no visible answer, omit it from the JSON.\n"
+        "- Do NOT include question text, labels, or instructions — only the student's answer.\n\n"
+        "Return ONLY valid JSON:\n"
+        '{"answers": {"1": "B", "2": "D", "7": "The student wrote this answer across multiple lines"}}\n'
+    )
+
+    try:
+        log.info(f"[OCR] Pass 1: Full extraction ({len(encoded_images)} images)...")
+        raw_json_1 = _call_vision(full_prompt)
+    except Exception as e:
+        log.error(f"[OCR] Vision API call failed: {e}")
+        return {}, f"vision_api_failed: {str(e)[:100]}"
+
+    # ── Parse Pass 1 results ──────────────────────────────────────────────────
+    answers: Dict[int, str] = {}
+    mcq_votes: Dict[int, list] = {qid: [] for qid in mcq_ids}
+
+    for qid_str, val in raw_json_1.get("answers", {}).items():
+        try:
+            qid = int(qid_str)
+            val_str = str(val).strip()
+            if not val_str or val_str in {"—", "-", "--", "None", "null", ""}:
+                continue
+            if qid in mcq_ids:
+                letter = re.search(r'([A-D])', val_str, re.IGNORECASE)
+                if letter:
+                    mcq_votes.setdefault(qid, []).append(letter.group(1).upper())
             else:
-                prompt = _build_ocr_prompt_v2(exam_questions)
+                answers[qid] = val_str
+        except (ValueError, TypeError):
+            continue
 
-            for img in images:
-                # Upscale for readability, boost contrast but keep colour
-                # (greyscale conversion kills the blue bubble ink visibility)
-                from PIL import ImageEnhance as _ie2
-                MAX_W = 2480
-                if img.width < MAX_W:
-                    img = img.resize((MAX_W, int(img.height * MAX_W / img.width)), Image.LANCZOS)
-                enhanced = _ie2.Contrast(_ie2.Sharpness(img.convert("RGB")).enhance(1.8)).enhance(1.6)
-                buf = _io.BytesIO()
-                enhanced.save(buf, format="PNG", optimize=False)
-                img_b64 = base64.b64encode(buf.getvalue()).decode()
-
-                resp = client.chat.completions.create(
-                    model=OPENAI_MODEL, temperature=0,
-                    response_format={"type": "json_object"},
-                    messages=[{"role": "user", "content": [
-                        {"type": "text", "text": prompt},
-                        {"type": "image_url", "image_url": {
-                            "url": f"data:image/png;base64,{img_b64}", "detail": "high"
-                        }}
-                    ]}]
-                )
-                raw_ocr = json.loads(resp.choices[0].message.content)
-                # Fix 3: debug logging
-                log.info(f"[PATH-C-OCR] raw GPT output: {raw_ocr}")
-                page_ans = _validate_ocr_answers(raw_ocr.get("answers", {}), exam_questions)
-                log.info(f"[PATH-C-OCR] validated answers: {page_ans}")
-                combined.update(page_ans)
-
-            if combined:
-                return combined, "vision_ocr_enhanced"
-        except Exception as _vis_err:
-            print(f"[PDF-OCR] Vision fallback failed: {_vis_err}")
-
-        # ── Path D: text-only GPT fallback ────────────────────────────────────
-        if raw_text.strip():
+    # ── Pass 2 & 3: MCQ-only re-reads for majority vote ──────────────────────
+    # IMPORTANT: Do NOT include question text or option values here.
+    # Including them causes answer-key bias (model reads what it thinks is
+    # correct instead of what the student physically marked).
+    if mcq_ids:
+        mcq_qlist = ", ".join(f"Q{qid}" for qid in sorted(mcq_ids))
+        mcq_prompt = (
+            "You are a handwriting recognition expert reading a scanned student answer sheet.\n\n"
+            "This sheet has multiple-choice questions where the student marked their answer "
+            "by filling a bubble, circling a letter, ticking an option, or writing a letter.\n\n"
+            f"MCQ question numbers on this sheet: {mcq_qlist}\n\n"
+            "CRITICAL INSTRUCTIONS:\n"
+            "1. For EACH question, look at the answer area and describe what you PHYSICALLY SEE "
+            "(which bubble is darkened, which letter is circled or written, where marks appear).\n"
+            "2. Report ONLY the letter (A, B, C, or D) that the student has marked.\n"
+            "3. You are ONLY reading physical marks on paper. Do NOT try to determine which "
+            "answer is mathematically or factually correct — that is irrelevant.\n"
+            "4. If a mark is ambiguous, describe what you see and pick the most likely letter.\n\n"
+            "Return JSON with description and answer for each question:\n"
+            '{"answers": {"1": {"seen": "bubble A is filled/darkened", "answer": "A"}, '
+            '"2": {"seen": "letter C is circled", "answer": "C"}}}\n'
+        )
+        for pass_num in (2, 3):
             try:
-                client = _oai.OpenAI(api_key=OPENAI_API_KEY)
-                resp = client.chat.completions.create(
-                    model=OPENAI_MINI, temperature=0,
-                    response_format={"type": "json_object"},
-                    messages=[{"role": "user", "content": (
-                        _build_ocr_prompt(exam_questions) +
-                        "\n\nPDF text layer (printed question paper — look for any typed student "
-                        "answers after each 'Answer:' label, ignore blank underscores):\n\n" +
-                        raw_text[:4000]
-                    )}]
-                )
-                raw = json.loads(resp.choices[0].message.content)
-                ans = _validate_ocr_answers(raw.get("answers", {}), exam_questions)
-                if ans:
-                    return ans, "llm_text_extract"
-            except Exception as _fb_err:
-                print(f"[PDF-OCR] Text fallback failed: {_fb_err}")
+                log.info(f"[OCR] Pass {pass_num}: MCQ re-read for consensus...")
+                raw_json_n = _call_vision(mcq_prompt)
+                for qid_str, val in raw_json_n.get("answers", {}).items():
+                    qid = int(qid_str)
+                    if qid in mcq_ids:
+                        # Handle both {"answer": "A", "seen": "..."} and plain "A"
+                        ans_text = val.get("answer", "") if isinstance(val, dict) else str(val)
+                        if isinstance(val, dict):
+                            log.info(f"[OCR] Pass {pass_num} Q{qid}: saw='{val.get('seen','')}' → {ans_text}")
+                        letter = re.search(r'([A-D])', ans_text, re.IGNORECASE)
+                        if letter:
+                            mcq_votes.setdefault(qid, []).append(letter.group(1).upper())
+            except Exception as e:
+                log.warning(f"[OCR] Pass {pass_num} failed (non-fatal): {e}")
 
-        return {}, "pdf_unreadable"
+    # ── Resolve MCQ answers by majority vote ──────────────────────────────────
+    for qid, votes in mcq_votes.items():
+        if votes:
+            winner, count = Counter(votes).most_common(1)[0]
+            answers[qid] = winner
+            log.info(f"[OCR] Q{qid} MCQ: votes={votes} → winner={winner} ({count}/{len(votes)})")
+        else:
+            log.warning(f"[OCR] Q{qid} MCQ: no votes collected")
 
-    if ext in {".png", ".jpg", ".jpeg", ".webp"}:
-        # Apply preprocessing + visual-reasoning prompt for direct image uploads
-        try:
-            import io as _io
-            from PIL import Image as _PIL
-            # Upscale + contrast boost — keep colour so bubble ink is visible
-            from PIL import ImageEnhance as _ie3
-            raw_img = _PIL.open(path).convert("RGB")
-            MAX_W   = 2480
-            if raw_img.width < MAX_W:
-                raw_img = raw_img.resize(
-                    (MAX_W, int(raw_img.height * MAX_W / raw_img.width)), _PIL.LANCZOS
-                )
-            preprocessed = _ie3.Contrast(_ie3.Sharpness(raw_img).enhance(1.8)).enhance(1.6)
-            buf = _io.BytesIO()
-            preprocessed.save(buf, format="PNG", optimize=False)
-            img_b64 = base64.b64encode(buf.getvalue()).decode()
+    if answers:
+        log.info(f"[OCR] Extracted {len(answers)} answers (MCQ consensus from 3 reads)")
+        return answers, "vision_ocr_consensus"
 
-            # Use a combined "Universal" prompt for images that handles both
-            # structured VidyAI sheets and plain notebooks, since we can't
-            # detect text layers on raw images.
-            prompt = (
-                _build_ocr_prompt_v2(exam_questions) +
-                "\n\n--- NOTE ---\n"
-                "If this is NOT a structured VidyAI sheet (i.e., no indigo/green tabs),\n"
-                "simply find the question numbers (1, 2, Q1, Q2) anywhere on the page\n"
-                "and extract the handwritten answers verbatim."
-            )
-
-            client = _oai.OpenAI(api_key=OPENAI_API_KEY)
-            resp = client.chat.completions.create(
-                model=OPENAI_MODEL, temperature=0,
-                response_format={"type": "json_object"},
-                messages=[{"role": "user", "content": [
-                    {"type": "text", "text": prompt},
-                    {"type": "image_url", "image_url": {
-                        "url": f"data:image/png;base64,{img_b64}", "detail": "high"
-                    }}
-                ]}]
-            )
-            raw = json.loads(resp.choices[0].message.content)
-            log.info(f"[IMG-OCR] raw GPT output: {raw}")
-            ans = _validate_ocr_answers(raw.get("answers", {}), exam_questions)
-            log.info(f"[IMG-OCR] validated: {ans}")
-            if ans:
-                return ans, "vision_ocr"
-        except Exception as _img_err:
-            log.error(f"[IMG-OCR] {_img_err}")
-        # Fallback to simple vision extract
-        return _vision_extract(path, _build_ocr_prompt(exam_questions)), "vision_ocr"
-
-    return {}, "unsupported_type"
+    log.warning("[OCR] No answers extracted from Vision response")
+    return {}, "no_answers_extracted"
 
 def _parse_answer_text(text: str) -> Dict[int, str]:
     """
@@ -2652,11 +3162,16 @@ STUDY_PROMPT = None
 if LANGCHAIN_OK:
     STUDY_PROMPT = PromptTemplate(
         input_variables=["context", "chat_history", "question"],
-        template="""You are a patient tutor helping a student understand complex concepts.
+        template="""You are Arthavi, a patient and knowledgeable AI tutor helping students understand their curriculum.
 Style: ELI5 explanations • 1–2 real-world examples • analogies where possible • end with a 1-sentence summary.
-Use ONLY information from the uploaded materials. If the answer isn't there, say so honestly.
 
---- Materials ---
+IMPORTANT rules:
+- If study materials are provided below, use them as your PRIMARY source.
+- If the context is empty or the question is NOT covered in the materials, STILL answer helpfully from your general knowledge. Start with: "⚠️ This topic is not part of your selected syllabus, but I'll still help:"
+- NEVER say "there are no materials uploaded" or refuse to answer — always provide a useful educational response.
+- Never refuse to answer — always be helpful, even for off-topic questions.
+
+--- Study Materials ---
 {context}
 
 --- Chat History ---
@@ -2664,7 +3179,7 @@ Use ONLY information from the uploaded materials. If the answer isn't there, say
 
 Student Question: {question}
 
-Tutor Answer:"""
+Arthavi Answer:"""
     )
 
 CHAPTER_EXTRACT_PROMPT = """You are analysing a study document.
@@ -2680,6 +3195,12 @@ JSON array only:"""
 MIXED_QUESTION_GEN_PROMPT = """You are an expert exam paper setter.
 Generate exactly {total_count} exam questions from the context only.
 Output EXACTLY valid JSON — no markdown.
+
+CRITICAL: Board={board} | Class={class_level} | Subject={subject}
+- All questions MUST be at exactly {class_level} level — not higher, not lower.
+- Vocabulary, concepts, and depth must match {board} {class_level} {subject} standards.
+- Do NOT include concepts from higher classes even if present in the context.
+
 objective_count={objective_count}, subjective_count={subjective_count}
 Difficulty: easy={easy_count}, medium={medium_count}, hard={hard_count}
 
@@ -2732,6 +3253,7 @@ SUMMARISE_PROMPT = """You are an expert Indian school educator. Summarise the pr
 Each line should be one complete educational point. Include a brief real-world or relatable example after each point where useful.
 Do NOT use bullet symbols — only numbered lines.
 Do NOT include any preamble or heading — output ONLY the 10 numbered lines.
+Do NOT quote or reproduce textbook passages verbatim. Always paraphrase into original study notes.
 
 Context: {context}
 
@@ -2749,6 +3271,7 @@ Output format (strictly):
 
 REGIONAL_SUMMARISE_PROMPT = """You are an expert educator. Summarise the provided context in EXACTLY 10 clear numbered lines in {language}.
 Do NOT include any preamble — output ONLY 10 numbered lines in {language}.
+Do NOT quote or reproduce textbook passages verbatim. Always paraphrase into original study notes.
 
 Context: {context}
 
@@ -2772,7 +3295,13 @@ Context:
 {context}"""
 
 MIXED_PRACTICE_GEN_PROMPT = """You are a high-quality academic practice generator.
-Generate exactly {total_count} distinct practice questions from the context.
+Generate exactly {total_count} distinct practice questions strictly appropriate for the class and board specified.
+
+CRITICAL: Board={board} | Class={class_level} | Subject={subject}
+- Questions MUST be at exactly {class_level} level — not higher, not lower.
+- Vocabulary, concepts, and depth must match {board} {class_level} {subject} standards.
+- Do NOT include concepts from higher classes.
+
 objective_count: {objective_count}, subjective_count: {subjective_count}, difficulty: {difficulty}
 
 Return EXACTLY a valid JSON array. Do NOT generate blank questions.
@@ -2809,25 +3338,96 @@ Return a JSON ARRAY of scene objects (7 scenes: INTRO, CONCEPT, EXAMPLE_1, EXAMP
 Each object: {{"segment":"...","text":"2-4 spoken sentences","visual":"actual content not a description","visual_type":"title|worked_example|bullet_list|fact_box|summary_box"}}
 British English only. Return ONLY valid JSON array. Context: {context}"""
 
+_REFUSAL_MARKERS = (
+    "i'm sorry", "i am sorry", "i can't", "i cannot", "can't provide", "cannot provide",
+    "unable to", "as requested", "however, i can help", "i can help with a general overview",
+)
+
+def _looks_like_refusal(text: str) -> bool:
+    if not text:
+        return True
+    low = text.lower().strip()
+    return any(marker in low for marker in _REFUSAL_MARKERS)
+
+def _fallback_numbered_summary(topic: str, subject: str) -> str:
+    base_topic = topic or subject or "this chapter"
+    base_subject = subject or "the subject"
+    lines = [
+        f"1. {base_topic}: Understand the main idea first before memorising details.",
+        f"2. In {base_subject}, identify key terms and write a one-line meaning for each.",
+        "3. Group the topic into smaller concepts so revision becomes easier.",
+        "4. Track cause-and-effect links between concepts to improve answer quality.",
+        "5. Use one practical daily-life example for each concept to retain it longer.",
+        "6. Compare similar ideas in a table to avoid confusion in exams.",
+        "7. Mark frequently asked patterns and prepare short revision notes for them.",
+        "8. Practice 3-5 likely exam questions and answer them in your own words.",
+        "9. Revise with a quick formula/fact/theme recap before attempting mock questions.",
+        "10. End with a short self-check: what, why, how, and one example for each concept.",
+    ]
+    return "\n".join(lines)
+
+def _generate_summary_with_fallback(ctx: str, topic: str, subject: str, language: str = "", point_count: int = 10) -> str:
+    regional_langs = ["odia","kannada","hindi","telugu","gujarati","marathi","bengali","punjabi","tamil","malayalam"]
+    is_regional = bool(language) and any(lang in language.lower() for lang in regional_langs)
+
+    n = max(1, min(20, point_count))
+
+    if is_regional:
+        prompt = (REGIONAL_SUMMARISE_PROMPT
+                  .replace("{language}", language.title())
+                  .replace("{context}", ctx)
+                  .replace("EXACTLY 10", f"EXACTLY {n}")
+                  .replace("10 numbered lines", f"{n} numbered lines"))
+    else:
+        numbered_format = "\n".join(f"{i+1}. [Complete educational point with example if helpful]" for i in range(n))
+        prompt = (
+            f"You are an expert Indian school educator. Summarise the provided context in EXACTLY {n} clear, numbered lines.\n"
+            f"Each line should be one complete educational point. Include a brief real-world or relatable example after each point where useful.\n"
+            f"Do NOT use bullet symbols — only numbered lines.\n"
+            f"Do NOT include any preamble or heading — output ONLY the {n} numbered lines.\n"
+            f"Do NOT quote or reproduce textbook passages verbatim. Always paraphrase into original study notes.\n\n"
+            f"Context: {ctx}\n\n"
+            f"Output format (strictly):\n{numbered_format}"
+        )
+
+    summary = _llm_text(prompt)
+    if not _looks_like_refusal(summary):
+        return summary
+
+    # Recovery path for copyright-style refusals: generate original study notes only.
+    recovery_prompt = (
+        f"Create EXACTLY {n} numbered study-note lines for Indian school students. "
+        "Use only high-level educational explanation in your own words. "
+        "Do not quote or reproduce textbook text. No refusal text, no preamble.\n\n"
+        f"Topic: {topic}\n"
+        f"Subject: {subject}\n"
+        f"Reference context: {ctx[:3000]}\n"
+    )
+    summary = _llm_text(recovery_prompt, temperature=0.2, mini=True)
+    if not _looks_like_refusal(summary):
+        return summary
+
+    return _fallback_numbered_summary(topic, subject)
+
 # ══════════════════════════════════════════════════════════════════════════════
 #  CURRICULUM METADATA
 # ══════════════════════════════════════════════════════════════════════════════
 def _build_curriculum() -> dict:
     boards = {
-        "National (NCERT)": ["CBSE", "ICSE"],
-        "Andhra Pradesh": ["BSEAP", "CBSE", "ICSE"],
-        "Bihar": ["BSEB", "CBSE", "ICSE"],
-        "Delhi": ["CBSE", "ICSE"],
-        "Gujarat": ["GSEB", "CBSE", "ICSE"],
-        "Karnataka": ["KSEEB", "CBSE", "ICSE"],
-        "Kerala": ["KBPE", "CBSE", "ICSE"],
-        "Maharashtra": ["MSBSHSE", "CBSE", "ICSE"],
-        "Odisha": ["BSE Odisha", "CBSE", "ICSE"],
-        "Punjab": ["PSEB", "CBSE", "ICSE"],
-        "Rajasthan": ["RBSE", "CBSE", "ICSE"],
-        "Tamil Nadu": ["TNBSE", "CBSE", "ICSE"],
-        "Uttar Pradesh": ["UPMSP", "CBSE", "ICSE"],
-        "West Bengal": ["WBBSE", "CBSE", "ICSE"],
+        "National (NCERT)": ["CBSE", "ICSE", "ISC"],
+        "Andhra Pradesh": ["BSEAP", "CBSE", "ICSE", "ISC"],
+        "Bihar": ["BSEB", "CBSE", "ICSE", "ISC"],
+        "Delhi": ["CBSE", "ICSE", "ISC"],
+        "Gujarat": ["GSEB", "CBSE", "ICSE", "ISC"],
+        "Karnataka": ["KSEEB", "CBSE", "ICSE", "ISC"],
+        "Kerala": ["KBPE", "CBSE", "ICSE", "ISC"],
+        "Maharashtra": ["MSBSHSE", "CBSE", "ICSE", "ISC"],
+        "Odisha": ["BSE", "CHSE", "CBSE", "ICSE", "ISC"],
+        "Punjab": ["PSEB", "CBSE", "ICSE", "ISC"],
+        "Rajasthan": ["RBSE", "CBSE", "ICSE", "ISC"],
+        "Tamil Nadu": ["TNBSE", "CBSE", "ICSE", "ISC"],
+        "Uttar Pradesh": ["UPMSP", "CBSE", "ICSE", "ISC"],
+        "West Bengal": ["WBBSE", "CBSE", "ICSE", "ISC"],
     }
     data: dict = {}
     for state, bds in boards.items():
@@ -2852,60 +3452,366 @@ CURRICULUM_DATA = _build_curriculum()
 
 # Hardcoded NCERT chapter database (reliable, no LLM needed for known combinations)
 CHAPTERS_DB: Dict[tuple, list] = {
-    ("class6","science"):  ["Ch 1: Food: Where Does it Come From?","Ch 2: Components of Food","Ch 3: Fibre to Fabric","Ch 4: Sorting Materials","Ch 5: Separation of Substances","Ch 6: Changes Around Us","Ch 7: Getting to Know Plants","Ch 8: Body Movements","Ch 9: Living Organisms","Ch 10: Motion and Measurement","Ch 11: Light, Shadows and Reflections","Ch 12: Electricity and Circuits","Ch 13: Fun with Magnets","Ch 14: Water","Ch 15: Air Around Us","Ch 16: Garbage In, Garbage Out"],
-    ("class7","science"):  ["Ch 1: Nutrition in Plants","Ch 2: Nutrition in Animals","Ch 3: Fibre to Fabric","Ch 4: Heat","Ch 5: Acids, Bases and Salts","Ch 6: Physical and Chemical Changes","Ch 7: Weather, Climate and Adaptations","Ch 8: Winds, Storms and Cyclones","Ch 9: Soil","Ch 10: Respiration in Organisms","Ch 11: Transportation in Animals and Plants","Ch 12: Reproduction in Plants","Ch 13: Motion and Time","Ch 14: Electric Current","Ch 15: Light","Ch 16: Water: A Precious Resource","Ch 17: Forests: Our Lifeline","Ch 18: Wastewater Story"],
-    ("class8","science"):  ["Ch 1: Crop Production","Ch 2: Microorganisms","Ch 3: Synthetic Fibres","Ch 4: Metals and Non-metals","Ch 5: Coal and Petroleum","Ch 6: Combustion and Flame","Ch 7: Conservation of Plants","Ch 8: Cell Structure","Ch 9: Reproduction in Animals","Ch 10: Adolescence","Ch 11: Force and Pressure","Ch 12: Friction","Ch 13: Sound","Ch 14: Chemical Effects of Electricity","Ch 15: Natural Phenomena","Ch 16: Light","Ch 17: Stars and Solar System","Ch 18: Pollution"],
-    ("class9","science"):  ["Ch 1: Matter in Our Surroundings","Ch 2: Is Matter Pure?","Ch 3: Atoms and Molecules","Ch 4: Structure of the Atom","Ch 5: Fundamental Unit of Life","Ch 6: Tissues","Ch 7: Diversity in Living Organisms","Ch 8: Motion","Ch 9: Force and Laws of Motion","Ch 10: Gravitation","Ch 11: Work and Energy","Ch 12: Sound","Ch 13: Why Do We Fall Ill?","Ch 14: Natural Resources","Ch 15: Improvement in Food Resources"],
-    ("class10","science"): ["Ch 1: Chemical Reactions","Ch 2: Acids, Bases and Salts","Ch 3: Metals and Non-metals","Ch 4: Carbon and its Compounds","Ch 5: Periodic Classification","Ch 6: Life Processes","Ch 7: Control and Coordination","Ch 8: Reproduction","Ch 9: Heredity and Evolution","Ch 10: Light — Reflection and Refraction","Ch 11: Human Eye","Ch 12: Electricity","Ch 13: Magnetic Effects","Ch 14: Sources of Energy","Ch 15: Our Environment","Ch 16: Sustainable Management"],
-    ("class11","physics"): ["Ch 1: Physical World","Ch 2: Units and Measurements","Ch 3: Motion in a Straight Line","Ch 4: Motion in a Plane","Ch 5: Laws of Motion","Ch 6: Work, Energy and Power","Ch 7: System of Particles","Ch 8: Gravitation","Ch 9: Mechanical Properties of Solids","Ch 10: Mechanical Properties of Fluids","Ch 11: Thermal Properties","Ch 12: Thermodynamics","Ch 13: Kinetic Theory","Ch 14: Oscillations","Ch 15: Waves"],
-    ("class12","physics"): ["Ch 1: Electric Charges and Fields","Ch 2: Electrostatic Potential","Ch 3: Current Electricity","Ch 4: Moving Charges and Magnetism","Ch 5: Magnetism and Matter","Ch 6: Electromagnetic Induction","Ch 7: Alternating Current","Ch 8: Electromagnetic Waves","Ch 9: Ray Optics","Ch 10: Wave Optics","Ch 11: Dual Nature of Radiation","Ch 12: Atoms","Ch 13: Nuclei","Ch 14: Semiconductor Electronics"],
-    ("class11","chemistry"):["Ch 1: Basic Concepts of Chemistry","Ch 2: Structure of Atom","Ch 3: Classification of Elements","Ch 4: Chemical Bonding","Ch 5: States of Matter","Ch 6: Thermodynamics","Ch 7: Equilibrium","Ch 8: Redox Reactions","Ch 9: Hydrogen","Ch 10: s-Block Elements","Ch 11: p-Block Elements","Ch 12: Organic Chemistry","Ch 13: Hydrocarbons","Ch 14: Environmental Chemistry"],
-    ("class12","chemistry"):["Ch 1: The Solid State","Ch 2: Solutions","Ch 3: Electrochemistry","Ch 4: Chemical Kinetics","Ch 5: Surface Chemistry","Ch 6: General Principles of Isolation","Ch 7: p-Block Elements","Ch 8: d-and f-Block Elements","Ch 9: Coordination Compounds","Ch 10: Haloalkanes and Haloarenes","Ch 11: Alcohols, Phenols and Ethers","Ch 12: Aldehydes and Ketones","Ch 13: Amines","Ch 14: Biomolecules","Ch 15: Polymers","Ch 16: Chemistry in Everyday Life"],
-    ("class11","biology"):  ["Ch 1: The Living World","Ch 2: Biological Classification","Ch 3: Plant Kingdom","Ch 4: Animal Kingdom","Ch 5: Morphology of Flowering Plants","Ch 6: Anatomy of Flowering Plants","Ch 7: Structural Organisation","Ch 8: Cell — Unit of Life","Ch 9: Biomolecules","Ch 10: Cell Cycle","Ch 11: Transport in Plants","Ch 12: Mineral Nutrition","Ch 13: Photosynthesis","Ch 14: Respiration in Plants","Ch 15: Plant Growth","Ch 16: Digestion and Absorption","Ch 17: Breathing and Exchange","Ch 18: Body Fluids","Ch 19: Excretory Products","Ch 20: Locomotion","Ch 21: Neural Control","Ch 22: Chemical Coordination"],
-    ("class12","biology"):  ["Ch 1: Reproduction in Organisms","Ch 2: Sexual Reproduction in Flowering Plants","Ch 3: Human Reproduction","Ch 4: Reproductive Health","Ch 5: Principles of Inheritance","Ch 6: Molecular Basis of Inheritance","Ch 7: Evolution","Ch 8: Human Health and Disease","Ch 9: Food Production","Ch 10: Microbes in Human Welfare","Ch 11: Biotechnology Principles","Ch 12: Biotechnology Applications","Ch 13: Organisms and Populations","Ch 14: Ecosystem","Ch 15: Biodiversity","Ch 16: Environmental Issues"],
-    ("class6","mathematics"):["Ch 1: Knowing Our Numbers","Ch 2: Whole Numbers","Ch 3: Playing with Numbers","Ch 4: Basic Geometrical Ideas","Ch 5: Elementary Shapes","Ch 6: Integers","Ch 7: Fractions","Ch 8: Decimals","Ch 9: Data Handling","Ch 10: Mensuration","Ch 11: Algebra","Ch 12: Ratio and Proportion","Ch 13: Symmetry","Ch 14: Practical Geometry"],
-    ("class7","mathematics"):["Ch 1: Integers","Ch 2: Fractions and Decimals","Ch 3: Data Handling","Ch 4: Simple Equations","Ch 5: Lines and Angles","Ch 6: Triangles","Ch 7: Congruence of Triangles","Ch 8: Comparing Quantities","Ch 9: Rational Numbers","Ch 10: Practical Geometry","Ch 11: Perimeter and Area","Ch 12: Algebraic Expressions","Ch 13: Exponents and Powers","Ch 14: Symmetry","Ch 15: Visualising Solid Shapes"],
-    ("class8","mathematics"):["Ch 1: Rational Numbers","Ch 2: Linear Equations","Ch 3: Quadrilaterals","Ch 4: Practical Geometry","Ch 5: Data Handling","Ch 6: Squares and Square Roots","Ch 7: Cubes and Cube Roots","Ch 8: Comparing Quantities","Ch 9: Algebraic Expressions","Ch 10: Visualising Solid Shapes","Ch 11: Mensuration","Ch 12: Exponents and Powers","Ch 13: Direct and Inverse Proportions","Ch 14: Factorisation","Ch 15: Introduction to Graphs","Ch 16: Playing with Numbers"],
-    ("class9","mathematics"):["Ch 1: Number Systems","Ch 2: Polynomials","Ch 3: Coordinate Geometry","Ch 4: Linear Equations in Two Variables","Ch 5: Euclid's Geometry","Ch 6: Lines and Angles","Ch 7: Triangles","Ch 8: Quadrilaterals","Ch 9: Areas of Parallelograms","Ch 10: Circles","Ch 11: Constructions","Ch 12: Heron's Formula","Ch 13: Surface Areas and Volumes","Ch 14: Statistics","Ch 15: Probability"],
-    ("class10","mathematics"):["Ch 1: Real Numbers","Ch 2: Polynomials","Ch 3: Pair of Linear Equations","Ch 4: Quadratic Equations","Ch 5: Arithmetic Progressions","Ch 6: Triangles","Ch 7: Coordinate Geometry","Ch 8: Introduction to Trigonometry","Ch 9: Applications of Trigonometry","Ch 10: Circles","Ch 11: Constructions","Ch 12: Areas Related to Circles","Ch 13: Surface Areas and Volumes","Ch 14: Statistics","Ch 15: Probability"],
-    ("class11","mathematics"):["Ch 1: Sets","Ch 2: Relations and Functions","Ch 3: Trigonometric Functions","Ch 4: Mathematical Induction","Ch 5: Complex Numbers","Ch 6: Linear Inequalities","Ch 7: Permutations and Combinations","Ch 8: Binomial Theorem","Ch 9: Sequences and Series","Ch 10: Straight Lines","Ch 11: Conic Sections","Ch 12: 3D Geometry","Ch 13: Limits and Derivatives","Ch 14: Mathematical Reasoning","Ch 15: Statistics","Ch 16: Probability"],
+    # ── Science ───────────────────────────────────────────────────────────────
+    ("class6","science"):  ["Ch 1: The Wonderful World of Science","Ch 2: Diversity in the Living World","Ch 3: Mindful Eating: A Path to a Healthy Body","Ch 4: Exploring Magnets","Ch 5: Measurement of Length and Motion","Ch 6: Materials Around Us","Ch 7: Temperature and its Measurement","Ch 8: A Treat for Mosquitoes!","Ch 9: Methods of Separation","Ch 10: Living Creatures: Exploring their Characteristics","Ch 11: Nature's Treasures","Ch 12: Beyond Earth"],
+    ("class7","science"):  ["Ch 1: Nutrition in Plants","Ch 2: Nutrition in Animals","Ch 3: Fibre to Fabric","Ch 4: Heat","Ch 5: Acids, Bases and Salts","Ch 6: Physical and Chemical Changes","Ch 7: Weather, Climate and Adaptations","Ch 8: Winds, Storms and Cyclones","Ch 9: Soil","Ch 10: Respiration in Organisms","Ch 11: Transportation in Animals and Plants","Ch 12: Reproduction in Plants","Ch 13: Motion and Time","Ch 14: Electric Current and its Effects","Ch 15: Light","Ch 16: Water: A Precious Resource","Ch 17: Forests: Our Lifeline","Ch 18: Wastewater Story"],
+    ("class8","science"):  ["Ch 1: Crop Production and Management","Ch 2: Microorganisms — Friend and Foe","Ch 3: Synthetic Fibres and Plastics","Ch 4: Materials — Metals and Non-metals","Ch 5: Coal and Petroleum","Ch 6: Combustion and Flame","Ch 7: Conservation of Plants and Animals","Ch 8: Cell — Structure and Functions","Ch 9: Reproduction in Animals","Ch 10: Reaching the Age of Adolescence","Ch 11: Force and Pressure","Ch 12: Friction","Ch 13: Sound","Ch 14: Chemical Effects of Electric Current","Ch 15: Some Natural Phenomena","Ch 16: Light","Ch 17: Stars and the Solar System","Ch 18: Pollution of Air and Water"],
+    ("class9","science"):  ["Ch 1: Matter in Our Surroundings","Ch 2: Is Matter Around Us Pure?","Ch 3: Atoms and Molecules","Ch 4: Structure of the Atom","Ch 5: The Fundamental Unit of Life","Ch 6: Tissues","Ch 7: Diversity in Living Organisms","Ch 8: Motion","Ch 9: Force and Laws of Motion","Ch 10: Gravitation","Ch 11: Work and Energy","Ch 12: Sound","Ch 13: Why Do We Fall Ill?","Ch 14: Natural Resources","Ch 15: Improvement in Food Resources"],
+    ("class10","science"): ["Ch 1: Chemical Reactions and Equations","Ch 2: Acids, Bases and Salts","Ch 3: Metals and Non-metals","Ch 4: Carbon and its Compounds","Ch 5: Periodic Classification of Elements","Ch 6: Life Processes","Ch 7: Control and Coordination","Ch 8: How do Organisms Reproduce?","Ch 9: Heredity and Evolution","Ch 10: Light — Reflection and Refraction","Ch 11: Human Eye and the Colourful World","Ch 12: Electricity","Ch 13: Magnetic Effects of Electric Current","Ch 14: Sources of Energy","Ch 15: Our Environment","Ch 16: Sustainable Management of Natural Resources"],
+    ("class11","physics"): ["Ch 1: Physical World","Ch 2: Units and Measurements","Ch 3: Motion in a Straight Line","Ch 4: Motion in a Plane","Ch 5: Laws of Motion","Ch 6: Work, Energy and Power","Ch 7: System of Particles and Rotational Motion","Ch 8: Gravitation","Ch 9: Mechanical Properties of Solids","Ch 10: Mechanical Properties of Fluids","Ch 11: Thermal Properties of Matter","Ch 12: Thermodynamics","Ch 13: Kinetic Theory","Ch 14: Oscillations","Ch 15: Waves"],
+    ("class12","physics"): ["Ch 1: Electric Charges and Fields","Ch 2: Electrostatic Potential and Capacitance","Ch 3: Current Electricity","Ch 4: Moving Charges and Magnetism","Ch 5: Magnetism and Matter","Ch 6: Electromagnetic Induction","Ch 7: Alternating Current","Ch 8: Electromagnetic Waves","Ch 9: Ray Optics and Optical Instruments","Ch 10: Wave Optics","Ch 11: Dual Nature of Radiation and Matter","Ch 12: Atoms","Ch 13: Nuclei","Ch 14: Semiconductor Electronics"],
+    ("class11","chemistry"):["Ch 1: Some Basic Concepts of Chemistry","Ch 2: Structure of Atom","Ch 3: Classification of Elements and Periodicity","Ch 4: Chemical Bonding and Molecular Structure","Ch 5: States of Matter","Ch 6: Thermodynamics","Ch 7: Equilibrium","Ch 8: Redox Reactions","Ch 9: Hydrogen","Ch 10: The s-Block Elements","Ch 11: The p-Block Elements","Ch 12: Organic Chemistry — Some Basic Principles","Ch 13: Hydrocarbons","Ch 14: Environmental Chemistry"],
+    ("class12","chemistry"):["Ch 1: The Solid State","Ch 2: Solutions","Ch 3: Electrochemistry","Ch 4: Chemical Kinetics","Ch 5: Surface Chemistry","Ch 6: General Principles of Isolation of Elements","Ch 7: The p-Block Elements","Ch 8: The d-and f-Block Elements","Ch 9: Coordination Compounds","Ch 10: Haloalkanes and Haloarenes","Ch 11: Alcohols, Phenols and Ethers","Ch 12: Aldehydes, Ketones and Carboxylic Acids","Ch 13: Amines","Ch 14: Biomolecules","Ch 15: Polymers","Ch 16: Chemistry in Everyday Life"],
+    ("class11","biology"):  ["Ch 1: The Living World","Ch 2: Biological Classification","Ch 3: Plant Kingdom","Ch 4: Animal Kingdom","Ch 5: Morphology of Flowering Plants","Ch 6: Anatomy of Flowering Plants","Ch 7: Structural Organisation in Animals","Ch 8: Cell — The Unit of Life","Ch 9: Biomolecules","Ch 10: Cell Cycle and Cell Division","Ch 11: Transport in Plants","Ch 12: Mineral Nutrition","Ch 13: Photosynthesis in Higher Plants","Ch 14: Respiration in Plants","Ch 15: Plant Growth and Development","Ch 16: Digestion and Absorption","Ch 17: Breathing and Exchange of Gases","Ch 18: Body Fluids and Circulation","Ch 19: Excretory Products and their Elimination","Ch 20: Locomotion and Movement","Ch 21: Neural Control and Coordination","Ch 22: Chemical Coordination and Integration"],
+    ("class12","biology"):  ["Ch 1: Reproduction in Organisms","Ch 2: Sexual Reproduction in Flowering Plants","Ch 3: Human Reproduction","Ch 4: Reproductive Health","Ch 5: Principles of Inheritance and Variation","Ch 6: Molecular Basis of Inheritance","Ch 7: Evolution","Ch 8: Human Health and Disease","Ch 9: Strategies for Enhancement in Food Production","Ch 10: Microbes in Human Welfare","Ch 11: Biotechnology — Principles and Processes","Ch 12: Biotechnology and its Applications","Ch 13: Organisms and Populations","Ch 14: Ecosystem","Ch 15: Biodiversity and Conservation","Ch 16: Environmental Issues"],
+    # ── Mathematics ───────────────────────────────────────────────────────────
+    ("class6","mathematics"):["Ch 1: Patterns in Mathematics","Ch 2: Lines and Angles","Ch 3: Number Play","Ch 4: Data Handling and Presentation","Ch 5: Prime Time","Ch 6: Perimeter and Area","Ch 7: Fractions","Ch 8: Playing with Constructions","Ch 9: Symmetry","Ch 10: The Other Side of Zero"],
+    ("class7","mathematics"):["Ch 1: Integers","Ch 2: Fractions and Decimals","Ch 3: Data Handling","Ch 4: Simple Equations","Ch 5: Lines and Angles","Ch 6: The Triangle and its Properties","Ch 7: Congruence of Triangles","Ch 8: Comparing Quantities","Ch 9: Rational Numbers","Ch 10: Practical Geometry","Ch 11: Perimeter and Area","Ch 12: Algebraic Expressions","Ch 13: Exponents and Powers","Ch 14: Symmetry","Ch 15: Visualising Solid Shapes"],
+    ("class8","mathematics"):["Ch 1: Rational Numbers","Ch 2: Linear Equations in One Variable","Ch 3: Understanding Quadrilaterals","Ch 4: Practical Geometry","Ch 5: Data Handling","Ch 6: Squares and Square Roots","Ch 7: Cubes and Cube Roots","Ch 8: Comparing Quantities","Ch 9: Algebraic Expressions and Identities","Ch 10: Visualising Solid Shapes","Ch 11: Mensuration","Ch 12: Exponents and Powers","Ch 13: Direct and Inverse Proportions","Ch 14: Factorisation","Ch 15: Introduction to Graphs","Ch 16: Playing with Numbers"],
+    ("class9","mathematics"):["Ch 1: Number Systems","Ch 2: Polynomials","Ch 3: Coordinate Geometry","Ch 4: Linear Equations in Two Variables","Ch 5: Introduction to Euclid's Geometry","Ch 6: Lines and Angles","Ch 7: Triangles","Ch 8: Quadrilaterals","Ch 9: Areas of Parallelograms and Triangles","Ch 10: Circles","Ch 11: Constructions","Ch 12: Heron's Formula","Ch 13: Surface Areas and Volumes","Ch 14: Statistics","Ch 15: Probability"],
+    ("class10","mathematics"):["Ch 1: Real Numbers","Ch 2: Polynomials","Ch 3: Pair of Linear Equations in Two Variables","Ch 4: Quadratic Equations","Ch 5: Arithmetic Progressions","Ch 6: Triangles","Ch 7: Coordinate Geometry","Ch 8: Introduction to Trigonometry","Ch 9: Some Applications of Trigonometry","Ch 10: Circles","Ch 11: Constructions","Ch 12: Areas Related to Circles","Ch 13: Surface Areas and Volumes","Ch 14: Statistics","Ch 15: Probability"],
+    ("class11","mathematics"):["Ch 1: Sets","Ch 2: Relations and Functions","Ch 3: Trigonometric Functions","Ch 4: Principle of Mathematical Induction","Ch 5: Complex Numbers and Quadratic Equations","Ch 6: Linear Inequalities","Ch 7: Permutations and Combinations","Ch 8: Binomial Theorem","Ch 9: Sequences and Series","Ch 10: Straight Lines","Ch 11: Conic Sections","Ch 12: Introduction to Three Dimensional Geometry","Ch 13: Limits and Derivatives","Ch 14: Mathematical Reasoning","Ch 15: Statistics","Ch 16: Probability"],
     ("class12","mathematics"):["Ch 1: Relations and Functions","Ch 2: Inverse Trigonometric Functions","Ch 3: Matrices","Ch 4: Determinants","Ch 5: Continuity and Differentiability","Ch 6: Application of Derivatives","Ch 7: Integrals","Ch 8: Application of Integrals","Ch 9: Differential Equations","Ch 10: Vector Algebra","Ch 11: Three Dimensional Geometry","Ch 12: Linear Programming","Ch 13: Probability"],
-    ("class10","social science"):["History Ch 1: Rise of Nationalism in Europe","History Ch 2: Nationalism in India","History Ch 3: Making of a Global World","History Ch 4: Age of Industrialisation","History Ch 5: Print Culture","Geography Ch 1: Resources and Development","Geography Ch 2: Forest and Wildlife","Geography Ch 3: Water Resources","Geography Ch 4: Agriculture","Geography Ch 5: Minerals and Energy","Geography Ch 6: Manufacturing Industries","Geography Ch 7: Lifelines of National Economy","Political Science Ch 1: Power Sharing","Political Science Ch 2: Federalism","Political Science Ch 3: Democracy and Diversity","Economics Ch 1: Development","Economics Ch 2: Sectors of Indian Economy","Economics Ch 3: Money and Credit","Economics Ch 4: Globalisation"],
-    ("class10","english"):["First Flight Ch 1: A Letter to God","First Flight Ch 2: Nelson Mandela","First Flight Ch 3: Two Stories About Flying","First Flight Ch 4: Diary of Anne Frank","First Flight Ch 5: The Hundred Dresses I","First Flight Ch 6: The Hundred Dresses II","First Flight Ch 7: Glimpses of India","First Flight Ch 8: Mijbil the Otter","First Flight Ch 9: Madam Rides the Bus","First Flight Ch 10: Sermon at Benares","First Flight Ch 11: The Proposal","Footprints Ch 1: Triumph of Surgery","Footprints Ch 2: The Thief's Story","Footprints Ch 3: Midnight Visitor","Footprints Ch 4: A Question of Trust","Footprints Ch 5: Footprints Without Feet"],
+    # ── English ───────────────────────────────────────────────────────────────
+    ("class6","english"):  ["Honeysuckle Ch 1: Who Did Patrick's Homework?","Honeysuckle Ch 2: How the Dog Found Himself a New Master!","Honeysuckle Ch 3: Taro's Reward","Honeysuckle Ch 4: An Indian — American Woman in Space","Honeysuckle Ch 5: A Different Kind of School","Honeysuckle Ch 6: Who I Am","Honeysuckle Ch 7: Fair Play","Honeysuckle Ch 8: A Game of Chance","Honeysuckle Ch 9: Desert Animals","Honeysuckle Ch 10: The Banyan Tree","A Pact with the Sun Ch 1: A Tale of Two Birds","A Pact with the Sun Ch 2: The Friendly Mongoose","A Pact with the Sun Ch 3: The Shepherd's Treasure","A Pact with the Sun Ch 4: The Old-Clock Shop","A Pact with the Sun Ch 5: Tansen","A Pact with the Sun Ch 6: The Monkey and the Crocodile","A Pact with the Sun Ch 7: The Wonder Called Sleep","A Pact with the Sun Ch 8: A Pact with the Sun"],
+    ("class7","english"):  ["Honeycomb Ch 1: Three Questions","Honeycomb Ch 2: A Gift of Chappals","Honeycomb Ch 3: Gopal and the Hilsa Fish","Honeycomb Ch 4: The Ashes That Made Trees Bloom","Honeycomb Ch 5: Quality","Honeycomb Ch 6: Expert Detectives","Honeycomb Ch 7: The Invention of Vita-Wonk","Honeycomb Ch 8: Fire: Friend and Foe","Honeycomb Ch 9: A Bicycle in Good Repair","Honeycomb Ch 10: The Story of Cricket","An Alien Hand Ch 1: The Tiny Teacher","An Alien Hand Ch 2: Bringing Up Kittens","An Alien Hand Ch 3: The Desert","An Alien Hand Ch 4: The Cop and the Anthem","An Alien Hand Ch 5: Golu Grows a Nose","An Alien Hand Ch 6: I Want Something in a Cage","An Alien Hand Ch 7: Chandni","An Alien Hand Ch 8: The Bear Story","An Alien Hand Ch 9: A Tiger in the House","An Alien Hand Ch 10: An Alien Hand"],
+    ("class8","english"):  ["Honeydew Ch 1: The Best Christmas Present in the World","Honeydew Ch 2: The Tsunami","Honeydew Ch 3: Glimpses of the Past","Honeydew Ch 4: Bepin Choudhury's Lapse of Memory","Honeydew Ch 5: The Summit Within","Honeydew Ch 6: This is Jody's Fawn","Honeydew Ch 7: A Visit to Cambridge","Honeydew Ch 8: A Short Monsoon Diary","Honeydew Ch 9: The Great Stone Face — I","Honeydew Ch 10: The Great Stone Face — II","It So Happened Ch 1: How the Camel Got His Hump","It So Happened Ch 2: Children at Work","It So Happened Ch 3: The Selfish Giant","It So Happened Ch 4: The Treasure Within","It So Happened Ch 5: Princess September","It So Happened Ch 6: The Fight","It So Happened Ch 7: The Open Window","It So Happened Ch 8: Jalebis","It So Happened Ch 9: The Comet — I","It So Happened Ch 10: The Comet — II"],
+    ("class9","english"):  ["Beehive Ch 1: The Fun They Had","Beehive Ch 2: The Sound of Music","Beehive Ch 3: The Little Girl","Beehive Ch 4: A Truly Beautiful Mind","Beehive Ch 5: The Snake and the Mirror","Beehive Ch 6: My Childhood","Beehive Ch 7: Packing","Beehive Ch 8: Reach for the Top","Beehive Ch 9: The Bond of Love","Beehive Ch 10: Kathmandu","Beehive Ch 11: If I Were You","Moments Ch 1: The Lost Child","Moments Ch 2: The Adventures of Toto","Moments Ch 3: Iswaran the Storyteller","Moments Ch 4: In the Kingdom of Fools","Moments Ch 5: The Happy Prince","Moments Ch 6: Weathering the Storm in Ersama","Moments Ch 7: The Last Leaf","Moments Ch 8: A House Is Not a Home","Moments Ch 9: The Accidental Tourist","Moments Ch 10: The Beggar"],
+    ("class10","english"):["First Flight Ch 1: A Letter to God","First Flight Ch 2: Nelson Mandela — Long Walk to Freedom","First Flight Ch 3: Two Stories About Flying","First Flight Ch 4: From the Diary of Anne Frank","First Flight Ch 5: The Hundred Dresses — I","First Flight Ch 6: The Hundred Dresses — II","First Flight Ch 7: Glimpses of India","First Flight Ch 8: Mijbil the Otter","First Flight Ch 9: Madam Rides the Bus","First Flight Ch 10: The Sermon at Benares","First Flight Ch 11: The Proposal","Footprints Ch 1: A Triumph of Surgery","Footprints Ch 2: The Thief's Story","Footprints Ch 3: The Midnight Visitor","Footprints Ch 4: A Question of Trust","Footprints Ch 5: Footprints Without Feet"],
+    # ── Hindi ─────────────────────────────────────────────────────────────────
+    ("class6","hindi"):    ["Vasant Ch 1: Vah Chidiya Jo","Vasant Ch 2: Bachpan","Vasant Ch 3: Naadaan Dost","Vasant Ch 4: Chaand Se Thodi Si Gappe","Vasant Ch 5: Aksharon Ka Mahatv","Vasant Ch 6: Paar Nazar Ke","Vasant Ch 7: Saathi Haath Badhana","Vasant Ch 8: Aise Aise","Vasant Ch 9: Ticket Album","Vasant Ch 10: Jhaanse Ki Rani"],
+    ("class7","hindi"):    ["Vasant Ch 1: Hum Panchhi Unmukt Gagan Ke","Vasant Ch 2: Dadi Maa","Vasant Ch 3: Himaalaya Ki Betiyan","Vasant Ch 4: Kathaputli","Vasant Ch 5: Miti Ki Sondh","Vasant Ch 6: Rakt aur Hamara Sharir","Vasant Ch 7: Paapad Wali Gali","Vasant Ch 8: Shaame — Ek Kisaan","Vasant Ch 9: Chidiya Ki Bacchi","Vasant Ch 10: Apoorv Anubhav","Vasant Ch 11: Raheem Ke Dohe"],
+    ("class8","hindi"):    ["Vasant Ch 1: Dhwani","Vasant Ch 2: Lakh Ki Chudiyan","Vasant Ch 3: Bus Ki Yatra","Vasant Ch 4: Deewanon Ki Hasti","Vasant Ch 5: Chitthiyon Ki Anoothi Duniya","Vasant Ch 6: Bhagwan Ke Dakiye","Vasant Ch 7: Kya Nirash Hua Jaaye","Vasant Ch 8: Yeh Sabse Kathin Samay Nahi","Vasant Ch 9: Kabir Ki Saakhiyan","Vasant Ch 10: Hamare Watan Ki Dharohar"],
+    ("class9","hindi"):    ["Kshitij Ch 1: Do Baillon Ki Katha","Kshitij Ch 2: Rahul Sankrityayan — Lhasa Ki Or","Kshitij Ch 3: Upbhoktavaad Ki Sanskriti","Kshitij Ch 4: Saavanon Ke Geeton Ki Patjhad","Kshitij Ch 5: Nana Sahab Ki Putri — Devi Maina","Kshitij Ch 6: Premchand Ke Phate Joote","Kshitij Ch 7: Mere Bachpan Ke Din","Kshitij Ch 8: Ek Kutta Aur Ek Maina","Kritika Ch 1: Is Jal Pralay Mein","Kritika Ch 2: Mere Sang Ki Auraten","Kritika Ch 3: Reedh Ki Haddi"],
+    ("class10","hindi"):   ["Kshitij Ch 1: Surdas — Pad","Kshitij Ch 2: Tulsidas — Ram-Lakshman-Parshuram Samvad","Kshitij Ch 3: Dev — Savaiya aur Kavitt","Kshitij Ch 4: Jayashankar Prasad — Aatmakathya","Kshitij Ch 5: Suryakant Tripathi Nirala — Utsah, Aat Nahi Rahi","Kshitij Ch 6: Nagarjun — Yah Danturhit Muskan","Kshitij Ch 7: Girdhar — Fasal","Kshitij Ch 8: Rituraj — Ek Kahani Yah Bhi","Kritika Ch 1: Mata Ka Aanchal","Kritika Ch 2: George Pancham Ki Naak","Kritika Ch 3: Sana Sana Haath Jodi"],
+    # ── Social Science ────────────────────────────────────────────────────────
+    ("class6","social science"):["History Ch 1: What, Where, How and When?","History Ch 2: From Hunting-Gathering to Growing Food","History Ch 3: In the Earliest Cities","History Ch 4: What Books and Burials Tell Us","History Ch 5: Kingdoms, Kings and an Early Republic","History Ch 6: New Questions and Ideas","History Ch 7: Ashoka, The Emperor","History Ch 8: Vital Villages, Thriving Towns","History Ch 9: Traders, Kings and Pilgrims","History Ch 10: New Empires and Kingdoms","History Ch 11: Buildings, Paintings and Books","Geography Ch 1: The Earth in the Solar System","Geography Ch 2: Globe — Latitudes and Longitudes","Geography Ch 3: Motions of the Earth","Geography Ch 4: Maps","Geography Ch 5: Major Domains of the Earth","Geography Ch 6: Major Landforms of the Earth","Geography Ch 7: Our Country — India","Geography Ch 8: India — Climate, Vegetation and Wildlife","Civics Ch 1: Understanding Diversity","Civics Ch 2: Diversity and Discrimination","Civics Ch 3: What is Government?","Civics Ch 4: Key Elements of a Democratic Government","Civics Ch 5: Panchayati Raj","Civics Ch 6: Rural Administration","Civics Ch 7: Urban Administration"],
+    ("class7","social science"):["History Ch 1: Tracing Changes Through a Thousand Years","History Ch 2: New Kings and Kingdoms","History Ch 3: The Delhi Sultans","History Ch 4: The Mughal Empire","History Ch 5: Rulers and Buildings","History Ch 6: Towns, Traders and Craftspersons","History Ch 7: Tribes, Nomads and Settled Communities","History Ch 8: Devotional Paths to the Divine","History Ch 9: The Making of Regional Cultures","History Ch 10: Eighteenth-Century Political Formations","Geography Ch 1: Environment","Geography Ch 2: Inside Our Earth","Geography Ch 3: Our Changing Earth","Geography Ch 4: Air","Geography Ch 5: Water","Geography Ch 6: Natural Vegetation and Wildlife","Geography Ch 7: Human Environment — Settlement, Transport and Communication","Geography Ch 8: Human–Environment Interactions","Geography Ch 9: Life in the Deserts","Civics Ch 1: On Equality","Civics Ch 2: Role of the Government in Health","Civics Ch 3: How the State Government Works","Civics Ch 4: Growing Up as Boys and Girls","Civics Ch 5: Women Change the World","Civics Ch 6: Understanding Media","Civics Ch 7: Markets Around Us"],
+    ("class8","social science"):["History Ch 1: How, When and Where","History Ch 2: From Trade to Territory","History Ch 3: Ruling the Countryside","History Ch 4: Tribals, Dikus and the Vision of a Golden Age","History Ch 5: When People Rebel","History Ch 6: Weavers, Iron Smelters and Factory Owners","History Ch 7: Civilising the 'Native', Educating the Nation","History Ch 8: Women, Caste and Reform","History Ch 9: The Making of the National Movement: 1870s–1947","History Ch 10: India After Independence","Geography Ch 1: Resources","Geography Ch 2: Land, Soil, Water, Natural Vegetation and Wildlife","Geography Ch 3: Mineral and Power Resources","Geography Ch 4: Agriculture","Geography Ch 5: Industries","Geography Ch 6: Human Resources","Civics Ch 1: The Indian Constitution","Civics Ch 2: Understanding Secularism","Civics Ch 3: Why Do We Need a Parliament?","Civics Ch 4: Understanding Laws","Civics Ch 5: Judiciary","Civics Ch 6: Understanding Our Criminal Justice System","Civics Ch 7: Understanding Marginalisation","Civics Ch 8: Confronting Marginalisation"],
+    ("class9","social science"):["History Ch 1: The French Revolution","History Ch 2: Socialism in Europe and the Russian Revolution","History Ch 3: Nazism and the Rise of Hitler","History Ch 4: Forest Society and Colonialism","History Ch 5: Pastoralists in the Modern World","Geography Ch 1: India — Size and Location","Geography Ch 2: Physical Features of India","Geography Ch 3: Drainage","Geography Ch 4: Climate","Geography Ch 5: Natural Vegetation and Wildlife","Geography Ch 6: Population","Political Science Ch 1: What is Democracy? Why Democracy?","Political Science Ch 2: Constitutional Design","Political Science Ch 3: Electoral Politics","Political Science Ch 4: Working of Institutions","Political Science Ch 5: Democratic Rights","Economics Ch 1: The Story of Village Palampur","Economics Ch 2: People as Resource","Economics Ch 3: Poverty as a Challenge","Economics Ch 4: Food Security in India"],
+    ("class10","social science"):["History Ch 1: The Rise of Nationalism in Europe","History Ch 2: Nationalism in India","History Ch 3: The Making of a Global World","History Ch 4: The Age of Industrialisation","History Ch 5: Print Culture and the Modern World","Geography Ch 1: Resources and Development","Geography Ch 2: Forest and Wildlife Resources","Geography Ch 3: Water Resources","Geography Ch 4: Agriculture","Geography Ch 5: Minerals and Energy Resources","Geography Ch 6: Manufacturing Industries","Geography Ch 7: Lifelines of National Economy","Political Science Ch 1: Power Sharing","Political Science Ch 2: Federalism","Political Science Ch 3: Democracy and Diversity","Political Science Ch 4: Gender, Religion and Caste","Political Science Ch 5: Popular Struggles and Movements","Economics Ch 1: Development","Economics Ch 2: Sectors of the Indian Economy","Economics Ch 3: Money and Credit","Economics Ch 4: Globalisation and the Indian Economy"],
 }
 
 NCERT_PDF_URLS: Dict[tuple, str] = {
-    ("class6","science"):     "https://ncert.nic.in/textbook/pdf/hesc1dd.pdf",
-    ("class7","science"):     "https://ncert.nic.in/textbook/pdf/hesc2dd.pdf",
-    ("class8","science"):     "https://ncert.nic.in/textbook/pdf/hesc3dd.pdf",
-    ("class9","science"):     "https://ncert.nic.in/textbook/pdf/iesc1dd.pdf",
-    ("class10","science"):    "https://ncert.nic.in/textbook/pdf/jesc101.pdf",
-    ("class11","physics"):    "https://ncert.nic.in/textbook/pdf/leph101.pdf",
-    ("class12","physics"):    "https://ncert.nic.in/textbook/pdf/leph201.pdf",
-    ("class11","chemistry"):  "https://ncert.nic.in/textbook/pdf/lech101.pdf",
-    ("class12","chemistry"):  "https://ncert.nic.in/textbook/pdf/lech201.pdf",
-    ("class11","biology"):    "https://ncert.nic.in/textbook/pdf/lebo101.pdf",
-    ("class12","biology"):    "https://ncert.nic.in/textbook/pdf/lebo201.pdf",
-    ("class6","mathematics"): "https://ncert.nic.in/textbook/pdf/hemh1dd.pdf",
-    ("class7","mathematics"): "https://ncert.nic.in/textbook/pdf/hemh2dd.pdf",
-    ("class8","mathematics"): "https://ncert.nic.in/textbook/pdf/hemh3dd.pdf",
-    ("class9","mathematics"): "https://ncert.nic.in/textbook/pdf/iemh1dd.pdf",
-    ("class10","mathematics"):"https://ncert.nic.in/textbook/pdf/jemh101.pdf",
-    ("class11","mathematics"):"https://ncert.nic.in/textbook/pdf/lemh101.pdf",
-    ("class12","mathematics"):"https://ncert.nic.in/textbook/pdf/lemh201.pdf",
-    ("class6","social science"):"https://ncert.nic.in/textbook/pdf/hess1dd.pdf",
-    ("class9","social science"):"https://ncert.nic.in/textbook/pdf/iess1dd.pdf",
-    ("class10","social science"):"https://ncert.nic.in/textbook/pdf/jess101.pdf",
-    ("class9","english"):     "https://ncert.nic.in/textbook/pdf/ieen1dd.pdf",
-    ("class10","english"):    "https://ncert.nic.in/textbook/pdf/jeff101.pdf",
-    ("class9","hindi"):       "https://ncert.nic.in/textbook/pdf/iehn1dd.pdf",
-    ("class10","hindi"):      "https://ncert.nic.in/textbook/pdf/jhks101.pdf",
-    ("class11","economics"):  "https://ncert.nic.in/textbook/pdf/leec101.pdf",
-    ("class12","economics"):  "https://ncert.nic.in/textbook/pdf/leec201.pdf",
-    ("class12","accountancy"):"https://ncert.nic.in/textbook/pdf/leac201.pdf",
-    ("class11","computer science"):"https://ncert.nic.in/textbook/pdf/lecs101.pdf",
-    ("class12","computer science"):"https://ncert.nic.in/textbook/pdf/lecs201.pdf",
+    # ── Science ──────────────────────────────────────────
+    # Class 6 Science: new 2023-24 "Curiosity" textbook — no direct portal URL yet; Google fallback
+    ("class7","science"):       "https://ncert.nic.in/textbook.php?hesc2=",
+    ("class8","science"):       "https://ncert.nic.in/textbook.php?hesc3=",
+    ("class9","science"):       "https://ncert.nic.in/textbook.php?iesc1=",
+    ("class10","science"):      "https://ncert.nic.in/textbook.php?jesc1=",
+    # ── Physics / Chemistry / Biology ────────────────────
+    ("class11","physics"):      "https://ncert.nic.in/textbook.php?leph1=",
+    ("class12","physics"):      "https://ncert.nic.in/textbook.php?leph2=",
+    ("class11","chemistry"):    "https://ncert.nic.in/textbook.php?lech1=",
+    ("class12","chemistry"):    "https://ncert.nic.in/textbook.php?lech2=",
+    ("class11","biology"):      "https://ncert.nic.in/textbook.php?lebo1=",
+    ("class12","biology"):      "https://ncert.nic.in/textbook.php?lebo2=",
+    # ── Mathematics ──────────────────────────────────────
+    # Class 6 Mathematics: new 2023-24 "Ganita Prakash" textbook — no direct portal URL yet; Google fallback
+    ("class7","mathematics"):   "https://ncert.nic.in/textbook.php?hemh2=",
+    ("class8","mathematics"):   "https://ncert.nic.in/textbook.php?hemh3=",
+    ("class9","mathematics"):   "https://ncert.nic.in/textbook.php?iemh1=",
+    ("class10","mathematics"):  "https://ncert.nic.in/textbook.php?jemh1=",
+    ("class11","mathematics"):  "https://ncert.nic.in/textbook.php?lemh1=",
+    ("class12","mathematics"):  "https://ncert.nic.in/textbook.php?lemh2=",
+    # ── English ──────────────────────────────────────────
+    # Class 6 (Honeysuckle) and Class 7 (Honeycomb): portal URLs return 404 — Google fallback
+    ("class8","english"):       "https://ncert.nic.in/textbook.php?hehd1=",   # Honeydew
+    ("class9","english"):       "https://ncert.nic.in/textbook.php?iebe1=",   # Beehive
+    ("class10","english"):      "https://ncert.nic.in/textbook.php?jeff1=",   # First Flight
+    # ── Hindi ────────────────────────────────────────────
+    ("class6","hindi"):         "https://ncert.nic.in/textbook.php?hhvs1=",   # Vasant Part 1
+    # Class 7 Vasant 2 and Class 8 Vasant 3: portal URLs not found — Google fallback
+    ("class9","hindi"):         "https://ncert.nic.in/textbook.php?ihks1=",   # Kshitij 1
+    ("class10","hindi"):        "https://ncert.nic.in/textbook.php?jhks1=",   # Kshitij 2
+    # ── Social Science ───────────────────────────────────
+    ("class6","social science"):"https://ncert.nic.in/textbook.php?hess1=",
+    ("class7","social science"):"https://ncert.nic.in/textbook.php?hess2=",
+    ("class8","social science"):"https://ncert.nic.in/textbook.php?hess3=",
+    ("class9","social science"):"https://ncert.nic.in/textbook.php?iess1=",
+    ("class10","social science"):"https://ncert.nic.in/textbook.php?jess1=",
+    # ── Senior subjects ──────────────────────────────────
+    ("class11","economics"):    "https://ncert.nic.in/textbook.php?leec1=",
+    ("class12","economics"):    "https://ncert.nic.in/textbook.php?leec2=",
+    ("class12","accountancy"):  "https://ncert.nic.in/textbook.php?leac2=",
+    ("class11","computer science"):"https://ncert.nic.in/textbook.php?lecs1=",
+    ("class12","computer science"):"https://ncert.nic.in/textbook.php?lecs2=",
 }
+
+# Supplementary (second) textbook PDFs for subjects that have two NCERT books
+NCERT_SUPP_PDF_URLS: Dict[tuple, str] = {
+    ("class9",  "english"):  "https://ncert.nic.in/textbook.php?iemo1=",   # Moments Supplementary Reader
+    ("class10", "english"):  "https://ncert.nic.in/textbook.php?jefp1=",   # Footprints without Feet
+    ("class9",  "hindi"):    "https://ncert.nic.in/textbook.php?ihkr1=",   # Kritika Part 1
+    ("class10", "hindi"):    "https://ncert.nic.in/textbook.php?jhkr1=",   # Kritika Part 2
+}
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  DIKSHA API INTEGRATION — Textbooks for ALL Indian Boards
+# ══════════════════════════════════════════════════════════════════════════════
+DIKSHA_SEARCH_URL = "https://diksha.gov.in/api/content/v1/search"
+DIKSHA_HIERARCHY_URL = "https://diksha.gov.in/api/course/v1/hierarchy"
+
+# Map frontend board shortNames → DIKSHA board filter values
+DIKSHA_BOARD_MAP = {
+    "CBSE": "CBSE", "NCERT": "NCERT", "NIOS": "NIOS",
+    "BSEAP": "State (Andhra Pradesh)", "SEBA": "State (Assam)", "AHSEC": "State (Assam)",
+    "BSEB": "State (Bihar)", "CGBSE": "State (Chhattisgarh)", "GBSHSE": "State (Goa)",
+    "GSEB": "State (Gujarat)", "HBSE": "State (Haryana)", "HPBOSE": "State (Himachal Pradesh)",
+    "JAC": "State (Jharkhand)", "KSEEB": "State (Karnataka)", "PUC": "State (Karnataka)",
+    "KBPE": "State (Kerala)", "MPBSE": "State (Madhya Pradesh)", "MSBSHSE": "State (Maharashtra)",
+    "BSEM": "State (Manipur)", "MBOSE": "State (Meghalaya)", "MBSE": "State (Mizoram)",
+    "NBSE": "State (Nagaland)", "BSE": "State (Odisha)", "CHSE": "State (Odisha)",
+    "PSEB": "State (Punjab)", "RBSE": "State (Rajasthan)", "BSSS": "State (Sikkim)",
+    "TNBSE": "State (Tamil Nadu)", "BSETS": "State (Telangana)", "TBSE": "State (Tripura)",
+    "UPMSP": "State (Uttar Pradesh)", "UBSE": "State (Uttarakhand)",
+    "WBBSE": "State (West Bengal)", "WBCHSE": "State (West Bengal)",
+    "JKBOSE": "State (Jammu and Kashmir)", "DoE": "State (Delhi)",
+    "PBSE": "UT (Puducherry)",
+}
+
+# In-memory cache for DIKSHA results (TTL: process lifetime)
+_diksha_cache: Dict[str, Any] = {}
+
+def _diksha_search(filters: dict, limit: int = 20, fields: list = None, facets: list = None) -> dict:
+    """Search DIKSHA content API. Returns parsed JSON response."""
+    req_body: dict = {"request": {"filters": filters, "limit": limit}}
+    if fields:
+        req_body["request"]["fields"] = fields
+    if facets:
+        req_body["request"]["facets"] = facets
+    try:
+        r = _requests.post(DIKSHA_SEARCH_URL, json=req_body, timeout=15)
+        r.raise_for_status()
+        return r.json()
+    except Exception as e:
+        print(f"[DIKSHA] Search error: {e}")
+        return {}
+
+def _diksha_hierarchy(identifier: str) -> dict:
+    """Get textbook hierarchy (chapter tree) from DIKSHA."""
+    cache_key = f"hier_{identifier}"
+    if cache_key in _diksha_cache:
+        return _diksha_cache[cache_key]
+    try:
+        r = _requests.get(f"{DIKSHA_HIERARCHY_URL}/{identifier}", timeout=15)
+        r.raise_for_status()
+        data = r.json()
+        _diksha_cache[cache_key] = data
+        return data
+    except Exception as e:
+        print(f"[DIKSHA] Hierarchy error: {e}")
+        return {}
+
+def _diksha_extract_chapters(hierarchy_content: dict) -> list:
+    """Extract chapter names from DIKSHA hierarchy content node."""
+    children = hierarchy_content.get("children", [])
+    chapters = []
+    ch_num = 0
+    for ch in children:
+        name = ch.get("name", "").strip()
+        if not name:
+            continue
+        # Skip non-chapter nodes (e.g., "eTextBook", "Learning Outcomes", "APPENDIX", "QUESTION BANK", "AUDIO BOOKS")
+        skip = ["etextbook", "e-textbook", "learning outcomes", "appendix", "question bank",
+                "audio books", "teacher resources", "practice set"]
+        if name.lower() in skip:
+            continue
+        ch_num += 1
+        chapters.append(name if name.startswith(("Ch ", "ch ", "Chapter")) else f"Ch {ch_num}: {name}")
+    return chapters
+
+def _diksha_extract_pdf(hierarchy_content: dict) -> str:
+    """Extract the best PDF URL from a DIKSHA hierarchy (book-level or first eTextBook)."""
+    # 1. Check book-level downloadUrl
+    dl = hierarchy_content.get("downloadUrl", "")
+    if dl and dl.endswith((".pdf", ".PDF")):
+        return dl
+    # 2. Look for eTextBook child → PDF leaf
+    def _find_pdf(node):
+        mime = node.get("mimeType", "")
+        if mime == "application/pdf":
+            return node.get("artifactUrl", "")
+        for ch in node.get("children", []):
+            result = _find_pdf(ch)
+            if result:
+                return result
+        return ""
+    for ch in hierarchy_content.get("children", []):
+        name_lower = ch.get("name", "").lower()
+        if "textbook" in name_lower or "e-textbook" in name_lower or "etextbook" in name_lower:
+            pdf = _find_pdf(ch)
+            if pdf:
+                return pdf
+    # 3. Fallback: look for any PDF in the tree
+    return _find_pdf(hierarchy_content)
+
+def _diksha_find_textbooks(board_short: str, class_n: str, subject: str, medium: str = "English") -> list:
+    """Find textbooks from DIKSHA for a given board/class/subject.
+    Returns list of dicts: [{name, identifier, leafNodesCount}]
+    """
+    cache_key = f"books_{board_short}_{class_n}_{subject}_{medium}"
+    if cache_key in _diksha_cache:
+        return _diksha_cache[cache_key]
+
+    diksha_board = DIKSHA_BOARD_MAP.get(board_short, "")
+    if not diksha_board:
+        return []
+
+    # Normalise class format: "Class 10" → "Class 10"
+    grade = class_n if class_n.startswith("Class") else f"Class {class_n}"
+
+    filters = {
+        "contentType": ["TextBook"],
+        "board": [diksha_board],
+        "gradeLevel": [grade],
+        "status": ["Live"],
+    }
+    # Only add medium filter if specified
+    if medium:
+        filters["medium"] = [medium]
+    # Add subject filter — try exact match first
+    if subject:
+        filters["subject"] = [subject]
+
+    data = _diksha_search(filters, limit=10,
+                          fields=["name", "identifier", "leafNodesCount", "subject", "medium"])
+    books = data.get("result", {}).get("content", []) or []
+
+    # If no results with subject filter, try without it
+    if not books and subject:
+        del filters["subject"]
+        data = _diksha_search(filters, limit=20,
+                              fields=["name", "identifier", "leafNodesCount", "subject", "medium"])
+        all_books = data.get("result", {}).get("content", []) or []
+        # Fuzzy match subject — also try reverse containment and first-word match.
+        # IMPORTANT: in this broad search (no subject filter) only accept single-subject
+        # books (len == 1).  Multi-subject compilations like activity workbooks often
+        # have subjects=["English","Science","Mathematics","Odia Language"] and will
+        # match EVERY subject query, causing all subjects to show identical chapters.
+        subj_lower = subject.lower()
+        subj_words = set(subj_lower.split())
+        books = [b for b in all_books
+                 if len(b.get("subject", [])) == 1  # accept only clearly single-subject books
+                 and any(
+                     subj_lower in s.lower() or s.lower() in subj_lower
+                     or bool(subj_words & set(s.lower().split()))
+                     for s in b.get("subject", [])
+                 )]
+        # Do NOT fall back to all_books[:5] — that picks books from unrelated
+        # subjects (e.g. Computer Science when Math was requested). Instead,
+        # return empty and let the caller fall through to LLM generation.
+
+    _diksha_cache[cache_key] = books
+    return books
+
+def _diksha_get_chapters_and_pdf(board_short: str, class_n: str, subject: str, medium: str = "English"):
+    """Full DIKSHA lookup: find textbook → get hierarchy → extract chapters + PDF.
+    Returns (chapters_list, pdf_url, textbook_name) or (None, None, None).
+    """
+    books = _diksha_find_textbooks(board_short, class_n, subject, medium)
+    if not books:
+        return None, None, None
+
+    # Pick best textbook — prefer one with most leaf nodes
+    books.sort(key=lambda b: b.get("leafNodesCount", 0), reverse=True)
+    best = books[0]
+
+    # Reject catch-all reference books that cover many subjects — they match
+    # every query but contain generic content, not a proper subject textbook.
+    # Threshold: > 2 subjects (e.g. a multi-subject Odia workbook with subjects
+    # ["English","Science","Mathematics","Odia Language"] is rejected).
+    if len(best.get("subject", [])) > 2:
+        print(f"[DIKSHA] Rejecting multi-subject book '{best.get('name')}' ({len(best.get('subject',[]))} subjects)")
+        return None, None, None
+
+    # Verify the chosen book's subject metadata matches the requested subject.
+    # DIKSHA can return miscategorised books (e.g. Computer Science when Math was
+    # requested) — discard them so we fall through to the NCERT fallback.
+    subj_lower = subject.lower()
+    subj_words = set(subj_lower.split())
+    book_subjects = [s.lower() for s in best.get("subject", [])]
+    if book_subjects:
+        subject_ok = any(
+            subj_lower in s or s in subj_lower or bool(subj_words & set(s.split()))
+            for s in book_subjects
+        )
+        if not subject_ok:
+            print(f"[DIKSHA] Subject mismatch: requested '{subject}', book subject={book_subjects} — discarding")
+            return None, None, None
+
+    hier = _diksha_hierarchy(best["identifier"])
+    content = hier.get("result", {}).get("content", {})
+    if not content:
+        return None, None, None
+
+    chapters = _diksha_extract_chapters(content)
+    pdf_url = _diksha_extract_pdf(content)
+    return chapters or None, pdf_url or None, best.get("name", "")
+
+# ── DIKSHA REST Endpoints ─────────────────────────────────────────────────────
+@app.get("/api/diksha/boards")
+def diksha_boards():
+    """Return all boards available on DIKSHA with textbook counts."""
+    cache_key = "diksha_all_boards"
+    if cache_key in _diksha_cache:
+        return jsonify(_diksha_cache[cache_key])
+    data = _diksha_search(
+        {"contentType": ["TextBook"], "status": ["Live"]},
+        limit=0, facets=["board"]
+    )
+    facets = data.get("result", {}).get("facets", [{}])
+    boards = facets[0].get("values", []) if facets else []
+    result = {
+        "total": data.get("result", {}).get("count", 0),
+        "boards": [{"name": b["name"], "count": b["count"]} for b in boards]
+    }
+    _diksha_cache[cache_key] = result
+    return jsonify(result)
+
+@app.post("/api/diksha/textbooks")
+def diksha_textbooks():
+    """Search DIKSHA textbooks by board/class/subject/medium."""
+    b = request.json or {}
+    board = b.get("board", "CBSE")
+    grade = b.get("class", "Class 10")
+    subject = b.get("subject", "")
+    medium = b.get("medium", "English")
+
+    books = _diksha_find_textbooks(board, grade, subject, medium)
+    return jsonify({"textbooks": [
+        {"name": bk.get("name", ""), "identifier": bk.get("identifier", ""),
+         "leaves": bk.get("leafNodesCount", 0),
+         "subject": bk.get("subject", []), "medium": bk.get("medium", [])}
+        for bk in books
+    ]})
+
+@app.post("/api/diksha/chapters")
+def diksha_chapters():
+    """Get chapters + PDF URL for a specific DIKSHA textbook (by identifier or search)."""
+    b = request.json or {}
+    identifier = b.get("identifier", "")
+
+    if identifier:
+        hier = _diksha_hierarchy(identifier)
+        content = hier.get("result", {}).get("content", {})
+        chapters = _diksha_extract_chapters(content) if content else []
+        pdf_url = _diksha_extract_pdf(content) if content else ""
+        return jsonify({"chapters": chapters, "pdf_url": pdf_url,
+                        "name": content.get("name", ""), "source": "diksha"})
+
+    # Fallback: search by board/class/subject
+    board = b.get("board", "CBSE")
+    grade = b.get("class", "Class 10")
+    subject = b.get("subject", "")
+    medium = b.get("medium", "English")
+    chapters, pdf_url, name = _diksha_get_chapters_and_pdf(board, grade, subject, medium)
+    return jsonify({
+        "chapters": chapters or [],
+        "pdf_url": pdf_url or "",
+        "name": name or "",
+        "source": "diksha"
+    })
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  FLASK MIDDLEWARE
@@ -3164,13 +4070,14 @@ def login():
     # If the user selected a specific role tab, verify it matches their actual role.
     # Map UI role keys to DB role values
     ROLE_MAP = {
-        "school":      "school_admin",
-        "school_admin":"school_admin",
-        "teacher":     "teacher",
-        "tutor":       "tutor",
-        "student":     "student",
-        "parent":      "parent",
-        "admin":       "admin",
+        "school":          "institute_admin",
+        "institute_admin":    "institute_admin",
+        "institute":       "institute_admin",
+        "institute_admin": "institute_admin",
+        "teacher":         "teacher",
+        "student":         "student",
+        "parent":          "parent",
+        "admin":           "admin",
     }
     if req_role and req_role in ROLE_MAP:
         expected = ROLE_MAP[req_role]
@@ -3189,8 +4096,20 @@ def login():
         "role": u["role"], "created_at": _now(),
         "ip": request.remote_addr or ""
     })
-    db_log(db, u["id"], "login", f"{u['name']} ({u['role']}) signed in")
-    db_save(db)
+    # Save activity log + last_login in background (non-blocking)
+    import threading
+    def _save_activity():
+        try:
+            db2 = db_load()
+            for usr in db2["users"]:
+                if usr["id"] == u["id"]:
+                    usr["last_login"] = _now()
+                    usr["login_count"] = usr.get("login_count", 0) + 1
+                    break
+            db_log(db2, u["id"], "login", f"{u['name']} ({u['role']}) signed in")
+            db_save(db2)
+        except Exception: pass
+    threading.Thread(target=_save_activity, daemon=True).start()
     return jsonify({"token": tok, "user": _safe(u)})
 
 @app.post("/api/auth/signup")
@@ -3212,9 +4131,9 @@ def signup():
         return jsonify({"error": "Enter a valid email address"}), 400
     if len(pw) < 8:
         return jsonify({"error": "Password must be at least 8 characters"}), 400
-    if role not in ("student", "tutor", "teacher", "parent"):
-        # Explicitly blocking admin/school_admin registration as requested
-        return jsonify({"error": "Administrative registration is restricted. Please contact the system administrator."}), 403
+    # institute_admin registered via dedicated /api/auth/register-institute endpoint
+    if role not in ("student", "teacher", "parent"):
+        return jsonify({"error": "To register as an Institute, please use the Institute sign-up. Administrative accounts are restricted."}), 403
 
     # ── OTP verification (required for registration) ──────────────────────────
     if otp:
@@ -3248,6 +4167,69 @@ def signup():
     })
     return jsonify({"token": tok, "user": _safe(u)}), 201
 
+@app.post("/api/auth/register-institute")
+def register_institute():
+    """
+    Dedicated endpoint for Institution sign-up.
+    Creates a new institute_admin account; the institution name is
+    mandatory and will be used to scope all users under that institute.
+    Requires OTP exactly like regular sign-up.
+    """
+    b            = request.json or {}
+    name         = b.get("name", "").strip()
+    email        = b.get("email", "").strip().lower()
+    pw           = b.get("password", "")
+    institution  = b.get("institution", "").strip()
+    phone        = b.get("phone", "").strip()
+    otp          = b.get("otp", "").strip()
+
+    if not name or not email or not pw:
+        return jsonify({"error": "Name, email and password are required"}), 400
+    if not institution:
+        return jsonify({"error": "Institution name is mandatory for Institute registration"}), 400
+    if "@" not in email or "." not in email.split("@")[-1]:
+        return jsonify({"error": "Enter a valid email address"}), 400
+    if len(pw) < 8:
+        return jsonify({"error": "Password must be at least 8 characters"}), 400
+    if not otp:
+        return jsonify({"error": "OTP verification required. Please verify your email first."}), 400
+
+    ok, err = _verify_otp(email, otp)
+    if not ok:
+        return jsonify({"error": err}), 400
+
+    db = db_load()
+
+    # Prevent duplicate email
+    if any(x["email"] == email for x in db["users"]):
+        return jsonify({"error": "An account with this email already exists"}), 409
+
+    # Prevent duplicate institution name (case-insensitive)
+    inst_lower = institution.lower()
+    if any(x.get("institution", "").lower() == inst_lower and x["role"] == "institute_admin"
+           for x in db["users"]):
+        return jsonify({"error": f"An Institute account already exists for '{institution}'. Contact the existing admin."}), 409
+
+    u = {
+        "id": _uid(), "name": name, "email": email,
+        "pw_hash": _hash(pw), "role": "institute_admin",
+        "institution": institution, "phone": phone,
+        "joined": _now()[:10], "docs": 0, "status": "active"
+    }
+    db["users"].append(u)
+    db_log(db, u["id"], "signup", f"{name} registered Institute: {institution}")
+    db_save(db)
+
+    tok = uuid.uuid4().hex
+    TOKENS[tok] = u["id"]
+    _mongo_insert(M_SESSIONS, {
+        "token": tok, "user_id": u["id"],
+        "role": "institute_admin", "created_at": _now(),
+        "ip": request.remote_addr or ""
+    })
+    return jsonify({"token": tok, "user": _safe(u)}), 201
+
+
 @app.post("/api/auth/logout")
 @auth()
 def logout():
@@ -3267,56 +4249,89 @@ def me():
 @app.post("/api/upload")
 @auth()
 def upload():
-    u  = request.user
-    db = db_load()
+    try:
+        u  = request.user
+        db = db_load()
 
-    # ── Per-role upload limit check ───────────────────────────────────────────
-    settings   = db.get("settings", {})
-    role_limit_key = f"max_uploads_{u['role']}"
-    global_limit   = int(settings.get("max_uploads_per_user", 20))
-    role_limit     = int(settings.get(role_limit_key, global_limit))
-    user_docs      = [d for d in db.get("documents", []) if d["owner_id"] == u["id"]]
-    if len(user_docs) >= role_limit:
+        # ── Per-role upload limit check ───────────────────────────────────────────
+        settings   = db.get("settings", {})
+        role_limit_key = f"max_uploads_{u['role']}"
+        global_limit   = int(settings.get("max_uploads_per_user", 20))
+        role_limit     = int(settings.get(role_limit_key, global_limit))
+        user_docs      = [d for d in db.get("documents", []) if d["owner_id"] == u["id"]]
+        if len(user_docs) >= role_limit:
+            return jsonify({
+                "error": f"Upload limit reached ({role_limit} files). "
+                         f"Ask your school admin to increase the limit or delete existing uploads."
+            }), 429
+
+        if "file" not in request.files:
+            return jsonify({"error": "No file provided"}), 400
+        f = request.files["file"]
+        if not f or not f.filename:
+            return jsonify({"error": "No file selected"}), 400
+        if not _allowed(f.filename):
+            ext_given = f.filename.rsplit(".", 1)[-1].lower() if "." in f.filename else "unknown"
+            return jsonify({"error": f"Unsupported file type (.{ext_given}). Allowed: PDF, DOCX, TXT, MD, MP3, MP4, WAV, M4A"}), 400
+
+        ext  = f.filename.rsplit(".", 1)[1].lower()
+        fn   = secure_filename(f.filename)
+        did  = uuid.uuid4().hex[:10]
+        udir = UPL_DIR / u["id"]
+        udir.mkdir(parents=True, exist_ok=True)
+        spath = udir / f"{did}.{ext}"
+        f.save(str(spath))
+
+        chunks, chapters = _index_doc(spath, did, ext)
+        syl_name = request.form.get("syllabus_name", Path(fn).stem)
+        ocr_queued = (chunks == -1)
+        if ocr_queued:
+            # Scanned PDF: start background OCR thread, save doc with chunks=0 for now
+            import threading
+            t = threading.Thread(target=_run_ocr_background, args=(spath, did, syl_name, fn, u["id"]), daemon=True)
+            t.start()
+            chunks, chapters = 0, []
+
+        db = db_load()
+        doc = {
+            "id": did, "owner_id": u["id"], "name": fn, "ext": ext,
+            "type": _dtype(ext), "size": spath.stat().st_size,
+            "path": str(spath), "uploaded_at": _now(),
+            "chunks": chunks, "chapters": chapters
+        }
+        db["documents"].append(doc)
+        db_log(db, u["id"], "upload", f"Uploaded {fn}")
+        db_save(db)
+
+        syllabi_registry[did] = {
+            "id": did, "name": syl_name, "files": [fn],
+            "chunks": chunks, "chapters": chapters,
+            "owner_id": u["id"], "created_at": _now()
+        }
+        _save_syllabi()
         return jsonify({
-            "error": f"Upload limit reached ({role_limit} files). "
-                     f"Ask your school admin to increase the limit or delete existing uploads."
-        }), 429
+            "doc": doc, "syllabus_id": did, "syllabus_name": syl_name,
+            "chunks": chunks, "chapters": chapters,
+            "ocr_queued": ocr_queued
+        }), 201
 
-    if "file" not in request.files:
-        return jsonify({"error": "No file provided"}), 400
-    f = request.files["file"]
-    if not f or not _allowed(f.filename):
-        return jsonify({"error": "Unsupported file type"}), 400
+    except Exception as e:
+        import traceback
+        print(f"[UPLOAD ERROR] {e}")
+        traceback.print_exc()
+        return jsonify({"error": f"Upload failed: {str(e)}"}), 500
 
-    ext  = f.filename.rsplit(".", 1)[1].lower()
-    fn   = secure_filename(f.filename)
-    did  = uuid.uuid4().hex[:10]
-    udir = UPL_DIR / u["id"]
-    udir.mkdir(exist_ok=True)
-    spath = udir / f"{did}.{ext}"
-    f.save(str(spath))
-
-    chunks, chapters = _index_doc(spath, did, ext)
-    syl_name = request.form.get("syllabus_name", Path(fn).stem)
-
+@app.get("/api/documents/<did>/ocr-status")
+@auth()
+def doc_ocr_status(did):
+    status = ocr_status.get(did, "ready")  # default ready for non-OCR docs
+    chunks = 0
     db = db_load()
-    doc = {
-        "id": did, "owner_id": u["id"], "name": fn, "ext": ext,
-        "type": _dtype(ext), "size": spath.stat().st_size,
-        "path": str(spath), "uploaded_at": _now(),
-        "chunks": chunks, "chapters": chapters
-    }
-    db["documents"].append(doc)
-    db_log(db, u["id"], "upload", f"Uploaded {fn}")
-    db_save(db)
+    doc = next((d for d in db.get("documents", []) if d["id"] == did), None)
+    if doc:
+        chunks = doc.get("chunks", 0)
+    return jsonify({"status": status, "chunks": chunks})
 
-    syllabi_registry[did] = {
-        "id": did, "name": syl_name, "files": [fn],
-        "chunks": chunks, "chapters": chapters,
-        "owner_id": u["id"], "created_at": _now()
-    }
-    _save_syllabi()
-    return jsonify({"doc": doc, "syllabus_id": did, "chunks": chunks, "chapters": chapters}), 201
 
 @app.get("/api/documents")
 @auth()
@@ -3325,7 +4340,7 @@ def list_docs():
     u  = request.user
     # Admin sees all documents from all users
     # Every other role sees ONLY their own documents — strict isolation
-    if u["role"] in ("admin", "school_admin"):
+    if u["role"] in ("admin", "institute_admin"):
         docs = db["documents"]
     else:
         docs = [d for d in db["documents"] if d["owner_id"] == u["id"]]
@@ -3362,7 +4377,7 @@ def list_syllabi():
     u     = request.user
     items = list(syllabi_registry.values())
 
-    if u["role"] in ("admin", "school_admin"):
+    if u["role"] in ("admin", "institute_admin"):
         # Admin sees everything
         pass
     else:
@@ -3412,7 +4427,7 @@ def delete_syllabus(syllabus_id):
     if not s:
         return jsonify({"error": "Not found"}), 404
     # Only the owner or admin can delete
-    if s.get("owner_id") and s["owner_id"] != u["id"] and u["role"] not in ("admin", "school_admin"):
+    if s.get("owner_id") and s["owner_id"] != u["id"] and u["role"] not in ("admin", "institute_admin"):
         return jsonify({"error": "Forbidden — you can only remove your own syllabi"}), 403
     syllabi_registry.pop(syllabus_id, None)
     qa_chains.pop(syllabus_id, None)
@@ -3440,6 +4455,7 @@ def get_curriculum_metadata():
 
 @app.post("/api/curriculum/load")
 @auth()
+@quota('curriculum_load')
 def load_curriculum_book():
     b       = request.json or {}
     state   = b.get("state")
@@ -3476,7 +4492,8 @@ def load_curriculum_book():
     if not chapters:
         chapters = [f"Chapter {i}: Topic {i}" for i in range(1, 8)]
 
-    pdf_url = NCERT_PDF_URLS.get((class_key, subj_key), "")
+    pdf_url      = NCERT_PDF_URLS.get((class_key, subj_key), "")
+    supp_pdf_url = NCERT_SUPP_PDF_URLS.get((class_key, subj_key), "")
 
     syllabi_registry[did] = {
         "id": did,
@@ -3485,12 +4502,13 @@ def load_curriculum_book():
         "chunks": 100, "chapters": chapters,
         "owner_id": u["id"],        # ← always scoped to this user
         "created_at": _now(),
-        "pdf_url": pdf_url
+        "pdf_url": pdf_url, "supp_pdf_url": supp_pdf_url
     }
     _save_syllabi()
     return jsonify({
         "syllabus_id": did, "chapters": chapters,
-        "name": syllabi_registry[did]["name"], "pdf_url": pdf_url
+        "name": syllabi_registry[did]["name"], "pdf_url": pdf_url,
+        "supp_pdf_url": supp_pdf_url
     })
 
 @app.post("/api/curriculum/subjects")
@@ -3513,6 +4531,7 @@ def get_curriculum_chapters():
     board   = b.get("board", "CBSE")
     class_n = b.get("class", "Class 10")
     subject = b.get("subject", "Mathematics")
+    medium  = b.get("medium", "English")
     u       = request.user
 
     # User-scoped ID — prevents cross-user syllabus leakage
@@ -3524,33 +4543,91 @@ def get_curriculum_chapters():
     class_key = class_n.lower().replace(" ", "")
     subj_key  = subject.lower().strip()
 
-    chapters = CHAPTERS_DB.get((class_key, subj_key))
+    # CISCE boards (ICSE/ISC) are private — not on DIKSHA
+    _is_cisce  = board in ("ICSE", "ISC")
+    # Odisha state-board textbooks on DIKSHA are published by SCERT Odisha
+    _is_odisha = board in ("BSE", "CHSE")
+    # Only national/NCERT boards use the hardcoded CHAPTERS_DB and NCERT PDF URLs.
+    # State boards must always go through DIKSHA so they get their own textbooks.
+    _NCERT_BOARDS = {"CBSE", "NIOS", "NCERT", "DoE", "IB", "CBSE-AP"}
+
+    source = "local"
+    if board in _NCERT_BOARDS:
+        chapters     = CHAPTERS_DB.get((class_key, subj_key))
+        pdf_url      = NCERT_PDF_URLS.get((class_key, subj_key), "")
+        supp_pdf_url = NCERT_SUPP_PDF_URLS.get((class_key, subj_key), "")
+    else:
+        chapters     = None
+        pdf_url      = ""
+        supp_pdf_url = ""
+
+    # For CBSE/NCERT with known chapters, use local data (fastest).
+    # CISCE boards (ICSE/ISC) bypass DIKSHA — their content is not on DIKSHA.
+    if not chapters and not _is_cisce:
+        # Try DIKSHA for state boards and any unknown combo
+        try:
+            dk_chapters, dk_pdf, dk_name = _diksha_get_chapters_and_pdf(
+                board, class_n, subject, medium
+            )
+            if dk_chapters:
+                chapters = dk_chapters
+                # Odisha state-board books on DIKSHA are SCERT publications
+                source = "scert" if _is_odisha else "diksha"
+                if dk_pdf:
+                    pdf_url = dk_pdf
+                print(f"[DIKSHA] Found {len(chapters)} chapters for {board} {class_n} {subject}")
+        except Exception as e:
+            print(f"[DIKSHA] Fallback error: {e}")
+
+    # ── NCERT fallback ─────────────────────────────────────────────────────
+    # When DIKSHA has no data (or returned a wrong-subject book that was
+    # discarded), use NCERT chapters + PDF.  Most Indian state boards follow
+    # the same NCERT syllabus for core subjects (Math, Science, English, etc.)
+    # so this gives the student meaningful content even for state-board selections.
+    if not chapters and not _is_cisce:
+        ncert_chs = CHAPTERS_DB.get((class_key, subj_key))
+        ncert_pdf = NCERT_PDF_URLS.get((class_key, subj_key), "")
+        if ncert_chs:
+            chapters = ncert_chs
+            pdf_url  = ncert_pdf
+            source   = "ncert_fallback"
+            print(f"[NCERT fallback] Using NCERT data for {board} {class_n} {subject}")
+
+    # Final fallback: LLM generation
     if not chapters:
         try:
+            board_ctx = "CISCE (ICSE/ISC board)" if _is_cisce else board
             result = _llm_json(
-                f"List exact chapters for '{board}' '{subject}' {class_n} India. JSON array only.",
+                f"List exact chapters for '{board_ctx}' '{subject}' {class_n} India. JSON array only.",
                 temperature=0.1, mini=True
             )
             if isinstance(result, list):
                 chapters = [str(c).strip() for c in result]
+                source = "cisce" if _is_cisce else "llm"
         except Exception:
             chapters = [f"Chapter {i}" for i in range(1, 8)]
-
-    pdf_url = NCERT_PDF_URLS.get((class_key, subj_key), "")
+            source = "fallback"
 
     # Create or update in registry — always with this user as owner
     syllabi_registry[did] = {
         "id": did,
         "name": f"{board} {class_n} — {subject}",
         "chunks": 100, "chapters": chapters,
-        "owner_id": u["id"], "created_at": _now(), "pdf_url": pdf_url
+        "owner_id": u["id"], "created_at": _now(), "pdf_url": pdf_url,
+        "supp_pdf_url": supp_pdf_url,
+        # Stored explicitly so question-gen endpoints can enforce class-level accuracy
+        "board": board,
+        "class_name": class_n,
+        "subject": subject,
     }
     _save_syllabi()
     return jsonify({
         "syllabus_id": did,
         "name": syllabi_registry[did]["name"],
         "chapters": chapters,
-        "pdf_url": pdf_url
+        "pdf_url": pdf_url,
+        "supp_pdf_url": supp_pdf_url,
+        "source": source
     })
 
 # ── UK Curriculum Endpoints ───────────────────────────────────────────────────
@@ -3573,6 +4650,7 @@ def uk_topics():
 
 @app.post("/api/uk-curriculum/<tool>")
 @auth()
+@quota('uk_curriculum')
 def uk_tool(tool):
     b = request.json or {}
     year = b.get("year","Year 10"); subject = b.get("subject","Mathematics")
@@ -3584,6 +4662,7 @@ def uk_tool(tool):
 # ── Summarise / Flashcards / Questions / Audio ────────────────────────────────
 @app.post("/api/summarise")
 @auth()
+@quota('summarise')
 def summarise_chapter():
     b = request.json or {}
     sid     = b.get("syllabus_id")
@@ -3604,14 +4683,11 @@ def summarise_chapter():
         ctx = (f"Provide a comprehensive 10-point explanation about '{topic}' from the "
                f"'{s_info.get('name', subject)}' curriculum. "
                f"Cover: introduction, core concepts, key facts, examples, applications, and summary.")
-    regional_langs = ["odia","kannada","hindi","telugu","gujarati","marathi","bengali","punjabi","tamil","malayalam"]
-    is_regional    = any(lang in subject for lang in regional_langs)
-    prompt = (REGIONAL_SUMMARISE_PROMPT.replace("{language}", subject.title()).replace("{context}", ctx)
-              if is_regional else SUMMARISE_PROMPT.replace("{context}", ctx))
-    return jsonify({"summary": _llm_text(prompt)})
+    return jsonify({"summary": _generate_summary_with_fallback(ctx, topic, subject, language=subject)})
 
 @app.post("/api/flashcards")
 @auth()
+@quota('flashcards')
 def generate_flashcards():
     b = request.json or {}
     sid     = b.get("syllabus_id")
@@ -3645,13 +4721,23 @@ def generate_flashcards():
 
 @app.post("/api/curriculum/<tool>")
 @auth()
+@quota('curriculum_tool')
 def curriculum_tool(tool):
     b = request.json or {}
     sid      = b.get("syllabus_id")
     subject  = b.get("subject", "")
+    board    = b.get("board", "")
+    class_n  = b.get("class", "")
     chapters = b.get("chapters", [])
     topic    = b.get("topic") or (", ".join(chapters[:3]) if chapters else subject)
-    fc_count = int(b.get("flashcard_count", 10))
+    try:
+        fc_count = int(b.get("flashcard_count", 10))
+    except (ValueError, TypeError):
+        fc_count = 10
+    try:
+        point_count = max(1, min(20, int(b.get("point_count", 10))))
+    except (ValueError, TypeError):
+        point_count = 10
     if not sid:
         return jsonify({"error": "syllabus_id required"}), 400
     vs  = _load_vs(sid)
@@ -3667,7 +4753,14 @@ def curriculum_tool(tool):
         ctx = (f"You are an expert on the Indian school curriculum. "
                f"Provide detailed educational content for '{topic or subject}' "
                f"from '{s.get('name', subject)}'. Cover all key concepts, examples, and facts.")
-    return _run_tool(tool, ctx, topic or subject, subject, fc_count=fc_count)
+    # Keep generation anchored to the user's actual board/class selection.
+    if board or class_n:
+        ctx = f"Board: {board or 'Unknown'}\nClass: {class_n or 'Unknown'}\nSubject: {subject or 'Unknown'}\n\n{ctx}"
+    try:
+        return _run_tool(tool, ctx, topic or subject, subject, fc_count=fc_count, point_count=point_count)
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        return jsonify({"error": f"AI generation failed: {e}"}), 500
 
 AUDIO_LESSON_PROMPT = """You are an expert Indian school teacher creating an audio lesson about: {topic}
 Subject: {subject}
@@ -3695,11 +4788,11 @@ Context from textbook: {context}
 
 Return ONLY the JSON object, no markdown:"""
 
-def _run_tool(tool: str, ctx: str, topic: str, subject: str, fc_count: int = 10):
+def _run_tool(tool: str, ctx: str, topic: str, subject: str, fc_count: int = 10, point_count: int = 10):
     """Shared dispatcher for summarise / flashcards / questions / audio / video."""
 
     if tool == "summarise":
-        summary = _llm_text(SUMMARISE_PROMPT.replace("{context}", ctx))
+        summary = _generate_summary_with_fallback(ctx, topic, subject, point_count=point_count)
         return jsonify({"summary": summary})
 
     if tool == "flashcards":
@@ -3782,6 +4875,7 @@ def _run_tool(tool: str, ctx: str, topic: str, subject: str, fc_count: int = 10)
 # ── Chat ──────────────────────────────────────────────────────────────────────
 @app.post("/api/chat")
 @auth()
+@quota('chat')
 def chat():
     b           = request.json or {}
     question    = b.get("message", b.get("question", "")).strip()
@@ -3806,13 +4900,17 @@ def chat():
             })
         except Exception as e:
             print(f"[CHAT] Chain error: {e}")
+            import traceback; traceback.print_exc()
+            # Fall through to general fallback instead of returning nothing
 
-    # Cross-syllabus global search
+    # Cross-syllabus global search (only searches already-cached vector stores)
     if not syllabus_id:
         all_ctx, all_src = [], set()
         for sid, info in syllabi_registry.items():
+            if sid not in vector_stores:
+                continue  # skip uncached — loading from disk re-embeds and is too slow
             try:
-                vs = _load_vs(sid)
+                vs = vector_stores[sid]
                 if vs and hasattr(vs, "similarity_search"):
                     docs = vs.similarity_search(question, k=2)
                     if docs:
@@ -3825,17 +4923,22 @@ def chat():
             prompt = f"Context from multiple sources:\n\n{chr(10).join(all_ctx)}\n\nQuestion: {question}\n\nAnswer based on the context:"
             return jsonify({"answer": _llm_text(prompt), "sources": list(all_src), "syllabus_id": "global"})
 
-    # General fallback
+    # General fallback (also reached when chain fails for a specific syllabus)
     try:
-        sys_msg = SystemMessage(content=f"You are a helpful AI study assistant. The user is a {u.get('role','student')}. Be helpful and educational.")
+        syl_ctx = ""
+        if syllabus_id:
+            s = syllabi_registry.get(syllabus_id, {})
+            syl_ctx = f" The student has selected: {s.get('name', syllabus_id)}."
+        sys_msg = SystemMessage(content=f"You are a helpful AI study assistant.{syl_ctx} The user is a {u.get('role','student')}. Be helpful and educational.")
         res = _get_llm(mini=True).invoke([sys_msg, HumanMessage(content=question)])
-        return jsonify({"answer": res.content, "sources": [], "syllabus_id": ""})
+        return jsonify({"answer": res.content, "sources": [], "syllabus_id": syllabus_id or ""})
     except Exception as e:
         return jsonify({"error": f"AI error: {e}"}), 500
 
 # ── Mentor / Video Session ────────────────────────────────────────────────────
 @app.post("/api/mentor-session")
 @auth()
+@quota('video_explanation')
 def video_explanation():
     b   = request.json or {}
     sid = b.get("syllabus_id", "")
@@ -3863,6 +4966,7 @@ def video_explanation():
 # ══════════════════════════════════════════════════════════════════════════════
 @app.post("/api/generate-questions")
 @auth()
+@quota('generate_questions')
 def generate_questions():
     data = request.json or {}
     sid         = data.get("syllabus_id", "").strip()
@@ -3906,10 +5010,17 @@ def generate_questions():
             s_name = syllabi_registry.get(sid, {}).get("name", "General Knowledge")
             ctx    = f"Generate high-quality questions for '{s_name}' on: {topic_str}."
 
+        syl_meta2   = syllabi_registry.get(sid, {})
+        q_board     = data.get("board",      syl_meta2.get("board",      "")) or "CBSE"
+        q_class     = data.get("class_name", syl_meta2.get("class_name",
+                          data.get("class",  syl_meta2.get("class", "")))) or "the appropriate class"
+        q_subject   = data.get("subject",    syl_meta2.get("subject",    subject)) or "the subject"
+
         base  = REGIONAL_MIXED_QUESTION_GEN_PROMPT.replace("{language}", subject.title()) if is_regional else MIXED_QUESTION_GEN_PROMPT
         prompt= base.replace("{context}", ctx).replace("{topic}", topic_str).format(
             total_count=total, objective_count=obj_count, subjective_count=subj_count,
-            easy_count=easy_c, medium_count=medium_c, hard_count=hard_c
+            easy_count=easy_c, medium_count=medium_c, hard_count=hard_c,
+            board=q_board, class_level=q_class, subject=q_subject,
         )
         questions = _llm_json(prompt, temperature=0.2)
         if isinstance(questions, dict) and "questions" in questions:
@@ -4008,7 +5119,7 @@ def list_exams():
         exams = [e.copy() for e in exams if e.get("owner_id") == u["id"]]
         for e in exams:
             e["questions"] = [{k: v for k, v in q.items() if k not in ("answer","valid_answers","explanation","answer_key_points","evaluation_rubric")} for q in e.get("questions", [])]
-    elif u["role"] not in ("school_admin", "admin"):
+    elif u["role"] not in ("institute_admin", "admin"):
         exams = [e for e in exams if e.get("owner_id") == u["id"]]
     return jsonify({"exams": exams})
 
@@ -4018,7 +5129,6 @@ def list_exams():
 def list_exams_alias():
     """GET /api/exams — alias for GET /api/questions (returns all saved exams)."""
     return list_exams()
-
 
 @app.post("/api/exams/save")
 @auth()
@@ -4151,12 +5261,12 @@ def get_exam(exam_id):
     return jsonify(e)
 
 @app.delete("/api/exams/<exam_id>")
-@auth(roles=["tutor","teacher","school_admin","admin"])
+@auth(roles=["tutor","teacher","institute_admin","admin"])
 def delete_exam(exam_id):
     u = request.user
     if exam_id not in exams_registry:
         return jsonify({"error": "Not found"}), 404
-    if u["role"] not in ("school_admin","admin") and exams_registry[exam_id].get("owner_id") != u["id"]:
+    if u["role"] not in ("institute_admin","admin") and exams_registry[exam_id].get("owner_id") != u["id"]:
         return jsonify({"error": "Forbidden"}), 403
     exams_registry.pop(exam_id, None)
     if not IS_VERCEL:
@@ -4167,7 +5277,7 @@ def delete_exam(exam_id):
     return jsonify({"ok": True})
 
 @app.get("/api/exams/<exam_id>/analytics")
-@auth(roles=["tutor","teacher","school_admin","admin"])
+@auth(roles=["tutor","teacher","institute_admin","admin"])
 def get_exam_analytics(exam_id):
     evals = [v for v in evaluations_registry.values() if v.get("exam_id") == exam_id]
     if not evals:
@@ -4198,7 +5308,7 @@ def get_exam_analytics(exam_id):
 # ══════════════════════════════════════════════════════════════════════════════
 
 @app.get("/api/exams/<exam_id>/answer-key")
-@auth(roles=["teacher", "tutor", "school_admin", "admin"])
+@auth(roles=["teacher", "tutor", "institute_admin", "admin"])
 def download_answer_key(exam_id):
     """
     Generate and return the ANSWER KEY PDF.
@@ -4221,7 +5331,6 @@ def download_answer_key(exam_id):
         mimetype="application/pdf",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'}
     )
-
 
 @app.get("/api/exams/<exam_id>/answer-sheet")
 @auth()
@@ -4248,7 +5357,6 @@ def download_answer_sheet(exam_id):
         headers={"Content-Disposition": f'attachment; filename="{filename}"'}
     )
 
-
 @app.get("/api/exams/<exam_id>/question-paper")
 @auth()
 def download_question_paper(exam_id):
@@ -4273,8 +5381,6 @@ def download_question_paper(exam_id):
         mimetype="application/pdf",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'}
     )
-
-
 
 @app.get("/api/exams/<exam_id>/combined-print")
 @auth()
@@ -4338,115 +5444,220 @@ def _load_exam(exam_id: str) -> Optional[dict]:
 # ── Multi-student PDF splitter using GPT-4o vision ───────────────────────────
 def _split_multi_student_pdf(pdf_path: str, exam_questions: list = None) -> list:
     """
-    Use GPT-4o to extract each student's answers from a combined answer-sheet PDF.
-    Returns a list of dicts: [{"student_name": "", "roll_no": "", "answers": {1: "...", ...}}]
+    Identify per-student sections in a combined answer-sheet PDF.
+    Strategy:
+      1. Text extraction (for typed/digital PDFs)
+      2. Per-page vision analysis — each page is classified individually to detect
+         whether it starts a new student's answer sheet (Q1 restart or new header)
+      3. All-pages-at-once vision fallback if per-page analysis finds no boundaries
+    Returns list of dicts: [{"student_name": "", "roll_no": "", "page_indices": [...]}]
     """
-    import base64, io
+    import base64, io as _io
+    import fitz as _fitz
+    from PIL import Image as _PILImage
 
-    prompt = """This PDF contains answer sheets from MULTIPLE students.
-For each student you can identify, extract:
-1. Their name (from header or written at top)
-2. Their roll number (if present)
-3. Their answers in format Q<number>: <answer>
+    # ── Load pages as images ──────────────────────────────────────────────────
+    try:
+        _doc = _fitz.open(pdf_path)
+        n_pages = len(_doc)
+        images = []
+        for p in _doc:
+            pix = p.get_pixmap(dpi=150)
+            images.append(_PILImage.frombytes("RGB", [pix.width, pix.height], pix.samples))
+        _doc.close()
+    except Exception as _load_err:
+        print(f"[MULTI-SPLIT] PDF→image failed: {_load_err}")
+        return [{"student_name": "Student 1", "roll_no": "", "page_indices": [0]}]
 
-Return ONLY a valid JSON array like:
-[
-  {
-    "student_name": "Ravi Kumar",
-    "roll_no": "101",
-    "raw_text": "Q1: B  Q2: photosynthesis  Q3: Newton's first law..."
-  }
-]
+    all_pages = list(range(n_pages))
 
-If you cannot identify separate students, return a single entry with student_name "Student 1".
-Return ONLY the JSON array, nothing else."""
+    if n_pages <= 1:
+        return [{"student_name": "Student 1", "roll_no": "", "page_indices": all_pages}]
+
+    # ── Text extraction (typed/printed PDFs) ──────────────────────────────────
+    try:
+        import pypdf
+        _rdr = pypdf.PdfReader(pdf_path)
+        all_text = "\n\n--- PAGE BREAK ---\n\n".join(
+            p.extract_text() for p in _rdr.pages
+            if (p.extract_text() or "").strip()
+        )
+    except Exception:
+        all_text = ""
+
+    if all_text:
+        _tp = (
+            f"Text from a combined answer sheet PDF:\n{all_text[:6000]}\n\n"
+            "List each student with their pages (0-indexed). Return JSON array:\n"
+            '[{"student_name":"...","roll_no":"...","page_indices":[0,1]},...]'
+        )
+        _tr = _llm_json(_tp, temperature=0.1, mini=True)
+        if isinstance(_tr, list) and _tr:
+            for _e in _tr:
+                _e.setdefault("page_indices", all_pages)
+            return _tr
+
+    client = _oai.OpenAI(api_key=OPENAI_API_KEY)
+
+    # Determine the first question number from exam metadata (default 1)
+    first_q_no = 1
+    if exam_questions:
+        _qnos = [q.get("question_no", q.get("q_no", 0)) for q in exam_questions]
+        _qnos = [n for n in _qnos if isinstance(n, int) and n > 0]
+        if _qnos:
+            first_q_no = min(_qnos)
+
+    # ── Per-page boundary detection ───────────────────────────────────────────
+    # Analyze EACH page independently with gpt-4o-mini to determine:
+    #   • student name/roll at top (if any)
+    #   • whether this page is the start of a new student's sheet
+    #     (detected via: Q1 restart, new header area, visible divider, etc.)
+    from PIL import ImageStat as _PILStat
+    page_roles = []
+    for _i, _img in enumerate(images[:20]):
+        # ── Pixel-based blank detection (cheap, no API call) ─────────────────
+        try:
+            _pix_std = _PILStat.Stat(_img.convert('L')).stddev[0]
+        except Exception:
+            _pix_std = 999.0
+        if _pix_std < 22:
+            page_roles.append({"page": _i, "is_blank": True, "student_name": "",
+                "roll_no": "", "first_q_visible": None, "starts_new_sheet": False})
+            print(f"[MULTI-SPLIT] Page {_i}: BLANK (pixel_std={_pix_std:.1f}) — skipped")
+            continue
+        _buf = _io.BytesIO()
+        _img.save(_buf, format="PNG")
+        _b64 = base64.b64encode(_buf.getvalue()).decode()
+        _pp = (
+            f"This is page {_i} of a scanned multi-student answer sheet PDF.\n"
+            "Look at the ENTIRE page.\n\n"
+            "Return ONLY this JSON object (no extra text):\n"
+            '{"is_blank":false,"student_name":"name or empty","roll_no":"roll or empty",'
+            f'"first_q_visible":null,"starts_new_sheet":false}}\n\n'
+            "Definitions:\n"
+            "  is_blank — true if the page is completely blank or nearly blank (no student writing, no questions, no answers)\n"
+            "  student_name — any name written at the very top header area (empty string if none)\n"
+            "  roll_no — any roll/admission/ID number at the top header area (empty string if none)\n"
+            f"  first_q_visible — the SMALLEST question number visible on this page (integer, or null if none visible)\n"
+            f"  starts_new_sheet — true ONLY if this page CLEARLY begins a new student's section AND is NOT blank:\n"
+            f"    • earliest question on this page is Q{first_q_no} (answer sheet starts fresh), OR\n"
+            "    • there is a visible student name/roll header at the top\n"
+            "  NOTE: if is_blank is true, starts_new_sheet MUST be false"
+        )
+        try:
+            _resp = client.chat.completions.create(
+                model="gpt-4o-mini",
+                temperature=0.0,
+                max_tokens=120,
+                messages=[{"role": "user", "content": [
+                    {"type": "text", "text": _pp},
+                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{_b64}", "detail": "high"}},
+                ]}]
+            )
+            _role = _clean_json(_resp.choices[0].message.content)
+            if not isinstance(_role, dict):
+                _role = {}
+        except Exception as _pe:
+            print(f"[MULTI-SPLIT] Page {_i} analysis error: {_pe}")
+            _role = {}
+        _role["page"] = _i
+        page_roles.append(_role)
+        print(f"[MULTI-SPLIT] Page {_i}: {_role}")
+
+    # ── Find boundary pages ───────────────────────────────────────────────────
+    blank_pages = {_r["page"] for _r in page_roles if _r.get("is_blank")}
+    if blank_pages:
+        print(f"[MULTI-SPLIT] Blank pages (skipped): {sorted(blank_pages)}")
+
+    boundaries = []
+    for _r in page_roles:
+        if _r.get("is_blank"):
+            continue  # never treat a blank page as a student boundary
+        _starts = _r.get("starts_new_sheet")
+        _fqv = _r.get("first_q_visible")
+        _is_boundary = (
+            _starts is True
+            or (isinstance(_fqv, (int, float)) and int(_fqv) <= first_q_no)
+        )
+        if _is_boundary:
+            boundaries.append(_r)
+
+    print(f"[MULTI-SPLIT] Boundary pages: {[b['page'] for b in boundaries]}")
+
+    # ── Group pages into per-student sections ─────────────────────────────────
+    if boundaries:
+        result = []
+        _student_seq = 0
+        for _bi, _b in enumerate(boundaries):
+            _sp = _b["page"]
+            _ep = boundaries[_bi + 1]["page"] - 1 if _bi + 1 < len(boundaries) else n_pages - 1
+            # Exclude blank pages from this student's pages
+            _pages = [p for p in range(_sp, _ep + 1) if p not in blank_pages]
+            if not _pages:
+                print(f"[MULTI-SPLIT] Boundary page {_sp} has no non-blank pages — skipping")
+                continue
+            _student_seq += 1
+            _name = (_b.get("student_name") or "").strip() or f"Student {_student_seq}"
+            _roll = (_b.get("roll_no") or "").strip() or str(_student_seq)
+            result.append({
+                "student_name": _name,
+                "roll_no": _roll,
+                "page_indices": _pages,
+            })
+        if result:
+            return result
+
+    # ── Fallback: all-pages-at-once vision ────────────────────────────────────
+    # Per-page analysis found no boundaries — send all pages together with a
+    # more aggressive prompt that avoids the "single student" fallback.
+    print("[MULTI-SPLIT] No per-page boundaries found — trying all-at-once vision")
+    _parts = [{"type": "text", "text": (
+        "These are ALL pages of a scanned answer sheet PDF. "
+        "MULTIPLE students submitted their answers in this file.\n\n"
+        "Your task: identify EVERY student and which pages belong to them.\n"
+        "Look for: student names/roll numbers at page tops, question numbering that "
+        "restarts from Q1 (indicating a new student's sheet), visual separators.\n\n"
+        "IMPORTANT: If you see the same question repeated on multiple pages starting "
+        f"from Q{first_q_no}, those pages belong to DIFFERENT students — do not merge them.\n\n"
+        "Return ONLY a JSON array (no other text):\n"
+        '[{"student_name":"Ravi Kumar","roll_no":"101","page_indices":[0,1]},'
+        '{"student_name":"Priya Singh","roll_no":"102","page_indices":[2,3]}]'
+    )}]
+    for _idx, _img in enumerate(images[:20]):
+        _buf2 = _io.BytesIO()
+        _img.save(_buf2, format="PNG")
+        _b64_2 = base64.b64encode(_buf2.getvalue()).decode()
+        _parts.append({"type": "text", "text": f"--- Page {_idx} ---"})
+        _parts.append({"type": "image_url", "image_url": {"url": f"data:image/png;base64,{_b64_2}"}})
 
     try:
-        # Convert PDF pages to images for vision API
-        try:
-            import pypdf
-            reader = pypdf.PdfReader(pdf_path)
-            # Extract all text first
-            all_text = "\n\n--- PAGE BREAK ---\n\n".join(
-                page.extract_text() for page in reader.pages if page.extract_text()
-            )
-        except Exception:
-            all_text = ""
-
-        if all_text:
-            # Use text-based extraction first (cheaper)
-            extract_prompt = f"""This is text extracted from a combined answer sheet PDF containing multiple students' answers.
-
-Text content:
-{all_text[:6000]}
-
-{prompt}"""
-            result = _llm_json(extract_prompt, temperature=0.1, mini=True)
-            if isinstance(result, list) and result:
-                return result
-
-        # Fallback: vision-based extraction for scanned PDFs
-        # Convert PDF pages to PNG images — GPT-4o-mini cannot read raw PDF bytes
-        try:
-            from pdf2image import convert_from_path
-            import io as _io
-            images = convert_from_path(pdf_path, dpi=200)
-        except Exception as _conv_err:
-            print(f"[MULTI-SPLIT] pdf2image unavailable: {_conv_err}")
-            return [{"student_name": "Student 1", "roll_no": "1", "raw_text": ""}]
-
-        client = _oai.OpenAI(api_key=OPENAI_API_KEY)
-        all_raw_text_parts = []
-        for img in images:
-            buf = _io.BytesIO()
-            img.save(buf, format="PNG")
-            img_b64 = base64.b64encode(buf.getvalue()).decode()
-            page_resp = client.chat.completions.create(
-                model=OPENAI_MINI,
-                temperature=0.1,
-                messages=[{
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": (
-                            "Extract all student names, roll numbers, and answers from this answer sheet page. "
-                            "Format each answer as Q<number>: <answer>. Include a header line like: "
-                            "Student: <name>  Roll: <number>  then the answers."
-                        )},
-                        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_b64}"}}
-                    ]
-                }]
-            )
-            all_raw_text_parts.append(page_resp.choices[0].message.content)
-
-        combined_text = "\n\n--- PAGE BREAK ---\n\n".join(all_raw_text_parts)
-        # Now ask GPT to structure the combined text into per-student JSON
-        question_ctx = "\n".join(
-            f"Q{q.get('id')}: {str(q.get('question',''))[:60]} [{q.get('type','objective')}]"
-            for q in (exam_questions or [])
-        )
-        structure_resp = client.chat.completions.create(
-            model=OPENAI_MINI,
+        _sr = client.chat.completions.create(
+            model=OPENAI_MODEL,
             temperature=0.1,
-            response_format={"type": "json_object"},
-            messages=[{
-                "role": "user",
-                "content": f"{prompt}\n\nExam questions for context (extract ONLY student answers, NOT these questions):\n{question_ctx}\n\nExtracted text from all pages:\n{combined_text[:6000]}"
-            }]
+            messages=[{"role": "user", "content": _parts}]
         )
-        raw = structure_resp.choices[0].message.content
-        parsed = _clean_json(raw)
-        if isinstance(parsed, list) and parsed:
-            return parsed
-        if isinstance(parsed, dict):
-            for k in ("students", "data", "results"):
-                if isinstance(parsed.get(k), list):
-                    return parsed[k]
-        return [{"student_name": "Student 1", "roll_no": "", "raw_text": combined_text}]
+        _parsed = _clean_json(_sr.choices[0].message.content)
+        if isinstance(_parsed, list) and _parsed:
+            for _e in _parsed:
+                _e.setdefault("page_indices", all_pages)
+            # Reject single-student result only if n_pages > 2
+            # (if GPT-4o still says 1 student for many pages, trust it less)
+            if len(_parsed) > 1 or n_pages <= 2:
+                return _parsed
+        if isinstance(_parsed, dict):
+            for _k in ("students", "data", "results"):
+                if isinstance(_parsed.get(_k), list) and _parsed[_k]:
+                    return _parsed[_k]
+    except Exception as _fe:
+        print(f"[MULTI-SPLIT] All-at-once fallback error: {_fe}")
 
-    except Exception as e:
-        print(f"[MULTI-SPLIT] {e}")
-        # Absolute fallback: treat as single student
-        return [{"student_name": "Student 1", "roll_no": "1", "raw_text": ""}]
+    # ── Last resort: treat each page as a separate student ────────────────────
+    # This handles the case where n_pages = n_students (1 page per student)
+    print("[MULTI-SPLIT] Last resort: 1 page per student")
+    return [
+        {"student_name": f"Student {_i + 1}", "roll_no": str(_i + 1), "page_indices": [_i]}
+        for _i in range(n_pages)
+    ]
 
 def _parse_raw_answers(raw_text: str) -> Dict[int, str]:
     """Parse Q1: answer  Q2: answer ... from raw text."""
@@ -4464,6 +5675,7 @@ def _parse_raw_answers(raw_text: str) -> Dict[int, str]:
 
 @app.post("/api/evaluate")
 @auth()
+@quota('evaluate')
 def evaluate_sheet():
     """
     Single answer sheet evaluation.
@@ -4568,6 +5780,67 @@ def evaluate_sheet():
     log.info(f"[EVAL] Sync complete: eval_id={eval_id} score={result.get('percentage',0):.1f}%")
     return jsonify(payload)
 
+@app.post("/api/evaluate/text")
+@auth()
+@quota('evaluate')
+def evaluate_text():
+    """
+    Text-based evaluation — student/teacher types answers directly.
+    No OCR, no file upload. Accepts JSON:
+      { exam_id, answers: {1: "B", 2: "D", 7: "written answer..."}, student_name, roll_no, parent_email }
+    Uses the same _evaluate_answers() grading engine as PDF evaluation.
+    """
+    u    = request.user
+    data = request.get_json(silent=True) or {}
+
+    exam_id      = str(data.get("exam_id", "")).strip()
+    answers_raw  = data.get("answers", {})
+    student_name = str(data.get("student_name", "")).strip()
+    roll_no      = str(data.get("roll_no", "")).strip()
+    parent_email = str(data.get("parent_email", "")).strip()
+
+    if not exam_id:
+        return jsonify({"error": "exam_id is required"}), 400
+    e = exams_registry.get(exam_id)
+    if not e:
+        return jsonify({"error": "Exam not found"}), 404
+    if not answers_raw or not isinstance(answers_raw, dict):
+        return jsonify({"error": "answers dict is required"}), 400
+
+    # Convert string keys to int keys, strip whitespace
+    submitted: Dict[int, str] = {}
+    for k, v in answers_raw.items():
+        try:
+            submitted[int(k)] = str(v).strip()
+        except (ValueError, TypeError):
+            continue
+
+    if not submitted:
+        return jsonify({"error": "No valid answers provided"}), 400
+
+    log.info(f"[EVAL-TEXT] exam={exam_id} answers={len(submitted)} student={student_name or 'anon'}")
+
+    _openai_limiter.wait()
+    result  = _evaluate_answers(e, submitted, roll_no)
+    eval_id = uuid.uuid4().hex[:10]
+    payload = {
+        "evaluation_id":     eval_id,
+        "exam_id":           exam_id,
+        "created_at":        _now(),
+        "student_name":      student_name,
+        "roll_no":           roll_no,
+        "parent_email":      parent_email,
+        "file_name":         "",
+        "extraction_mode":   "manual_text_entry",
+        "submitted_answers": submitted,
+        "result":            result,
+    }
+    evaluations_registry[eval_id] = payload
+    if not IS_VERCEL:
+        _save_json(EVAL_DIR / f"{eval_id}.json", payload)
+    _save_evals()
+    log.info(f"[EVAL-TEXT] Complete: eval_id={eval_id} score={result.get('percentage',0):.1f}%")
+    return jsonify(payload)
 
 @app.get("/api/evaluate/status/<task_id>")
 @auth()
@@ -4599,9 +5872,9 @@ def evaluation_status(task_id):
                         "error": str(task.info)}), 500
     return jsonify({"status": task.state, "task_id": task_id})
 
-
 @app.post("/api/evaluate/multi-student")
 @auth()
+@quota('evaluate')
 def evaluate_multi_student():
     """
     Evaluate a SINGLE PDF containing MULTIPLE students' answer sheets.
@@ -4652,15 +5925,35 @@ def evaluate_multi_student():
         sname    = section.get("student_name") or f"Student {idx + 1}"
         roll     = section.get("roll_no") or str(idx + 1)
         raw_text = section.get("raw_text", "")
-        answers  = _parse_raw_answers(raw_text)
-        if not answers and raw_text:
-            tmp = UPL_DIR / f"student_{idx}_{uuid.uuid4().hex[:6]}.txt"
-            tmp.write_text(raw_text, encoding="utf-8")
-            answers, _ = _extract_answers(str(tmp), exam_questions=e.get("questions",[]), exam=e)
+        answers  = {}
+        mode     = "multi_student_parallel"
+
+        # Path 1: page_indices available (scanned/handwritten PDFs)
+        # Create temp PDF with student's pages → run through full OCR pipeline
+        if section.get("page_indices"):
+            import fitz as _fitz_ms
+            tmp_pdf = UPL_DIR / f"ms_{idx}_{uuid.uuid4().hex[:6]}.pdf"
             try:
-                tmp.unlink()
-            except Exception:
-                pass
+                src = _fitz_ms.open(str(path))
+                dst = _fitz_ms.open()
+                for pi in section["page_indices"]:
+                    if pi < len(src):
+                        dst.insert_pdf(src, from_page=pi, to_page=pi)
+                dst.save(str(tmp_pdf))
+                dst.close()
+                src.close()
+                answers, mode = _extract_answers(str(tmp_pdf), exam_questions=e.get("questions",[]), exam=e)
+            except Exception as ex:
+                log.warning(f"[MULTI-EVAL] Page extraction failed for {sname}: {ex}")
+            finally:
+                try: tmp_pdf.unlink()
+                except Exception: pass
+
+        # Path 2: raw_text available (typed/printed PDFs)
+        if not answers and raw_text:
+            answers = _parse_raw_answers(raw_text)
+            mode = "multi_student_text"
+
         if not answers:
             log.warning(f"[MULTI-EVAL] No answers for {sname} — skipping")
             return None
@@ -4671,7 +5964,7 @@ def evaluate_multi_student():
             "evaluation_id":     eval_id, "exam_id": exam_id, "created_at": _now(),
             "student_name":      sname,   "roll_no": roll,
             "parent_email":      section.get("parent_email", ""), "file_name": fn,
-            "extraction_mode":   "multi_student_parallel",
+            "extraction_mode":   mode,
             "submitted_answers": answers, "result": result,
         }
         evaluations_registry[eval_id] = payload
@@ -4697,9 +5990,9 @@ def evaluate_multi_student():
         "evaluations": all_evaluations, "exam_id": exam_id,
     })
 
-
 @app.post("/api/evaluate/bulk")
-@auth(roles=["tutor","teacher","school_admin"])
+@auth(roles=["tutor","teacher","institute_admin"])
+@quota('evaluate')
 def bulk_evaluate():
     """
     Multiple separate files (one per student).
@@ -4805,7 +6098,6 @@ def bulk_evaluate():
     log.info(f"[BULK] Sync complete: ok={len(results)} fail={len(failures)}")
     return jsonify(bp)
 
-
 @app.get("/api/evaluations/<eval_id>")
 @auth()
 def get_evaluation(eval_id):
@@ -4817,8 +6109,6 @@ def get_evaluation(eval_id):
     if not ev:
         return jsonify({"error": "Not found"}), 404
     return jsonify(ev)
-
-
 
 def _build_email_report_html(ev: dict, exam: dict, student_name: str) -> str:
     """Build a rich HTML email report for parents."""
@@ -4962,7 +6252,6 @@ def _build_email_report_html(ev: dict, exam: dict, student_name: str) -> str:
         '</table></td></tr></table></body></html>'
     )
 
-
 @app.post("/api/evaluations/send-report")
 @auth()
 def send_evaluation_report():
@@ -5030,9 +6319,8 @@ def send_evaluation_report():
         print(f"[EMAIL] Failed: {e}")
         return jsonify({"error": f"Email failed: {str(e)}. Check SMTP settings in .env"}), 500
 
-
 @app.post("/api/evaluations/<eval_id>/audit")
-@auth(roles=["tutor","teacher","school_admin"])
+@auth(roles=["tutor","teacher","institute_admin"])
 def audit_evaluation(eval_id):
     ev = evaluations_registry.get(eval_id) or _load_json(EVAL_DIR / f"{eval_id}.json", {})
     if not ev:
@@ -5047,8 +6335,6 @@ def audit_evaluation(eval_id):
         _save_json(EVAL_DIR / f"{eval_id}.json", ev)
     _save_evals()
     return jsonify({"evaluation_id": eval_id, "audit": ev["audit"]})
-
-
 
 def _generate_evaluation_report_pdf(ev: dict, exam: dict) -> bytes:
     """
@@ -5383,7 +6669,7 @@ def list_evaluations():
     """
     List all evaluations visible to the requesting user.
     - student : own evaluations only
-    - teacher / school_admin / admin : all evaluations, optionally filtered
+    - teacher / institute_admin / admin : all evaluations, optionally filtered
     Query params: exam_id, student_name, roll_no, limit (default 100)
     """
     u        = request.user
@@ -5448,7 +6734,6 @@ def list_evaluations():
 
     return jsonify({"evaluations": summaries, "total": len(summaries)})
 
-
 @app.get("/api/evaluations/report/<eval_id>")
 @auth()
 def download_evaluation_report(eval_id):
@@ -5473,9 +6758,8 @@ def download_evaluation_report(eval_id):
         headers={"Content-Disposition": f'attachment; filename="{filename}"'}
     )
 
-
 @app.get("/api/exams/<exam_id>/class-report")
-@auth(roles=["teacher","tutor","school_admin","admin"])
+@auth(roles=["teacher","tutor","institute_admin","admin"])
 def get_class_report(exam_id):
     """
     Aggregate class-level report for one exam:
@@ -5578,7 +6862,6 @@ def get_class_report(exam_id):
         "student_rows":       student_rows,
     })
 
-
 @app.get("/api/students/<roll_no>/history")
 @auth()
 def get_student_history(roll_no):
@@ -5633,6 +6916,7 @@ def get_student_history(roll_no):
 # ══════════════════════════════════════════════════════════════════════════════
 @app.post("/api/curriculum/practice/generate")
 @auth()
+@quota('practice_generate')
 def generate_practice():
     u    = request.user
     data = request.json or {}
@@ -5669,9 +6953,23 @@ def generate_practice():
     if previous_qs:
         exclusion = "\nDO NOT repeat these previously asked questions:\n" + "\n".join(f"- {q}" for q in previous_qs[-20:])
 
+    syl_meta = syllabi_registry.get(sid, {})
+    syl_board      = syl_meta.get("board", "") or syl_meta.get("name", "")
+    syl_class      = syl_meta.get("class_name", "") or ""
+    syl_subject    = syl_meta.get("subject", "") or ""
+    # Parse from name if fields missing (legacy syllabus created before this fix)
+    if not syl_class and " — " in syl_meta.get("name", ""):
+        _parts = syl_meta["name"].split(" — ")
+        syl_subject = syl_subject or (_parts[1].strip() if len(_parts) > 1 else "")
+    if not syl_board:
+        syl_board = syl_meta.get("name", "Indian curriculum").split(" ")[0]
+
     prompt = MIXED_PRACTICE_GEN_PROMPT.format(
         total_count=total, objective_count=obj_count, subjective_count=subj_count,
-        difficulty=diff, context=ctx, topic=topic
+        difficulty=diff, context=ctx, topic=topic,
+        board=syl_board or "CBSE",
+        class_level=syl_class or "the appropriate class",
+        subject=syl_subject or "the subject",
     ) + exclusion
 
     try:
@@ -5719,6 +7017,7 @@ def generate_practice():
 
 @app.post("/api/curriculum/practice/evaluate")
 @auth()
+@quota('practice_evaluate')
 def evaluate_practice():
     data = request.json or {}
     question  = data.get("question","")
@@ -5806,28 +7105,27 @@ def email_practice_report():
 #  ADMIN ENDPOINTS
 # ══════════════════════════════════════════════════════════════════════════════
 @app.get("/api/admin/users")
-@auth(roles=["admin","school_admin"])
+@auth(roles=["admin","institute_admin"])
 def admin_list_users():
     """
-    Return ALL registered users to admin / school_admin — no institution
-    filtering whatsoever.  Every user who successfully signs up must
-    appear here immediately, regardless of what institution they entered
-    (or left blank) at registration time.
+    Platform admin (admin) sees all users.
+    Institute admin (institute_admin) sees only users whose institution
+    matches their own institution (case-insensitive), hiding platform admins.
     """
     db          = db_load()
     u           = request.user
     role_filter = request.args.get("role")
 
-    # Include every user except the caller themselves.
-    # school_admin cannot see super-admin accounts to prevent privilege
-    # escalation, but they see every student / teacher / parent / tutor.
     if u["role"] == "admin":
         users = [x for x in db["users"] if x["id"] != u["id"]]
     else:
+        # institute_admin: only their institution, excluding platform admin accounts
+        my_inst = u.get("institution", "").lower()
         users = [
             x for x in db["users"]
             if x["id"] != u["id"]
-            and x["role"] != "admin"   # hide super-admin from school_admin
+            and x["role"] not in ("admin",)
+            and x.get("institution", "").lower() == my_inst
         ]
 
     if role_filter:
@@ -5850,16 +7148,19 @@ def admin_add_user():
     return jsonify({"user": _safe(u)}), 201
 
 @app.patch("/api/admin/users/<uid>")
-@auth(roles=["admin","school_admin"])
+@auth(roles=["admin","institute_admin"])
 def admin_update_user(uid):
-    db   = db_load()
+    db     = db_load()
     caller = request.user
-    u    = next((x for x in db["users"] if x["id"] == uid), None)
+    u      = next((x for x in db["users"] if x["id"] == uid), None)
     if not u:
         return jsonify({"error": "Not found"}), 404
-    # school_admin cannot edit other school_admins or admins
-    if caller["role"] == "school_admin" and u["role"] in ("admin","school_admin") and u["id"] != caller["id"]:
-        return jsonify({"error": "Forbidden"}), 403
+    # institute_admin cannot edit accounts outside their institution or admin/institute_admin accounts
+    if caller["role"] == "institute_admin":
+        if u["role"] in ("admin", "institute_admin") and u["id"] != caller["id"]:
+            return jsonify({"error": "Forbidden"}), 403
+        if u.get("institution", "").lower() != caller.get("institution", "").lower():
+            return jsonify({"error": "Forbidden — user is not in your institution"}), 403
     b = request.json or {}
     for k in ("name","role","status","institution"):
         if k in b:
@@ -5880,22 +7181,24 @@ def admin_delete_user(uid):
     return jsonify({"ok": True})
 
 @app.get("/api/admin/stats")
-@auth(roles=["admin","school_admin"])
+@auth(roles=["admin","institute_admin"])
 def admin_stats():
     db = db_load()
     u  = request.user
 
-    # Same rule as admin_list_users — show every user with no filtering
     if u["role"] == "admin":
+        # Platform admin sees everyone
         users = [x for x in db["users"] if x["id"] != u["id"]]
     else:
+        # institute_admin: scoped to their institution
+        my_inst = u.get("institution", "").lower()
         users = [
             x for x in db["users"]
             if x["id"] != u["id"]
             and x["role"] != "admin"
+            and x.get("institution", "").lower() == my_inst
         ]
 
-    # Activity log: filter to only show actions by users this role should see
     visible_uid_set = {x["id"] for x in users} | {u["id"]}
     activity = [a for a in db.get("activity", []) if a.get("user_id") in visible_uid_set]
 
@@ -5914,10 +7217,54 @@ def admin_stats():
                       if u["role"] == "admin" or e.get("owner_id") in visible_uid_set])
     visitor_count = len(db.get("visitors", []))
 
+    # ── feature usage analytics (last 30 days) ──────────────────────────────
+    from collections import defaultdict as _dd
+    from datetime import date as _date2, timedelta as _td2
+    usage_counters = db.get("usage_counters", {})
+    feature_totals: dict = {}   # {feature: total_count}
+    user_feature_map: dict = {} # {uid: {feature: count}}
+    cutoff30 = (_date2.today() - _td2(days=30)).isoformat()
+
+    for day_str, day_data in usage_counters.items():
+        if day_str < cutoff30:
+            continue
+        for uid2, feats in day_data.get("users", {}).items():
+            if uid2 not in visible_uid_set:
+                continue
+            if uid2 not in user_feature_map:
+                user_feature_map[uid2] = {}
+            for feat, cnt in feats.items():
+                feature_totals[feat]               = feature_totals.get(feat, 0) + cnt
+                user_feature_map[uid2][feat]       = user_feature_map[uid2].get(feat, 0) + cnt
+
+    # build a uid→name lookup for top_users
+    uid_name = {x["id"]: x.get("name", x["id"]) for x in users}
+    uid_name[u["id"]] = u.get("name", u["id"])
+
+    top_users = sorted(
+        [{"uid": uid2, "name": uid_name.get(uid2, uid2),
+          "total": sum(f.values())} for uid2, f in user_feature_map.items()],
+        key=lambda x: x["total"], reverse=True
+    )[:10]
+
+    # recently active (last 7 days) — includes the admin themselves
+    from datetime import datetime as _dt2, timedelta as _td3
+    cutoff7 = (_dt2.utcnow() - _td3(days=7)).strftime("%Y-%m-%dT%H:%M:%S")
+    recently_active = [
+        {"id": x["id"], "name": x.get("name",""), "email": x.get("email",""),
+         "role": x.get("role",""), "institution": x.get("institution",""),
+         "last_login": x.get("last_login",""), "login_count": x.get("login_count",0)}
+        for x in (users + [u])
+        if x.get("last_login","") >= cutoff7
+    ]
+    recently_active.sort(key=lambda x: x["last_login"], reverse=True)
+    # ────────────────────────────────────────────────────────────────────────
+
     return jsonify({
-        "teacher_count":  len([x for x in users if x["role"] in ("teacher","tutor")]),
+        "teacher_count":  len([x for x in users if x["role"] == "teacher"]),
         "student_count":  len([x for x in users if x["role"] == "student"]),
         "parent_count":   len([x for x in users if x["role"] == "parent"]),
+        "institute_count": len([x for x in db["users"] if x["role"] == "institute_admin"]) if u["role"] == "admin" else None,
         "visitor_count":  visitor_count,
         "exam_count":     exam_count,
         "eval_count":     eval_count,
@@ -5927,21 +7274,54 @@ def admin_stats():
             sum(v.get("result",{}).get("percentage",0) for v in evaluations_registry.values()) /
             max(len(evaluations_registry), 1), 1
         ),
-        "activity":       activity[:20],
+        "activity":          activity[:20],
+        "feature_totals":    feature_totals,
+        "top_users_by_usage": top_users,
+        "recently_active":   recently_active[:20],
         "mongodb_status": "connected" if MONGO_OK else "fallback_json",
     })
 
+@app.get("/api/admin/institutions")
+@auth(roles=["admin"])
+def admin_list_institutions():
+    """Platform admin: list all registered institutions with their user counts."""
+    db = db_load()
+    # Group users by institution
+    from collections import defaultdict
+    inst_map = defaultdict(lambda: {"teachers": 0, "students": 0, "parents": 0, "admins": []})
+    for x in db["users"]:
+        inst = x.get("institution", "").strip()
+        if not inst:
+            continue
+        role = x["role"]
+        if role == "teacher":
+            inst_map[inst]["teachers"] += 1
+        elif role == "student":
+            inst_map[inst]["students"] += 1
+        elif role == "parent":
+            inst_map[inst]["parents"] += 1
+        elif role == "institute_admin":
+            inst_map[inst]["admins"].append({
+                "id": x["id"], "name": x["name"], "email": x["email"],
+                "joined": x.get("joined", ""), "status": x.get("status", "active")
+            })
+    institutions = [
+        {"name": inst, **data}
+        for inst, data in sorted(inst_map.items())
+    ]
+    return jsonify({"institutions": institutions})
+
 @app.route("/api/admin/settings", methods=["GET","PATCH"])
-@auth(roles=["admin","school_admin"])
+@auth(roles=["admin","institute_admin"])
 def admin_settings():
     db = db_load()
     if "settings" not in db:
         db["settings"] = {}
     if request.method == "PATCH":
         incoming = request.json or {}
-        # school_admin cannot change system-level model settings
+        # institute_admin cannot change system-level model settings
         u = request.user
-        if u["role"] == "school_admin":
+        if u["role"] == "institute_admin":
             forbidden_keys = {"model"}
             incoming = {k: v for k, v in incoming.items() if k not in forbidden_keys}
         db["settings"].update(incoming)
@@ -5949,7 +7329,7 @@ def admin_settings():
     return jsonify({"settings": db["settings"]})
 
 @app.get("/api/admin/visitors")
-@auth(roles=["admin", "school_admin"])
+@auth(roles=["admin", "institute_admin"])
 def get_visitor_details():
     db = db_load()
     visitors = db.get("visitors", [])
@@ -5972,20 +7352,281 @@ def track_visitor():
     if "visitors" not in db:
         db["visitors"] = []
     
-    # Store minimal info: timestamp, hashed IP (privacy), and browser
-    ip_hash = hashlib.sha256((request.remote_addr or "unknown").encode()).hexdigest()[:12]
+    b = request.json or {}
+    
+    # Extract location and IP from Vercel headers if available
+    # https://vercel.com/docs/concepts/edge-network/headers
+    city    = request.headers.get("x-vercel-ip-city", "Unknown")
+    country = request.headers.get("x-vercel-ip-country", "Unknown")
+    ip      = request.headers.get("x-forwarded-for", request.remote_addr or "unknown").split(',')[0]
+    
     db["visitors"].append({
-        "time": _now(),
-        "ip_hash": ip_hash,
-        "ua": request.headers.get("User-Agent", "unknown")[:100]
+        "timestamp":  _now(),
+        "ip":         ip,
+        "city":       city,
+        "country":    country,
+        "path":       b.get("path", "/"),
+        "user_agent": request.headers.get("User-Agent", "unknown")[:200]
     })
     
-    # Optional: Keep only last 10,000 visitors to save space in platform_data.json
-    if len(db["visitors"]) > 10000:
-        db["visitors"] = db["visitors"][-10000:]
+    # Keep last 1000 visitors
+    if len(db["visitors"]) > 1000:
+        db["visitors"] = db["visitors"][-1000:]
         
     db_save(db)
     return jsonify({"ok": True})
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  QUOTA MANAGEMENT ENDPOINTS
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.get("/api/quota/me")
+@auth()
+def get_my_quota():
+    """Return today's usage + limits for the current user across all features."""
+    user  = request.user
+    uid   = user["id"]
+    inst  = (user.get("institution") or "").strip()
+    today = _quota_today()
+    counts = _get_today_usage(uid, inst)
+
+    result = {}
+    for feat in QUOTA_FEATURES:
+        u_limit, i_pool = _get_effective_limit(user, feat)
+        u_used = counts["user"].get(feat, 0)
+        i_used = counts["inst"].get(feat, 0) if inst else 0
+        result[feat] = {
+            "label":      QUOTA_FEATURES[feat],
+            "used":       u_used,
+            "limit":      u_limit,
+            "remaining":  (u_limit - u_used) if u_limit != _UNLIMITED else _UNLIMITED,
+            "inst_used":  i_used,
+            "inst_pool":  i_pool,
+            "blocked":    (u_limit == 0),
+        }
+    return jsonify({"date": today, "features": result, "institution": inst or None})
+
+@app.get("/api/admin/quota-config")
+@auth(roles=["admin", "institute_admin"])
+def get_quota_config():
+    """Return full quota configuration. institute_admin sees their institution's overrides."""
+    caller = request.user
+    qc     = _qc_load()
+    # institute_admin: scope institution_overrides to their own institution
+    if caller["role"] == "institute_admin":
+        my_inst = (caller.get("institution") or "").strip()
+        scoped_inst = {}
+        if my_inst and my_inst in qc.get("institution_overrides", {}):
+            scoped_inst[my_inst] = qc["institution_overrides"][my_inst]
+        return jsonify({
+            "role_defaults":        qc.get("role_defaults", _DEFAULT_ROLE_QUOTAS),
+            "institution_overrides": scoped_inst,
+            "user_overrides":       qc.get("user_overrides", {}),
+            "features":             QUOTA_FEATURES,
+            "can_edit_role_defaults": False,
+        })
+    return jsonify({
+        "role_defaults":        qc.get("role_defaults", _DEFAULT_ROLE_QUOTAS),
+        "institution_overrides": qc.get("institution_overrides", {}),
+        "user_overrides":       qc.get("user_overrides", {}),
+        "features":             QUOTA_FEATURES,
+        "can_edit_role_defaults": True,
+    })
+
+@app.patch("/api/admin/quota-config/role-defaults")
+@auth(roles=["admin"])
+def update_quota_role_defaults():
+    """Replace role_defaults section. Usage: {role: {feature: daily_limit}}"""
+    b  = request.json or {}
+    qc = _qc_load()
+    # Validate and merge
+    for role, feats in b.items():
+        if role not in ("student", "parent", "teacher", "institute_admin", "admin"):
+            return jsonify({"error": f"Invalid role: {role}"}), 400
+        if not isinstance(feats, dict):
+            return jsonify({"error": f"Expected dict for role {role}"}), 400
+        if role not in qc["role_defaults"]:
+            qc["role_defaults"][role] = {}
+        for feat, limit in feats.items():
+            if feat not in QUOTA_FEATURES:
+                return jsonify({"error": f"Unknown feature: {feat}"}), 400
+            try:
+                qc["role_defaults"][role][feat] = int(limit)
+            except (ValueError, TypeError):
+                return jsonify({"error": f"Limit must be an integer for {feat}"}), 400
+    _qc_save(qc)
+    return jsonify({"ok": True, "role_defaults": qc["role_defaults"]})
+
+@app.patch("/api/admin/quota-config/institution/<path:inst_name>")
+@auth(roles=["admin", "institute_admin"])
+def update_quota_institution(inst_name):
+    """
+    Set institution overrides.
+    Body: { user_daily: {feature: limit}, inst_daily: {feature: pool_limit} }
+    institute_admin can only update their own institution.
+    """
+    caller = request.user
+    if caller["role"] == "institute_admin":
+        my_inst = (caller.get("institution") or "").strip()
+        if inst_name.lower() != my_inst.lower():
+            return jsonify({"error": "Forbidden — not your institution"}), 403
+    b  = request.json or {}
+    qc = _qc_load()
+    if inst_name not in qc["institution_overrides"]:
+        qc["institution_overrides"][inst_name] = {}
+    cfg = qc["institution_overrides"][inst_name]
+    for section in ("user_daily", "inst_daily"):
+        if section in b:
+            if not isinstance(b[section], dict):
+                return jsonify({"error": f"{section} must be a dict"}), 400
+            cfg.setdefault(section, {})
+            for feat, limit in b[section].items():
+                if feat not in QUOTA_FEATURES:
+                    return jsonify({"error": f"Unknown feature: {feat}"}), 400
+                if limit is None:
+                    cfg[section].pop(feat, None)
+                else:
+                    try:
+                        cfg[section][feat] = int(limit)
+                    except (ValueError, TypeError):
+                        return jsonify({"error": f"Limit must be an integer for {feat}"}), 400
+    _qc_save(qc)
+    return jsonify({"ok": True, "institution": inst_name, "config": cfg})
+
+@app.delete("/api/admin/quota-config/institution/<path:inst_name>")
+@auth(roles=["admin"])
+def delete_quota_institution(inst_name):
+    """Remove all quota overrides for an institution (revert to role defaults)."""
+    qc = _qc_load()
+    qc["institution_overrides"].pop(inst_name, None)
+    _qc_save(qc)
+    return jsonify({"ok": True})
+
+@app.patch("/api/admin/quota-config/user/<uid>")
+@auth(roles=["admin", "institute_admin"])
+def update_quota_user(uid):
+    """
+    Set per-user quota overrides. Body: {feature: daily_limit, ...}
+    Pass null/None to remove a feature override.
+    institute_admin can only configure users in their institution.
+    """
+    caller = request.user
+    db     = db_load()
+    target = next((u for u in db["users"] if u["id"] == uid), None)
+    if not target:
+        return jsonify({"error": "User not found"}), 404
+    if caller["role"] == "institute_admin":
+        my_inst = (caller.get("institution") or "").strip()
+        if target.get("institution", "").strip().lower() != my_inst.lower():
+            return jsonify({"error": "Forbidden — user not in your institution"}), 403
+    b  = request.json or {}
+    qc = _qc_load()
+    qc["user_overrides"].setdefault(uid, {})
+    for feat, limit in b.items():
+        if feat not in QUOTA_FEATURES:
+            return jsonify({"error": f"Unknown feature: {feat}"}), 400
+        if limit is None:
+            qc["user_overrides"][uid].pop(feat, None)
+        else:
+            try:
+                qc["user_overrides"][uid][feat] = int(limit)
+            except (ValueError, TypeError):
+                return jsonify({"error": f"Limit must be an integer for {feat}"}), 400
+    # Clean up empty entry
+    if not qc["user_overrides"][uid]:
+        qc["user_overrides"].pop(uid, None)
+    _qc_save(qc)
+    return jsonify({"ok": True, "user_id": uid, "overrides": qc.get("user_overrides", {}).get(uid, {})})
+
+@app.delete("/api/admin/quota-config/user/<uid>")
+@auth(roles=["admin", "institute_admin"])
+def delete_quota_user(uid):
+    """Remove all quota overrides for a user (revert to role/institution defaults)."""
+    caller = request.user
+    db     = db_load()
+    target = next((u for u in db["users"] if u["id"] == uid), None)
+    if not target:
+        return jsonify({"error": "User not found"}), 404
+    if caller["role"] == "institute_admin":
+        my_inst = (caller.get("institution") or "").strip()
+        if target.get("institution", "").strip().lower() != my_inst.lower():
+            return jsonify({"error": "Forbidden"}), 403
+    qc = _qc_load()
+    qc["user_overrides"].pop(uid, None)
+    _qc_save(qc)
+    return jsonify({"ok": True})
+
+@app.get("/api/admin/usage-report")
+@auth(roles=["admin", "institute_admin"])
+def get_usage_report():
+    """
+    Usage report for the last N days.
+    Query params: days=7 (default), feature (optional filter).
+    institute_admin sees only their institution's users.
+    """
+    from datetime import date as _date, timedelta as _td
+    caller  = request.user
+    days    = min(int(request.args.get("days", 7)), 90)
+    feature_filter = request.args.get("feature")
+
+    db   = db_load()
+    all_users = {u["id"]: u for u in db["users"]}
+
+    # Determine visible user IDs
+    if caller["role"] == "admin":
+        visible_uids = set(all_users.keys())
+    else:
+        my_inst = (caller.get("institution") or "").strip().lower()
+        visible_uids = {u["id"] for u in db["users"]
+                        if u.get("institution", "").strip().lower() == my_inst}
+
+    counters = db.get("usage_counters", {})
+    today    = _date.today()
+    report   = []
+    for i in range(days):
+        d = (today - _td(days=i)).isoformat()
+        day = counters.get(d, {})
+        users_day = day.get("users", {})
+        inst_day  = day.get("institutions", {})
+        by_user   = {}
+        for uid, feats in users_day.items():
+            if uid not in visible_uids:
+                continue
+            u = all_users.get(uid, {})
+            if feature_filter:
+                count = feats.get(feature_filter, 0)
+                if count == 0:
+                    continue
+                by_user[uid] = {"name": u.get("name","?"), "role": u.get("role","?"),
+                                "institution": u.get("institution",""),
+                                feature_filter: count}
+            else:
+                by_user[uid] = {"name": u.get("name","?"), "role": u.get("role","?"),
+                                "institution": u.get("institution",""), **feats}
+        report.append({"date": d, "users": by_user, "institutions": inst_day})
+
+    # Summary: per-feature totals across the period
+    totals = {f: 0 for f in QUOTA_FEATURES}
+    for day_data in report:
+        for uid, feats in day_data["users"].items():
+            for f in QUOTA_FEATURES:
+                totals[f] += feats.get(f, 0)
+
+    return jsonify({
+        "days":     days,
+        "report":   report,
+        "totals":   totals,
+        "features": QUOTA_FEATURES,
+    })
+
+@app.get("/api/admin/quota-config/reset-defaults")
+@auth(roles=["admin"])
+def reset_quota_defaults():
+    """Reset role_defaults to system defaults (non-destructive for overrides)."""
+    qc = _qc_load()
+    qc["role_defaults"] = _DEFAULT_ROLE_QUOTAS
+    _qc_save(qc)
+    return jsonify({"ok": True, "role_defaults": _DEFAULT_ROLE_QUOTAS})
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  SPA SERVING (React dist/)
@@ -6035,4 +7676,4 @@ Exams loaded   : {len(exams_registry)}
 """)
     from flask import cli
     cli.show_server_banner = lambda *_: None
-    app.run(host="0.0.0.0", port=port, debug=not IS_VERCEL)
+    app.run(host="0.0.0.0", port=port, debug=False)

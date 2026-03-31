@@ -1,11 +1,14 @@
 """
 celery_worker.py — Async task definitions for VidyAI / Parvidya
 """
-import os, uuid, logging
+import os, sys, uuid, logging
 from pathlib import Path
 from datetime import datetime
 from celery import Celery
 from dotenv import load_dotenv
+
+# Ensure the vidyai directory is on sys.path so forked workers can import app
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 load_dotenv(os.path.join(os.path.dirname(__file__), '..', '.env'))
 log = logging.getLogger("celery_worker")
@@ -14,7 +17,7 @@ REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 celery_app = Celery("parvidya_tasks", broker=REDIS_URL, backend=REDIS_URL)
 celery_app.conf.update(
     task_serializer="json", result_serializer="json", accept_content=["json"],
-    task_track_started=True, task_soft_time_limit=300, task_time_limit=600,
+    task_track_started=True, task_soft_time_limit=480, task_time_limit=600,
     worker_prefetch_multiplier=1,
 )
 
@@ -41,9 +44,10 @@ def evaluate_single(self, path, exam, roll_no="", student_name="",
     fn = _get_app_fns()
     try:
         fhash  = fn["file_hash"](path)
-        cached = fn["cache_get"](fhash, exam.get("exam_id",""))
-        if cached:
-            return cached
+        # Cache disabled — always reprocess to pick up OCR improvements
+        # cached = fn["cache_get"](fhash, exam.get("exam_id",""))
+        # if cached:
+        #     return cached
         answers, mode = fn["extract"](path, exam_questions=exam.get("questions",[]), exam=exam)
         if not answers:
             return {"error": f"Could not extract answers ({mode})", "file_name": file_name}
@@ -82,15 +86,34 @@ def evaluate_multi_student(self, path, exam):
             sname = section.get("student_name") or f"Student {idx+1}"
             roll  = section.get("roll_no") or str(idx+1)
             raw   = section.get("raw_text","")
-            answers = fn["parse_raw"](raw)
-            if not answers and raw:
-                tmp = Path(fn["upl_dir"]) / f"ms_{idx}_{uuid.uuid4().hex[:6]}.txt"
-                tmp.write_text(raw, encoding="utf-8")
+            answers = {}
+            mode    = "multi_student_celery"
+
+            # Path 1: page_indices (scanned/handwritten PDFs) — full OCR pipeline
+            if section.get("page_indices"):
+                import fitz as _fitz_ms
+                tmp_pdf = Path(fn["upl_dir"]) / f"ms_{idx}_{uuid.uuid4().hex[:6]}.pdf"
                 try:
-                    answers, _ = fn["extract"](str(tmp), exam_questions=exam.get("questions",[]), exam=exam)
+                    src = _fitz_ms.open(path)
+                    dst = _fitz_ms.open()
+                    for pi in section["page_indices"]:
+                        if pi < len(src):
+                            dst.insert_pdf(src, from_page=pi, to_page=pi)
+                    dst.save(str(tmp_pdf))
+                    dst.close()
+                    src.close()
+                    answers, mode = fn["extract"](str(tmp_pdf), exam_questions=exam.get("questions",[]), exam=exam)
+                except Exception as ex:
+                    log.warning(f"[TASK-MULTI] Page extraction failed for {sname}: {ex}")
                 finally:
-                    try: tmp.unlink()
+                    try: tmp_pdf.unlink()
                     except: pass
+
+            # Path 2: raw_text (typed/printed PDFs)
+            if not answers and raw:
+                answers = fn["parse_raw"](raw)
+                mode = "multi_student_text"
+
             if not answers:
                 continue
             result  = fn["evaluate"](exam, answers, roll)
@@ -99,7 +122,7 @@ def evaluate_multi_student(self, path, exam):
                 "evaluation_id": eval_id, "exam_id": exam_id, "created_at": fn["now"](),
                 "student_name": sname, "roll_no": roll,
                 "parent_email": section.get("parent_email",""),
-                "file_name": Path(path).name, "extraction_mode": "multi_student_celery",
+                "file_name": Path(path).name, "extraction_mode": mode,
                 "submitted_answers": answers, "result": result,
             }
             fn["evals_reg"][eval_id] = payload
@@ -129,6 +152,7 @@ def evaluate_bulk(self, saved, exam):
             cached = fn["cache_get"](fhash, exam_id)
             if cached:
                 results.append({"evaluation_id": cached["evaluation_id"], "roll_no": roll,
+                    "student_name": cached.get("student_name", name) or name,
                     "percentage": cached["result"].get("percentage",0),
                     "is_pass": cached["result"].get("is_pass",False),
                     "total_awarded": cached["result"].get("total_awarded",0),
@@ -148,6 +172,7 @@ def evaluate_bulk(self, saved, exam):
                 fn["save_json"](fn["eval_dir"] / f"{eid}.json", p)
             fn["cache_set"](fhash, exam_id, p)
             results.append({"evaluation_id": eid, "roll_no": roll,
+                "student_name": name,
                 "percentage": res.get("percentage",0), "is_pass": res.get("is_pass",False),
                 "total_awarded": res.get("total_awarded",0),
                 "total_possible": res.get("total_possible",0)})

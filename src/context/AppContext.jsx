@@ -3,14 +3,14 @@
  * Central state: active panel, syllabi data, documents, and admin stats.
  * Handles data fetching and synchronization across all panels.
  */
-import { createContext, useContext, useState, useCallback, useEffect } from 'react'
+import { createContext, useContext, useState, useCallback, useEffect, useMemo } from 'react'
 import { useAuth } from './AuthContext'
 import { apiGet } from '../utils/api'
 
 const AppCtx = createContext(null)
 
 export function AppProvider({ children }) {
-  const { token, isLoggedIn } = useAuth()
+  const { token, me, isLoggedIn } = useAuth()
   const [activePanel, setActivePanelState] = useState('dashboard')
   const [refreshKey,  setRefreshKey]       = useState(0)
 
@@ -48,41 +48,31 @@ export function AppProvider({ children }) {
   const refreshData = useCallback(async () => {
     if (!token) return
     try {
-      // 1. Load user syllabi
-      const res1 = await apiGet('/curriculum', token)
-      const data1 = await res1.json()
+      const isAdmin = me?.role === 'admin'
+
+      // Fire all fetches in parallel instead of sequentially
+      const [data1, data2, data3, data4] = await Promise.all([
+        apiGet('/curriculum', token),
+        apiGet('/documents', token),
+        isAdmin ? apiGet('/admin/stats', token) : Promise.resolve({}),
+        apiGet('/settings', token),
+      ])
+
       setSyllabi(data1.syllabi || [])
-
-      // 2. Load documents
-      const res2 = await apiGet('/documents', token)
-      const data2 = await res2.json()
       setDocs(data2.documents || [])
-
-      // 3. Load admin stats (if applicable)
-      const res3 = await apiGet('/admin/stats', token)
-      const data3 = await res3.json()
-      setAdminStats(data3.stats || {})
-
-      // 4. Load platform settings (accessible to all roles)
-      const res4 = await apiGet('/settings', token)
-      if (res4.ok) {
-        const data4 = await res4.json()
-        setPlatformSettings(data4.settings || { sidebar: {} })
-      }
+      if (isAdmin) setAdminStats(data3.stats || {})
+      setPlatformSettings(data4.settings || { sidebar: {} })
 
     } catch (err) {
       console.error('[AppContext] refreshData failed:', err)
     }
-  }, [token])
+  }, [token, me])
 
   const refreshSettings = useCallback(async () => {
     if (!token) return
     try {
-      const res = await apiGet('/settings', token)
-      if (res.ok) {
-        const data = await res.json()
-        setPlatformSettings(data.settings || { sidebar: {} })
-      }
+      const data = await apiGet('/settings', token)
+      setPlatformSettings(data.settings || { sidebar: {} })
     } catch (err) {
       console.error('[AppContext] refreshSettings failed:', err)
     }
@@ -98,16 +88,27 @@ export function AppProvider({ children }) {
     window.__appSetPanel = setActivePanelState
   }
 
+  // Memoize context value to prevent re-rendering all consumers on every state change
+  const ctxValue = useMemo(() => ({
+    activePanel, setActivePanel, navigateTo,
+    syllabi, setSyllabi, addSyllabus, removeSyllabus,
+    docs, setDocs,
+    adminStats, setAdminStats,
+    platformSettings, setPlatformSettings,
+    activeSyllabus, setActiveSyllabus,
+    refreshData, refreshSettings, refreshKey
+  }), [
+    activePanel, setActivePanel, navigateTo,
+    syllabi, addSyllabus, removeSyllabus,
+    docs,
+    adminStats,
+    platformSettings,
+    activeSyllabus,
+    refreshData, refreshSettings, refreshKey
+  ])
+
   return (
-    <AppCtx.Provider value={{
-      activePanel, setActivePanel, navigateTo,
-      syllabi, setSyllabi, addSyllabus, removeSyllabus,
-      docs, setDocs,
-      adminStats, setAdminStats,
-      platformSettings, setPlatformSettings,
-      activeSyllabus, setActiveSyllabus,
-      refreshData, refreshSettings, refreshKey
-    }}>
+    <AppCtx.Provider value={ctxValue}>
       {children}
     </AppCtx.Provider>
   )

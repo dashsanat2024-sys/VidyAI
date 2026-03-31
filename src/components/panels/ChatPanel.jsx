@@ -20,12 +20,21 @@ export default function ChatPanel({ showToast }) {
   const { token } = useAuth()
   const { syllabi, activeSyllabus, setActiveSyllabus, removeSyllabus, refreshData } = useApp()
 
-  const [messages,    setMessages]    = useState([])
+  const ARTHAVI_GREETING = {
+    role: 'bot',
+    text: "👋 Hi! I'm Arthavi, your AI Study Companion.\n\nSelect a knowledge source above (or upload a document) and ask me anything — I'll answer based on your exact syllabus.\n\nYou can also ask me general questions anytime!",
+    sources: [],
+    id: 'greeting',
+  }
+
+  const [messages,    setMessages]    = useState([ARTHAVI_GREETING])
   const [input,       setInput]       = useState('')
   const [typing,      setTyping]      = useState(false)
   const [selectedSyl, setSelectedSyl] = useState('')
   const [speaking,    setSpeaking]    = useState(false)
   const [deleting,    setDeleting]    = useState(false)
+  const [uploading,   setUploading]   = useState(false)
+  const [ocrProgress, setOcrProgress] = useState(null) // null | { status, docId, fileName }
   const bottomRef = useRef(null)
   const fileRef   = useRef(null)
 
@@ -53,8 +62,7 @@ export default function ChatPanel({ showToast }) {
     addMsg('user', q)
     setTyping(true)
     try {
-      const res  = await apiPost('/chat', { question: q, syllabus_id: selectedSyl || undefined }, token)
-      const data = await res.json()
+      const data = await apiPost('/chat', { question: q, syllabus_id: selectedSyl || undefined }, token)
       setTyping(false)
       if (data.answer) addMsg('bot', data.answer, data.sources)
       else if (data.error) addMsg('bot', `Error: ${data.error}`)
@@ -63,21 +71,63 @@ export default function ChatPanel({ showToast }) {
 
   const handleFileUpload = async (e) => {
     const file = e.target.files[0]; if (!file) return
+    const MAX_MB = 50
+    if (file.size > MAX_MB * 1024 * 1024) {
+      showToast(`File too large (max ${MAX_MB} MB). Try a smaller file.`, 'error')
+      fileRef.current.value = ''; return
+    }
     const fd = new FormData()
     fd.append('file', file)
     fd.append('syllabus_name', file.name.replace(/\.[^/.]+$/, ''))
-    showToast('Processing document…', 'success')
+    setUploading(true)
+    setOcrProgress({ status: 'uploading', docId: null, fileName: file.name })
     try {
-      const res  = await apiPostForm('/upload', fd, token)
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.error || 'Upload failed')
-      showToast('Document indexed!', 'success')
+      const data = await apiPostForm('/upload', fd, token)
       await refreshData()
       if (data.syllabus_id) {
         setSelectedSyl(data.syllabus_id)
         setActiveSyllabus({ id: data.syllabus_id, name: data.syllabus_name || file.name })
       }
-    } catch (e) { showToast(e.message, 'error') }
+      if (data.ocr_queued) {
+        setUploading(false)
+        setOcrProgress({ status: 'ocr', docId: data.syllabus_id, fileName: file.name, startTime: Date.now() })
+        // Poll for OCR completion
+        const did = data.syllabus_id
+        const poll = setInterval(async () => {
+          try {
+            const resp = await fetch(`/api/documents/${did}/ocr-status`, {
+              headers: { Authorization: `Bearer ${token}` }
+            })
+            const st = await resp.json()
+            if (st.status === 'ready') {
+              clearInterval(poll)
+              await refreshData()
+              setOcrProgress(null)
+              showToast(`Document ready! (${st.chunks} chunks indexed)`, 'success')
+            } else if (st.status === 'failed') {
+              clearInterval(poll)
+              setOcrProgress(null)
+              showToast('OCR could not extract text from this PDF. Try a text-based PDF or paste as .txt', 'warning')
+            }
+          } catch { clearInterval(poll); setOcrProgress(null) }
+        }, 10000)  // poll every 10 seconds
+      } else if (data.chunks === 0) {
+        setUploading(false)
+        setOcrProgress(null)
+        showToast('Document saved but no text could be extracted.', 'warning')
+      } else {
+        setUploading(false)
+        setOcrProgress(null)
+        showToast(`Document indexed! (${data.chunks} text chunks ready)`, 'success')
+      }
+    } catch (e) {
+      setUploading(false)
+      setOcrProgress(null)
+      const msg = (e.status === 413 || e.message?.includes('413'))
+        ? 'File too large. Please try a smaller file (max 50 MB for documents, 25 MB for audio).'
+        : (e.message || 'Upload failed')
+      showToast(msg, 'error')
+    }
     fileRef.current.value = ''
   }
 
@@ -144,8 +194,10 @@ export default function ChatPanel({ showToast }) {
             </button>
           )}
 
-          <button className="btn-saffron" onClick={() => fileRef.current.click()} style={{ whiteSpace: 'nowrap' }}>
-            📎 Upload Doc
+          <button className="btn-saffron" onClick={() => fileRef.current.click()}
+            disabled={uploading || !!ocrProgress}
+            style={{ whiteSpace: 'nowrap', opacity: (uploading || ocrProgress) ? 0.6 : 1 }}>
+            {uploading ? <><span className="spin" style={{ width: 14, height: 14, borderWidth: 2 }}/> Uploading…</> : '📎 Upload Doc'}
           </button>
           <button className="btn-outline" onClick={handleSpeak} disabled={speaking} style={{ whiteSpace: 'nowrap' }}>
             {speaking ? '🔊 Speaking…' : '🔊 Listen'}
@@ -153,8 +205,44 @@ export default function ChatPanel({ showToast }) {
           <button className="btn-outline" onClick={() => { stopSpeech(); setSpeaking(false); setMessages([]) }} style={{ whiteSpace: 'nowrap' }}>
             🗑 Clear Chat
           </button>
-          <input ref={fileRef} type="file" accept=".pdf,.txt,.md,.mp3,.mp4,.wav,.m4a" style={{ display: 'none' }} onChange={handleFileUpload} />
+          <input ref={fileRef} type="file" accept=".pdf,.docx,.txt,.md,.mp3,.mp4,.wav,.m4a" style={{ display: 'none' }} onChange={handleFileUpload} />
         </div>
+
+        {/* Upload / OCR progress banner */}
+        {ocrProgress && (
+          <div style={{
+            marginBottom: 12, padding: '12px 18px', borderRadius: 12,
+            background: ocrProgress.status === 'ocr'
+              ? 'linear-gradient(135deg, #eff6ff, #dbeafe)'
+              : 'linear-gradient(135deg, #fefce8, #fef9c3)',
+            border: ocrProgress.status === 'ocr' ? '1.5px solid #93c5fd' : '1.5px solid #fde047',
+            display: 'flex', alignItems: 'center', gap: 14,
+          }}>
+            <div style={{ flexShrink: 0 }}>
+              {ocrProgress.status === 'uploading' && <span className="spin" style={{ borderTopColor: '#d97706' }}/>}
+              {ocrProgress.status === 'ocr' && <span className="spin" style={{ borderTopColor: '#2563eb' }}/>}
+            </div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontWeight: 700, fontSize: 13, color: ocrProgress.status === 'ocr' ? '#1e40af' : '#92400e', marginBottom: 2 }}>
+                {ocrProgress.status === 'uploading' && 'Uploading document…'}
+                {ocrProgress.status === 'ocr' && 'Processing scanned PDF (OCR in progress)'}
+              </div>
+              <div style={{ fontSize: 12, color: ocrProgress.status === 'ocr' ? '#3b82f6' : '#b45309' }}>
+                {ocrProgress.fileName}
+                {ocrProgress.status === 'ocr' && ' — Extracting text from pages via AI. This may take a few minutes for large documents.'}
+              </div>
+              {ocrProgress.status === 'ocr' && (
+                <div style={{ marginTop: 8, height: 4, borderRadius: 2, background: 'rgba(59,130,246,.15)', overflow: 'hidden' }}>
+                  <div style={{
+                    height: '100%', borderRadius: 2,
+                    background: 'linear-gradient(90deg, #3b82f6, #60a5fa)',
+                    animation: 'ocrPulse 2s ease-in-out infinite',
+                  }}/>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
 
         {/* Messages */}
         <div className="card" style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
@@ -163,12 +251,12 @@ export default function ChatPanel({ showToast }) {
               <div style={{ textAlign: 'center', padding: '40px 20px' }}>
                 <div style={{ fontSize: 48, marginBottom: 16 }}>💬</div>
                 <div style={{ fontFamily: 'var(--serif)', fontSize: 20, color: 'var(--indigo)', marginBottom: 8 }}>
-                  Your AI Study Tutor
+                  Arthavi — AI Study Companion
                 </div>
                 <p style={{ color: 'var(--muted)', fontSize: 14, maxWidth: 440, margin: '0 auto 24px', lineHeight: 1.6 }}>
                   {syllabi.length === 0
-                    ? 'Upload a PDF or text file to start. The AI will answer questions using only your document.'
-                    : 'Select a syllabus above and ask any question. I answer using your materials.'}
+                    ? 'Upload a PDF or text file to start. Arthavi will answer questions using only your document.'
+                    : 'Select a syllabus above and ask any question. Arthavi answers using your materials.'}
                 </p>
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, justifyContent: 'center' }}>
                   {quickPrompts.map(p => (
@@ -207,6 +295,11 @@ export default function ChatPanel({ showToast }) {
         @keyframes typingBounce {
           0%, 60%, 100% { transform: translateY(0); }
           30% { transform: translateY(-6px); }
+        }
+        @keyframes ocrPulse {
+          0% { width: 15%; opacity: .7; }
+          50% { width: 85%; opacity: 1; }
+          100% { width: 15%; opacity: .7; }
         }
       `}</style>
     </div>

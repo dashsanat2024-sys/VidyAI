@@ -7,19 +7,19 @@ import { apiPost } from '../utils/api'
 const BOARDS = ['CBSE','ICSE / ISC','Maharashtra Board','Tamil Nadu Board','Karnataka Board','Kerala Board','UP Board','Gujarat Board','Rajasthan Board','West Bengal Board','Telangana Board','NIOS']
 
 const STATS = [
-  { num: '36', label: 'States & UTs' },
+  { num: '₹50K+', label: 'Saved per Student/yr' },
   { num: '35+', label: 'Boards Covered' },
-  { num: '2M+', label: 'Questions Generated' },
-  { num: '500+', label: 'Schools Onboarded' },
+  { num: '90%', label: 'Less Evaluation Time' },
+  { num: '24/7', label: 'AI Tutor Available' },
 ]
 
 const FEATURES = [
-  { icon: '📝', color: '#EEF2FF', label: 'AI Summariser', desc: '10-point chapter summaries with real-world examples. Exam-ready in seconds.' },
-  { icon: '🃏', color: '#FEF3C7', label: 'Smart Flashcards', desc: 'Generate 5–20 Q&A cards per chapter. Flip to test yourself instantly.' },
-  { icon: '🖋️', color: '#D1FAE5', label: 'Question Master', desc: 'Create printable exam papers with answer keys. Mixed or section-wise.' },
-  { icon: '🔊', color: '#FCE7F3', label: 'Audio Lessons', desc: 'Listen to your chapter explained like a teacher — hands-free learning.' },
-  { icon: '📹', color: '#E0F2FE', label: 'AI Video Teacher', desc: 'Ms. Vidya explains chapters with animated slides and examples.' },
-  { icon: '📊', color: '#CCFBF1', label: 'Bulk Evaluation', desc: 'Upload answer sheets. AI grades, scores, and emails reports to parents.' },
+  { icon: '🤖', color: '#F0EAFF', label: 'AI Tutor — Your Syllabus', desc: 'Chat with AI trained on your exact textbook (CBSE, ICSE, State Boards). Like a personal tutor 24/7 — without paying ₹1,000/hour.' },
+  { icon: '📝', color: '#FEF3C7', label: 'Practice → Instant Feedback', desc: 'Unlimited AI-generated tests with mistake-level analysis. Students improve after every question, not just exams.' },
+  { icon: '🎧', color: '#D1FAE5', label: 'Audio Lessons', desc: 'Listen to chapters like a podcast — perfect for travel, revision, and low-focus days. Turn passive time into learning time.' },
+  { icon: '📊', color: '#FCE7F3', label: 'Full Parent Transparency', desc: 'Automatic email reports and real-time progress tracking. No more chasing teachers for updates.' },
+  { icon: '🧑‍🏫', color: '#EDF0F7', label: 'Teachers Save Hours', desc: 'Generate question papers instantly. Bulk evaluate handwritten answer sheets — correct 40 papers in minutes, not days.' },
+  { icon: '💸', color: '#CCFBF1', label: 'Cut Education Costs', desc: 'No private tuition needed. No expensive test-prep subscriptions. Save ₹50,000+ per year per student.' },
 ]
 
 const STEPS = [
@@ -31,11 +31,11 @@ const STEPS = [
 
 const TESTIMONIALS = [
   {
-    quote: 'Paarthivi cut my exam paper preparation from 3 hours to under 5 minutes. The AI-generated questions are better than what I was writing manually.',
+    quote: 'Arthavi cut my exam paper preparation from 3 hours to under 5 minutes. The AI-generated questions are better than what I was writing manually.',
     name: 'Mrs. Priya Sharma', role: 'Science Teacher', school: 'Delhi Public School', emoji: '👩‍🏫',
   },
   {
-    quote: 'Our Class 10 board results improved by 23% after we introduced Paarthivi summaries and flashcards. Students actually enjoy studying now.',
+    quote: 'Our Class 10 board results improved by 23% after we introduced Arthavi summaries and flashcards. Students actually enjoy studying now.',
     name: 'Mr. Rajesh Kumar', role: 'Principal', school: "St. Xavier's School, Mumbai", emoji: '🏫',
   },
   {
@@ -43,6 +43,523 @@ const TESTIMONIALS = [
     name: 'Ananya Iyer', role: 'Class 12 Student', school: 'Chennai', emoji: '🎒',
   },
 ]
+
+// ─── DEMO SECTION ────────────────────────────────────────────
+const DEMO_BOARDS_LIST = ['CBSE', 'ICSE / ISC', 'Maharashtra Board', 'Tamil Nadu Board']
+const DEMO_CLASSES_LIST = ['Class 6', 'Class 7', 'Class 8', 'Class 9', 'Class 10', 'Class 11', 'Class 12']
+
+// ─── SUBJECT-AWARE DEMO CONTENT ──────────────────────────────────────────────
+const DEMO_CONTENT = {
+  'Mathematics': {
+    chapterName: 'Real Numbers',
+    topic: 'Real Numbers & Number Theory',
+    summaryPoints: [
+      'Every integer is a rational number — any integer n can be expressed as n/1, placing it within the rational number system.',
+      'The Fundamental Theorem of Arithmetic: every composite number has a unique prime factorisation, regardless of the order of factors.',
+      "Euclid's Division Lemma: for positive integers a and b, unique q and r exist such that a = bq + r, where 0 ≤ r < b.",
+      'Irrational numbers (√2, π, √3) cannot be expressed as p/q; their decimal expansions are non-terminating and non-repeating.',
+      'Key relation: for any two positive integers a and b — HCF(a,b) × LCM(a,b) = a × b.',
+    ],
+    flashcards: [
+      { front: 'What is the Fundamental Theorem of Arithmetic?', back: 'Every composite number can be expressed as a product of primes in a unique way (order may differ). Example: 12 = 2² × 3.' },
+      { front: "State Euclid's Division Lemma", back: 'For positive integers a and b: a = bq + r, where 0 ≤ r < b. Used to find the HCF of two numbers.' },
+      { front: 'How are HCF and LCM related?', back: 'For any two numbers a and b: HCF(a,b) × LCM(a,b) = a × b. Use this shortcut to find one when the other is known.' },
+    ],
+    mcq: {
+      q: 'The HCF of 26 and 91 is:',
+      opts: ['13', '26', '91', '1'],
+      correct: 0,
+      explanation: "Using Euclid's division: 91 = 26×3 + 13, then 26 = 13×2 + 0. So HCF = 13. Options B and C are the original numbers; D (1) is trivially common but not the highest.",
+    },
+    questions: [
+      { n: 1, type: 'MCQ (1 mark)',           q: 'The product of two numbers is 1680 and their HCF is 12. Their LCM is:', opts: ['140', '120', '180', '200'], ans: 'A) 140' },
+      { n: 2, type: 'Short Answer (2 marks)', q: 'Prove that √2 is irrational using contradiction.', ans: 'Assume √2 = p/q in lowest terms. Then p² = 2q², so p is even. Let p = 2k → q is also even. Contradiction — p, q not coprime.' },
+      { n: 3, type: 'Long Answer (5 marks)',  q: 'Find HCF and LCM of 96 and 404 using prime factorisation. Verify that HCF × LCM = product of the two numbers.' },
+    ],
+    aiResponse: "Real Numbers include all rational and irrational numbers on the number line.\n\nKey Types:\n• Natural Numbers: 1, 2, 3, …\n• Integers: …, -2, -1, 0, 1, 2, …\n• Rational Numbers: p/q form, where q ≠ 0\n• Irrational Numbers: cannot be written as p/q (e.g., √2, π)\n\nFundamental Theorem of Arithmetic:\nEvery composite number = product of primes in exactly one unique way.\nExample: 360 = 2³ × 3² × 5\n\nEuclid's Division Algorithm (for HCF):\nFor a and b: write a = bq + r → apply repeatedly until r = 0. Last non-zero remainder = HCF.\n\nBoard Exam Tip: For HCF/LCM questions, always use prime factorisation — it's the fastest method and earns full marks!",
+  },
+  'Science': {
+    chapterName: 'Chemical Reactions and Equations',
+    topic: 'Photosynthesis',
+    summaryPoints: [
+      'A chemical reaction transforms reactants into products with new properties — evidence includes colour change, gas/precipitate, or temperature change.',
+      'Chemical equations must be balanced: total atoms of each element equal on both sides — follows Law of Conservation of Mass.',
+      'Types: combination (A+B→AB), decomposition (AB→A+B), displacement, double displacement, and oxidation-reduction (redox).',
+      'Exothermic reactions release heat (combustion, respiration); endothermic reactions absorb heat (photosynthesis, electrolysis).',
+      'Oxidation is loss of electrons/gain of oxygen; reduction is the reverse — they always occur together in redox reactions.',
+    ],
+    flashcards: [
+      { front: 'What is a chemical equation?', back: 'A symbolic representation showing reactants (left) → products (right), separated by an arrow. Must be balanced.' },
+      { front: 'Law of Conservation of Mass', back: 'Mass cannot be created or destroyed. Total reactant mass = total product mass in any chemical reaction.' },
+      { front: 'What is a decomposition reaction?', back: 'A single compound breaks into 2+ simpler substances. Example: 2H₂O → 2H₂ + O₂ (electrolysis of water).' },
+    ],
+    mcq: {
+      q: 'Which of the following is an example of a decomposition reaction?',
+      opts: ['NaOH + HCl → NaCl + H₂O', '2H₂O → 2H₂ + O₂', 'Fe + CuSO₄ → FeSO₄ + Cu', 'CaO + H₂O → Ca(OH)₂'],
+      correct: 1,
+      explanation: 'Decomposition breaks one compound into simpler substances. Water decomposes into H₂ and O₂. Option A is neutralisation; C is displacement; D is combination.',
+    },
+    questions: [
+      { n: 1, type: 'MCQ (1 mark)',           q: 'Which gas is released as a by-product of photosynthesis?', opts: ['CO₂', 'N₂', 'O₂', 'H₂'], ans: 'C) O₂' },
+      { n: 2, type: 'Short Answer (2 marks)', q: 'Define chlorophyll and state its role in photosynthesis.', ans: 'Green pigment in chloroplasts that absorbs sunlight for the light reactions of photosynthesis.' },
+      { n: 3, type: 'Long Answer (5 marks)',  q: 'With a neat labelled diagram, explain the light-dependent and light-independent reactions of photosynthesis.' },
+    ],
+    aiResponse: "Photosynthesis is the process where plants convert light energy into chemical energy stored as glucose.\n\nEquation:\n6CO₂ + 6H₂O + Light Energy → C₆H₁₂O₆ + 6O₂\n\nWhere it happens — Chloroplasts:\n• Light reactions → Thylakoid membranes (produce ATP & NADPH)\n• Calvin Cycle → Stroma (produces glucose from CO₂)\n\nWhy it matters: Photosynthesis is the basis of nearly all food chains on Earth and produces the oxygen we breathe!\n\nCBSE Tip: Always draw a labelled chloroplast diagram for 5-mark questions.",
+  },
+  'English': {
+    chapterName: 'A Letter to God',
+    topic: 'A Letter to God',
+    summaryPoints: [
+      "The story is set in a valley where Lencho, a hardworking farmer, anxiously awaits rain for his corn crop.",
+      "A hailstorm destroys the entire crop — Lencho writes a letter to God asking for 100 pesos to restart his farm.",
+      "The postmaster, moved by Lencho's faith, collects contributions from staff and sends 70 pesos on behalf of 'God'.",
+      "When Lencho receives less than asked, he writes a second letter accusing post office employees of theft.",
+      "The story explores faith, irony, and the gap between Lencho's simple worldview and the postmaster's selfless generosity.",
+    ],
+    flashcards: [
+      { front: 'Who is the protagonist in "A Letter to God"?', back: "Lencho — a hardworking but simple farmer with unshakeable faith in God and no awareness of human kindness around him." },
+      { front: "What destroyed Lencho's crop?", back: 'A sudden hailstorm turned his corn fields into a white blanket of hailstones, destroying everything he had worked for.' },
+      { front: 'What is the central irony of the story?', back: "The very people who helped Lencho (post office staff) are called 'thieves' because his absolute faith in God leaves no room for human kindness." },
+    ],
+    mcq: {
+      q: "Why did Lencho call the post office employees 'a bunch of crooks'?",
+      opts: ["They didn't deliver his letter", 'They opened his letter without permission', 'He received 70 pesos instead of 100', 'They laughed at his letter'],
+      correct: 2,
+      explanation: "Lencho had asked God for exactly 100 pesos. His faith was so absolute that when only 70 arrived, he assumed the post office staff must have stolen the remaining 30 pesos.",
+    },
+    questions: [
+      { n: 1, type: 'MCQ (1 mark)',           q: 'What did Lencho initially compare the raindrops to?', opts: ['Silver coins', 'New coins', 'Pearls', 'Diamonds'], ans: 'B) New coins' },
+      { n: 2, type: 'Short Answer (2 marks)', q: "Why was the postmaster surprised when he read Lencho's first letter?", ans: "A man wrote directly to God with complete faith that God would respond. The postmaster admired his unshakeable belief and decided to help." },
+      { n: 3, type: 'Long Answer (5 marks)',  q: "Describe the central irony in 'A Letter to God'. What does it reveal about human nature and faith?" },
+    ],
+    aiResponse: '"A Letter to God" by G.L. Fuentes is a story about simple faith versus worldly logic.\n\nMain Characters:\n• Lencho — a poor farmer with unshakeable faith in God\n• The Postmaster — a kind man who goes beyond his duty to help\n\nKey Events:\n1. Lencho\'s corn crop destroyed by a hailstorm\n2. He writes a letter to God asking for 100 pesos\n3. The Postmaster collects 70 pesos from staff\n4. Lencho receives the money but accuses postal workers of theft\n\nCentral Theme: Irony — the very helpers are called thieves because Lencho\'s faith in God leaves no room for human kindness.\n\nBoard Exam Tip: For 3-mark answers, always mention the central irony — examiners specifically look for it!',
+  },
+  'Social Science': {
+    chapterName: 'The Rise of Nationalism in Europe',
+    topic: 'Nationalism in Europe',
+    summaryPoints: [
+      'Nationalism emerged as a political force in 19th-century Europe, valuing shared cultural, linguistic, and territorial identity.',
+      "The French Revolution (1789) was a catalyst — it spread popular sovereignty: the nation should govern itself, not be ruled by kings.",
+      "Napoleon's conquests spread the ideas of liberty and equality across Europe, fuelling nationalist movements even after his defeat.",
+      'The Romantic movement (art, music, poetry) promoted a unique national spirit and cultural identity as worthy of political independence.',
+      'By 1871, Germany and Italy were unified as nation-states through wars and diplomacy (led by Bismarck and Cavour respectively).',
+    ],
+    flashcards: [
+      { front: 'What was the significance of the French Revolution for nationalism?', back: 'It spread popular sovereignty — the idea that a nation should be governed by its own people, not by an emperor or hereditary king.' },
+      { front: 'Who was "Germania" and what did she symbolise?', back: 'An allegorical female figure of the German nation — depicted with a sword and oak crown to symbolise strength, heroism, and national unity.' },
+      { front: 'What is a nation-state?', back: 'A politically independent state whose population shares a common identity — language, culture, history, and territory.' },
+    ],
+    mcq: {
+      q: 'The Congress of Vienna (1815) was primarily aimed at:',
+      opts: ['Unifying Germany under Prussia', 'Dismantling the Ottoman Empire', 'Restoring conservative governments across Europe', 'Creating a League of Nations'],
+      correct: 2,
+      explanation: "The Congress of Vienna, led by conservative powers Britain, Russia, Prussia, and Austria, aimed to restore Europe's pre-Napoleon monarchies and suppress liberal-nationalist ideas.",
+    },
+    questions: [
+      { n: 1, type: 'MCQ (1 mark)',           q: 'German unification was completed in which year?', opts: ['1848', '1861', '1871', '1815'], ans: 'C) 1871' },
+      { n: 2, type: 'Short Answer (2 marks)', q: "What role did Bismarck play in German unification?", ans: "As Prussian Chancellor, Bismarck used 'blood and iron' — three wars (Denmark, Austria, France) to unify German states under Prussian leadership by 1871." },
+      { n: 3, type: 'Long Answer (5 marks)',  q: 'Explain how Napoleon contributed to the growth of nationalism in Europe. Mention at least three specific ways.' },
+    ],
+    aiResponse: "Nationalism is the ideology that people sharing a common identity (language, culture, history) should form their own independent nation-state.\n\nKey Causes of European Nationalism:\n• French Revolution (1789) — sovereignty belongs to the people\n• Napoleon's wars — spread revolutionary ideas across Europe\n• Romantic movement — glorified national culture and language\n• Industrial Revolution — new social classes demanding political rights\n\nMajor Events:\n1. Frankfurt Parliament (1848) — failed German unification attempt\n2. Italian Unification 1861 — led by Cavour and Garibaldi\n3. German Unification 1871 — led by Bismarck (blood and iron policy)\n\nBoard Exam Tip: Remember key dates — French Revolution 1789, Congress of Vienna 1815, German unification 1871. These appear in MCQs every year!",
+  },
+}
+
+const DEMO_CHAT_INIT = [
+  { role: 'ai', text: "Hi! I'm Arthavi, your AI Study Companion. 👋\n\nI'm trained on your entire NCERT & state board curriculum. Ask me anything — from chapter basics to board exam tips!" },
+]
+const DEMO_GATE_COPY = {
+  curriculum: { icon: '📚', title: "You've Seen the Curriculum Hub!", sub: 'Sign up to unlock AI summaries, flashcards, audio lessons, and video explanations for every chapter across all 35+ boards — personalised to your syllabus.' },
+  practice:   { icon: '✏️',  title: "You've Tried Question Practice!", sub: 'Sign up to access thousands of practice questions per chapter, with instant AI feedback, score tracking, and personalised weak-area recommendations.' },
+  tutor:      { icon: '🤖', title: "You've Met Arthavi, Your AI Tutor!", sub: 'Sign up to ask unlimited questions, get step-by-step explanations, and study 24/7 with an AI tutor that knows your entire curriculum.' },
+  qmaster:    { icon: '📝', title: "You've Generated a Question Paper!", sub: 'Sign up to create full-length papers with answer keys, export to PDF, and evaluate student answer sheets using AI grading.' },
+}
+
+function DemoSection({ onRegister }) {
+  const [tab, setTab] = useState('curriculum')
+  const [used, setUsed] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('arthavi_demo_used') || '{}') } catch { return {} }
+  })
+  const [gate, setGate] = useState(null)
+  // Curriculum
+  const [chBoard, setChBoard] = useState('')
+  const [chClass, setChClass] = useState('')
+  const [chSubject, setChSubject] = useState('')
+  const [chTool, setChTool] = useState('')
+  const [chResult, setChResult] = useState(null)
+  const [chLoading, setChLoading] = useState(false)
+  const [chFlipIdx, setChFlipIdx] = useState(null)
+  // Practice
+  const [prSelected, setPrSelected] = useState(null)
+  const [prAnswered, setPrAnswered] = useState(false)
+  // Tutor
+  const [tutMsg, setTutMsg] = useState('')
+  const [tutMessages, setTutMessages] = useState([...DEMO_CHAT_INIT])
+  const [tutLoading, setTutLoading] = useState(false)
+  const tutEndRef = useRef(null)
+  // QMaster
+  const [qmBoard, setQmBoard] = useState('CBSE')
+  const [qmClass, setQmClass] = useState('Class 10')
+  const [qmSubject, setQmSubject] = useState('Science')
+  const [qmGenerated, setQmGenerated] = useState(false)
+  const [qmLoading, setQmLoading] = useState(false)
+
+  useEffect(() => { tutEndRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [tutMessages, tutLoading])
+
+  const markUsed = (feature) => {
+    const updated = { ...used, [feature]: true }
+    setUsed(updated)
+    try { localStorage.setItem('arthavi_demo_used', JSON.stringify(updated)) } catch {}
+    setTimeout(() => setGate(feature), 1400)
+  }
+  const runCurriculumTool = (tool) => {
+    if (used.curriculum) { setGate('curriculum'); return }
+    setChTool(tool); setChLoading(true); setChResult(null)
+    setTimeout(() => { setChLoading(false); setChResult(tool); markUsed('curriculum') }, 1800)
+  }
+  const submitPractice = () => {
+    if (prSelected === null || prAnswered || used.practice) return
+    setPrAnswered(true); markUsed('practice')
+  }
+  const sendTutorMsg = () => {
+    const msg = tutMsg.trim()
+    if (!msg || used.tutor || tutLoading) return
+    setTutMessages(m => [...m, { role: 'user', text: msg }]); setTutMsg(''); setTutLoading(true)
+    setTimeout(() => { setTutLoading(false); setTutMessages(m => [...m, { role: 'ai', text: getDemoAIResponse(msg) }]); markUsed('tutor') }, 1800)
+  }
+  const generateQuestions = () => {
+    if (used.qmaster) { setGate('qmaster'); return }
+    setQmLoading(true)
+    setTimeout(() => { setQmLoading(false); setQmGenerated(true); markUsed('qmaster') }, 2000)
+  }
+
+  // Subject-aware demo data — updates whenever curriculum tab subject changes
+  const demoData = DEMO_CONTENT[chSubject] || DEMO_CONTENT['Science']
+  const qmDemoData = DEMO_CONTENT[qmSubject] || DEMO_CONTENT['Science']
+
+  // Pick AI response based on keywords in the user's message, then fall back to selected subject
+  const getDemoAIResponse = (message) => {
+    const q = (message || '').toLowerCase()
+    if (/math|algebra|geometr|trigon|calculus|probabilit|statistic|integer|fraction|polynomial|hcf|lcm|real number|equation|theorem/.test(q))
+      return DEMO_CONTENT['Mathematics'].aiResponse
+    if (/english|poem|story|prose|novel|grammar|comprehension|passage|character|lencho|narrative|essay/.test(q))
+      return DEMO_CONTENT['English'].aiResponse
+    if (/history|geography|civics|econom|social|democracy|govern|nation|revolution|parliament|constitution|bismarck|france/.test(q))
+      return DEMO_CONTENT['Social Science'].aiResponse
+    return (DEMO_CONTENT[chSubject] || DEMO_CONTENT['Science']).aiResponse
+  }
+  const TABS = [
+    { key: 'curriculum', icon: '📚', label: 'Curriculum Hub' },
+    { key: 'practice',   icon: '✏️',  label: 'Question Practice' },
+    { key: 'tutor',      icon: '🤖', label: 'AI Tutor' },
+    { key: 'qmaster',    icon: '📝', label: 'Question Master' },
+  ]
+  return (
+    <section className="lp-section lp-demo-section" id="demo">
+      <div className="lp-section-inner">
+        <div style={{ textAlign: 'center', marginBottom: 48 }}>
+          <div className="lp-demo-live-badge"><span className="lp-badge-dot" />Live Interactive Demo</div>
+          <h2 className="lp-h2" style={{ textAlign: 'center', marginTop: 16 }}>Try Arthavi Before You Sign Up</h2>
+          <p className="lp-section-sub" style={{ textAlign: 'center', margin: '0 auto' }}>
+            Four powerful AI learning tools — one free interaction each. No account needed.
+          </p>
+        </div>
+        {/* Tabs */}
+        <div className="lp-demo-tabs">
+          {TABS.map(t => (
+            <button key={t.key}
+              className={`lp-demo-tab${tab === t.key ? ' lp-dt-active' : ''}${used[t.key] ? ' lp-dt-used' : ''}`}
+              onClick={() => setTab(t.key)}>
+              <span className="lp-demo-tab-icon">{t.icon}</span>
+              <span className="lp-demo-tab-label">{t.label}</span>
+              {used[t.key] && <span className="lp-demo-tab-check">✓</span>}
+            </button>
+          ))}
+        </div>
+        {/* Panel box */}
+        <div className="lp-demo-box">
+          {/* CURRICULUM HUB */}
+          {tab === 'curriculum' && (
+            <div className="lp-demo-panel">
+              <div className="lp-demo-panel-hdr">
+                <div>
+                  <div className="lp-demo-panel-title">📚 Curriculum Hub</div>
+                  <div className="lp-demo-panel-hint">Select board, class &amp; subject → choose an AI tool</div>
+                </div>
+                {used.curriculum ? <span className="lp-demo-badge-used">✓ Demo Used</span> : <span className="lp-demo-badge-free">1 free attempt</span>}
+              </div>
+              <div className="lp-demo-selectors">
+                <select className="lp-demo-select" value={chBoard} onChange={e => { setChBoard(e.target.value); setChResult(null); setChTool('') }} disabled={used.curriculum}>
+                  <option value="">Select Board</option>
+                  {DEMO_BOARDS_LIST.map(b => <option key={b}>{b}</option>)}
+                </select>
+                <select className="lp-demo-select" value={chClass} onChange={e => { setChClass(e.target.value); setChResult(null); setChTool('') }} disabled={!chBoard || used.curriculum}>
+                  <option value="">Select Class</option>
+                  {DEMO_CLASSES_LIST.map(c => <option key={c}>{c}</option>)}
+                </select>
+                <select className="lp-demo-select" value={chSubject} onChange={e => { setChSubject(e.target.value); setChResult(null); setChTool('') }} disabled={!chClass || used.curriculum}>
+                  <option value="">Select Subject</option>
+                  {['Science', 'Mathematics', 'English', 'Social Science'].map(s => <option key={s}>{s}</option>)}
+                </select>
+              </div>
+              {!chBoard && (
+                <div className="lp-demo-empty">
+                  <div className="lp-demo-empty-icon">🎓</div>
+                  <p>Select your board, class and subject above to explore AI-powered learning tools for your exact chapter.</p>
+                </div>
+              )}
+              {chBoard && chClass && chSubject && !chResult && !chLoading && (
+                <div className="lp-demo-chapter-row">
+                  <div className="lp-demo-chapter-info-box">
+                    <div className="lp-demo-tag-row">
+                      <span className="lp-demo-tag">{chBoard}</span>
+                      <span className="lp-demo-tag">{chClass}</span>
+                      <span className="lp-demo-tag">{chSubject}</span>
+                    </div>
+                    <div className="lp-demo-chapter-name">📖 {demoData.chapterName}</div>
+                    <div className="lp-demo-chapter-sub">Choose an AI tool to generate content instantly</div>
+                  </div>
+                  <div className="lp-demo-tool-btns">
+                    {[
+                      { key: 'summary',    icon: '📝', label: 'AI Summary',   desc: '5-point chapter overview' },
+                      { key: 'flashcards', icon: '🃏', label: 'Flashcards',   desc: 'Tap to flip & test yourself' },
+                      { key: 'questions',  icon: '❓', label: 'Practice Q&A', desc: 'MCQ with instant feedback' },
+                    ].map(tool => (
+                      <button key={tool.key} className="lp-demo-tool-btn" onClick={() => runCurriculumTool(tool.key)}>
+                        <span className="lp-demo-tool-icon">{tool.icon}</span>
+                        <div><div className="lp-demo-tool-label">{tool.label}</div><div className="lp-demo-tool-desc">{tool.desc}</div></div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {chLoading && (
+                <div className="lp-demo-loading">
+                  <div className="lp-demo-spinner" />
+                  <p>AI is generating your {chTool === 'summary' ? 'chapter summary' : chTool === 'flashcards' ? 'flashcards' : 'practice question'}…</p>
+                </div>
+              )}
+              {chResult === 'summary' && (
+                <div className="lp-demo-result-box">
+                  <div className="lp-demo-result-title">📝 AI Summary — {demoData.chapterName}</div>
+                  <ol className="lp-demo-summary-list">
+                    {demoData.summaryPoints.map((p, i) => <li key={i}><span>{i + 1}</span><p>{p}</p></li>)}
+                  </ol>
+                  <div className="lp-demo-nudge">Want summaries for all chapters? <button onClick={() => setGate('curriculum')}>Sign up free →</button></div>
+                </div>
+              )}
+              {chResult === 'flashcards' && (
+                <div className="lp-demo-result-box">
+                  <div className="lp-demo-result-title">🃏 Flashcards — {demoData.chapterName}</div>
+                  <div className="lp-demo-fc-grid">
+                    {demoData.flashcards.map((fc, i) => (
+                      <div key={i} className={`lp-demo-fc${chFlipIdx === i ? ' lp-fc-flipped' : ''}`} onClick={() => setChFlipIdx(chFlipIdx === i ? null : i)}>
+                        <div className="lp-demo-fc-inner">
+                          <div className="lp-demo-fc-front"><span className="lp-demo-fc-label">Question</span><p>{fc.front}</p><span className="lp-demo-fc-hint">Tap to flip ↩</span></div>
+                          <div className="lp-demo-fc-back"><span className="lp-demo-fc-label">Answer</span><p>{fc.back}</p><span className="lp-demo-fc-hint">Tap to flip back ↩</span></div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="lp-demo-nudge">Want 20 flashcards per chapter? <button onClick={() => setGate('curriculum')}>Sign up free →</button></div>
+                </div>
+              )}
+              {chResult === 'questions' && (
+                <div className="lp-demo-result-box">
+                  <div className="lp-demo-result-title">❓ Practice Question — {demoData.chapterName}</div>
+                  <p className="lp-demo-mcq-q">{demoData.mcq.q}</p>
+                  <div className="lp-demo-mcq-opts">
+                    {demoData.mcq.opts.map((o, i) => (
+                      <div key={i} className={`lp-demo-mcq-opt${i === demoData.mcq.correct ? ' lp-mcq-correct' : ''}`}>
+                        <span>{String.fromCharCode(65 + i)}</span> {o}
+                        {i === demoData.mcq.correct && <span className="lp-mcq-tick">✓</span>}
+                      </div>
+                    ))}
+                  </div>
+                  <div className="lp-demo-expl">💡 {demoData.mcq.explanation}</div>
+                  <div className="lp-demo-nudge" style={{ marginTop: 12 }}>Practice more questions? <button onClick={() => setGate('curriculum')}>Sign up free →</button></div>
+                </div>
+              )}
+            </div>
+          )}
+          {/* QUESTION PRACTICE */}
+          {tab === 'practice' && (
+            <div className="lp-demo-panel">
+              <div className="lp-demo-panel-hdr">
+                <div>
+                  <div className="lp-demo-panel-title">✏️ Question Practice</div>
+                  <div className="lp-demo-panel-hint">Select your answer and get instant AI feedback</div>
+                </div>
+                {used.practice ? <span className="lp-demo-badge-used">✓ Demo Used</span> : <span className="lp-demo-badge-free">1 free attempt</span>}
+              </div>
+              <div className="lp-demo-practice-card">
+                <div className="lp-demo-practice-meta">
+                  <span>CBSE · Class 10 · Science</span>
+                  <span>Chapter 1: Chemical Reactions</span>
+                  <span className="lp-demo-type-pill">MCQ · 1 Mark</span>
+                </div>
+                <p className="lp-demo-practice-q">{DEMO_CONTENT['Science'].mcq.q}</p>
+                <div className="lp-demo-practice-opts">
+                  {DEMO_CONTENT['Science'].mcq.opts.map((o, i) => (
+                    <div key={i}
+                      className={['lp-demo-pr-opt', prSelected === i ? 'lp-pr-selected' : '', prAnswered && i === DEMO_CONTENT['Science'].mcq.correct ? 'lp-pr-correct' : '', prAnswered && prSelected === i && i !== DEMO_CONTENT['Science'].mcq.correct ? 'lp-pr-wrong' : ''].join(' ').trim()}
+                      onClick={() => !prAnswered && !used.practice && setPrSelected(i)}>
+                      <span className="lp-demo-pr-letter">{String.fromCharCode(65 + i)}</span>
+                      <span>{o}</span>
+                      {prAnswered && i === DEMO_CONTENT['Science'].mcq.correct && <span className="lp-pr-icon lp-pr-check">✓</span>}
+                      {prAnswered && prSelected === i && i !== DEMO_CONTENT['Science'].mcq.correct && <span className="lp-pr-icon lp-pr-cross">✗</span>}
+                    </div>
+                  ))}
+                </div>
+                {!prAnswered
+                  ? <button className="lp-demo-submit-btn" onClick={submitPractice} disabled={prSelected === null || used.practice}>Submit Answer →</button>
+                  : (
+                    <div className="lp-demo-pr-feedback">
+                      <div className={`lp-demo-pr-verdict${prSelected === DEMO_CONTENT['Science'].mcq.correct ? ' lp-verdict-ok' : ' lp-verdict-no'}`}>
+                        {prSelected === DEMO_CONTENT['Science'].mcq.correct ? '🎉 Correct! Well done!' : `❌ Not quite — the correct answer is ${String.fromCharCode(65 + DEMO_CONTENT['Science'].mcq.correct)}`}
+                      </div>
+                      <div className="lp-demo-expl">💡 {DEMO_CONTENT['Science'].mcq.explanation}</div>
+                      <div className="lp-demo-nudge" style={{ marginTop: 12 }}>Practice hundreds more questions? <button onClick={() => setGate('practice')}>Sign up free →</button></div>
+                    </div>
+                  )
+                }
+              </div>
+            </div>
+          )}
+          {/* AI TUTOR */}
+          {tab === 'tutor' && (
+            <div className="lp-demo-panel lp-demo-panel-chat">
+              <div className="lp-demo-panel-hdr" style={{ padding: '24px 32px 16px', borderBottom: '1px solid #F0EAFF', margin: 0 }}>
+                <div>
+                  <div className="lp-demo-panel-title">🤖 AI Tutor — Arthavi</div>
+                  <div className="lp-demo-panel-hint">Ask one question — trained on your entire syllabus</div>
+                </div>
+                {used.tutor ? <span className="lp-demo-badge-used">✓ Demo Used</span> : <span className="lp-demo-badge-free">1 free message</span>}
+              </div>
+              <div className="lp-demo-chat-wrap">
+                <div className="lp-demo-chat-msgs">
+                  {tutMessages.map((m, i) => (
+                    <div key={i} className={`lp-demo-msg lp-demo-msg-${m.role}`}>
+                      {m.role === 'ai' && <div className="lp-demo-vidya-av">A</div>}
+                      <div className="lp-demo-msg-bubble">
+                        {m.text.split('\n').map((line, j) => <p key={j}>{line}</p>)}
+                      </div>
+                    </div>
+                  ))}
+                  {tutLoading && (
+                    <div className="lp-demo-msg lp-demo-msg-ai">
+                      <div className="lp-demo-vidya-av">A</div>
+                      <div className="lp-demo-msg-bubble lp-demo-typing"><span /><span /><span /></div>
+                    </div>
+                  )}
+                  <div ref={tutEndRef} />
+                </div>
+                <div className="lp-demo-chat-bar">
+                  <input className="lp-demo-chat-inp"
+                    placeholder={used.tutor ? 'Sign up for unlimited AI tutoring!' : 'Ask Arthavi anything… e.g. "Explain Real Numbers"'}
+                    value={tutMsg}
+                    onChange={e => setTutMsg(e.target.value)}
+                    onKeyDown={e => e.key === 'Enter' && sendTutorMsg()}
+                    disabled={used.tutor || tutLoading} />
+                  <button className="lp-demo-chat-send" onClick={sendTutorMsg} disabled={!tutMsg.trim() || used.tutor || tutLoading}>
+                    {tutLoading ? '…' : '↑'}
+                  </button>
+                </div>
+                {!used.tutor && <p className="lp-demo-chat-note">💬 1 free message in demo · Sign up for unlimited 24/7 AI tutoring</p>}
+                {used.tutor && <div className="lp-demo-nudge" style={{ padding: '10px 16px', textAlign: 'center' }}>Want unlimited AI tutoring? <button onClick={() => setGate('tutor')}>Sign up free →</button></div>}
+              </div>
+            </div>
+          )}
+          {/* QUESTION MASTER */}
+          {tab === 'qmaster' && (
+            <div className="lp-demo-panel">
+              <div className="lp-demo-panel-hdr">
+                <div>
+                  <div className="lp-demo-panel-title">📝 Question Master</div>
+                  <div className="lp-demo-panel-hint">Generate a sample question paper with answer key</div>
+                </div>
+                {used.qmaster ? <span className="lp-demo-badge-used">✓ Demo Used</span> : <span className="lp-demo-badge-free">1 free generation</span>}
+              </div>
+              <div className="lp-demo-qm-wrap">
+                <div className="lp-demo-selectors">
+                  {[
+                    { val: qmBoard, set: setQmBoard, opts: ['CBSE', 'ICSE / ISC', 'Maharashtra Board'] },
+                    { val: qmClass, set: setQmClass, opts: ['Class 9', 'Class 10', 'Class 11', 'Class 12'] },
+                    { val: qmSubject, set: setQmSubject, opts: ['Science', 'Mathematics', 'English'] },
+                  ].map((sel, i) => (
+                    <select key={i} className="lp-demo-select" value={sel.val} onChange={e => sel.set(e.target.value)} disabled={qmGenerated}>
+                      {sel.opts.map(o => <option key={o}>{o}</option>)}
+                    </select>
+                  ))}
+                </div>
+                <div className="lp-demo-qm-config">
+                  {[['Topic', qmDemoData.topic], ['Questions', '3 (Mixed types)'], ['Total Marks', '8'], ['Difficulty', 'Medium'], ['Answer Key', 'Included ✓']].map(([k, v]) => (
+                    <div key={k} className="lp-demo-qm-cfg-row"><span>{k}</span><strong>{v}</strong></div>
+                  ))}
+                </div>
+                {!qmGenerated && (
+                  <button className="lp-demo-gen-btn" onClick={generateQuestions} disabled={qmLoading}>
+                    {qmLoading ? <><span className="lp-demo-spinner-sm" /> Generating paper…</> : '⚡ Generate Question Paper'}
+                  </button>
+                )}
+                {qmGenerated && (
+                  <div className="lp-demo-paper">
+                    <div className="lp-demo-paper-hdr">
+                      <strong>{qmBoard} · {qmClass} · {qmSubject}</strong>
+                      <span>Topic: Photosynthesis · 8 Marks</span>
+                    </div>
+                    {qmDemoData.questions.map((q, i) => (
+                      <div key={i} className="lp-demo-paper-q">
+                        <div className="lp-demo-paper-q-hdr">
+                          <span className="lp-demo-paper-qnum">Q{q.n}.</span>
+                          <span className="lp-demo-paper-qtype">{q.type}</span>
+                        </div>
+                        <p className="lp-demo-paper-qtext">{q.q}</p>
+                        {q.opts && <div className="lp-demo-paper-opts">{q.opts.map((o, j) => <span key={j}>{String.fromCharCode(65 + j)}) {o}&nbsp;&nbsp;</span>)}</div>}
+                        {q.ans && <div className="lp-demo-paper-ans">✓ {q.ans}</div>}
+                      </div>
+                    ))}
+                    <div className="lp-demo-nudge" style={{ marginTop: 16 }}>Want full 40-question papers with PDF export? <button onClick={() => setGate('qmaster')}>Sign up free →</button></div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+        {/* Bottom CTA */}
+        <div className="lp-demo-cta-row">
+          <div className="lp-demo-cta-text">
+            <strong>🚀 Unlock everything — free to start</strong>
+            <span>All AI tools · All 35+ boards · All chapters · No credit card needed</span>
+          </div>
+          <button className="lp-btn-primary lp-btn-xl" onClick={onRegister}>Create Free Account →</button>
+        </div>
+      </div>
+      {/* Gate Modal */}
+      {gate && (
+        <div className="lp-demo-gate-overlay" onClick={() => setGate(null)}>
+          <div className="lp-demo-gate-modal" onClick={e => e.stopPropagation()}>
+            <button className="lp-demo-gate-close" onClick={() => setGate(null)}>✕</button>
+            <div className="lp-demo-gate-ico">{DEMO_GATE_COPY[gate]?.icon}</div>
+            <h3 className="lp-demo-gate-title">{DEMO_GATE_COPY[gate]?.title}</h3>
+            <p className="lp-demo-gate-sub">{DEMO_GATE_COPY[gate]?.sub}</p>
+            <div className="lp-demo-gate-feats">
+              {['All 35+ boards & classes', 'Unlimited AI interactions', 'Question papers with PDF export', 'AI answer sheet evaluation'].map(f => (
+                <div key={f} className="lp-demo-gate-feat"><span>✓</span>{f}</div>
+              ))}
+            </div>
+            <div className="lp-demo-gate-btns">
+              <button className="lp-btn-primary lp-btn-xl" style={{ width: '100%' }} onClick={() => { setGate(null); onRegister() }}>
+                🚀 Create Free Account — It's Fast!
+              </button>
+              <button className="lp-btn-ghost" style={{ width: '100%' }} onClick={() => setGate(null)}>Keep Exploring Demo</button>
+            </div>
+            <p className="lp-demo-gate-note">✅ Free forever plan · No credit card · 2M+ students trust Arthavi</p>
+          </div>
+        </div>
+      )}
+    </section>
+  )
+}
 
 function useFadeIn() {
   const ref = useRef(null)
@@ -84,12 +601,13 @@ export default function LandingPage() {
       {/* ════════════════════ NAV ════════════════════ */}
       <nav className={`lp-nav${scrolled ? ' lp-nav-scrolled' : ''}`}>
         <a className="lp-nav-brand" href="#">
-          <Logo size={42} full={true} />
+          <Logo size={60} full />
         </a>
         <div className="lp-nav-links">
           <a href="#roles">For Schools</a>
           <a href="#features">Features</a>
           <a href="#how">How it Works</a>
+          <a href="#demo" style={{ color:'#6B52B0', fontWeight:700 }}>Try Demo ✨</a>
           <a href="#boards">Boards</a>
         </div>
         <div className="lp-nav-actions">
@@ -106,13 +624,14 @@ export default function LandingPage() {
         <div className="lp-mobile-overlay" onClick={() => setMobileMenu(false)}>
           <div className="lp-mobile-drawer" onClick={e => e.stopPropagation()}>
             <div className="lp-mobile-top">
-              <Logo size={36} full={true} />
+              <Logo size={52} full={true} />
               <button className="lp-mobile-close" onClick={() => setMobileMenu(false)}>✕</button>
             </div>
             <nav className="lp-mobile-links">
-              {['#roles','#features','#how','#boards'].map((h, i) => (
-                <a key={h} href={h} onClick={() => setMobileMenu(false)}>
-                  {['For Schools','Features','How it Works','Boards'][i]}
+              {['#roles','#features','#how','#demo','#boards'].map((h, i) => (
+                <a key={h} href={h} onClick={() => setMobileMenu(false)}
+                  style={h === '#demo' ? { color:'#6B52B0', background:'#F0EAFF' } : {}}>
+                  {['For Schools','Features','How it Works','Try Demo ✨','Boards'][i]}
                 </a>
               ))}
             </nav>
@@ -134,22 +653,29 @@ export default function LandingPage() {
         <div className="lp-hero-inner">
           <div className="lp-hero-badge lp-fade">
             <span className="lp-badge-dot"/>
-            🇮🇳 Made for 36 Indian States &amp; UTs
+            🇮🇳 Built for Indian Schools — CBSE, ICSE &amp; State Boards
           </div>
           <h1 className="lp-h1 lp-fade">
-            The AI Teacher<br/>
-            Every <span className="lp-gradient-text">Indian Student</span><br/>
-            Deserves
+            Give Every Student<br/>
+            a <span className="lp-gradient-text">Personal AI Tutor.</span>
           </h1>
+          <div className="lp-hero-chips lp-fade">
+            <span className="lp-chip">✅ End Tuition Stress</span>
+            <span className="lp-chip">⚡ 90% Less Teacher Workload</span>
+            <span className="lp-chip">📊 Real-Time Progress Tracking</span>
+          </div>
           <p className="lp-hero-sub lp-fade">
-            NCERT to State boards — AI summaries, question papers, answer sheet evaluation, audio lessons and live chat with your textbook. All in one platform.
+            Arthavi combines learning, testing, evaluation, and progress tracking into one intelligent platform — built specifically for Indian schools (CBSE, ICSE &amp; all State Boards).
           </p>
           <div className="lp-hero-ctas lp-fade">
-            <button className="lp-btn-hero-primary" onClick={() => openModal('register')}>
+            <button className="lp-btn-hero-primary" onClick={() => openModal('register', 'student')}>
               🚀 Start Learning Free
             </button>
-            <button className="lp-btn-hero-sec" onClick={() => openModal('login')}>
-              Already have an account →
+            <a className="lp-btn-try-demo" href="#demo">
+              ✨ Try Live Demo
+            </a>
+            <button className="lp-btn-hero-sec" onClick={() => openModal('register', 'school_admin')}>
+              🏫 Book Demo
             </button>
           </div>
           <div className="lp-stats lp-fade">
@@ -166,7 +692,7 @@ export default function LandingPage() {
           <div className="lp-mockup-card">
             <div className="lp-mockup-header">
               <div style={{ display:'flex', alignItems:'center', gap:8 }}>
-                <img src="/paarthivi-icon.png" alt="P" style={{ width:22, height:22, objectFit:"contain" }} />
+                <Logo size={40} />
                 <span style={{ fontWeight:700, fontSize:13 }}>Curriculum Hub</span>
               </div>
               <span style={{ fontSize:11, color:'#94a3b8' }}>CBSE · Class 10</span>
@@ -188,7 +714,7 @@ export default function LandingPage() {
 
       {/* ════════════════════ TRUST BAR ════════════════════ */}
       <div className="lp-trust-bar">
-        {['🎓 NCERT & State Board Aligned', '🔊 AI Audio & Video Lessons', '❓ One-Click Question Papers', '📊 AI Evaluation & Parent Reports', '🇮🇳 All 36 States & UTs'].map(item => (
+        {['💰 Save ₹50,000+ per Year', '🤖 AI Tutor 24/7 — No Extra Cost', '⚡ Evaluate 40 Papers in Minutes', '📊 Real-Time Parent Reports', '🇮🇳 All 35+ Boards & State Curricula'].map(item => (
           <div key={item} className="lp-trust-item">
             <span>{item.split(' ')[0]}</span>
             <span>{item.split(' ').slice(1).join(' ')}</span>
@@ -196,23 +722,111 @@ export default function LandingPage() {
         ))}
       </div>
 
+      {/* ════════════════════ FOR STUDENTS / FOR PARENTS ════════════════════ */}
+      <section className="lp-section lp-qw-section">
+        <div className="lp-section-inner">
+          <div className="lp-qw-pain">Spend ₹50,000+ on tuitions every year?</div>
+          <div className="lp-qw-hook">Get a <strong>24/7 Personal AI Tutor</strong> for a <span className="lp-qw-highlight">fraction</span> of the cost!</div>
+          <div className="lp-qw-cols">
+            <div className="lp-qw-card" style={{ '--qw-accent': '#2563EB', '--qw-bg': '#EFF6FF' }}>
+              <div className="lp-qw-card-title">🎒 For Students</div>
+              <ul className="lp-qw-list">
+                <li>✅ CBSE, ICSE &amp; 35+ State Boards</li>
+                <li>✅ Instant summaries &amp; flashcards</li>
+                <li>✅ Practice tests + Audio lessons</li>
+                <li>✅ AI Tutor 24/7 on any topic</li>
+              </ul>
+            </div>
+            <div className="lp-qw-card" style={{ '--qw-accent': '#EA580C', '--qw-bg': '#FFF7ED' }}>
+              <div className="lp-qw-card-title">👨‍👩‍👧‍👦 For Parents</div>
+              <ul className="lp-qw-list">
+                <li>✅ Save ₹50K+/yr, Ditch Tuitions!</li>
+                <li>✅ Know Your Child's Progress</li>
+                <li>✅ Real-time performance reports</li>
+                <li>✅ No app download — works in browser!</li>
+              </ul>
+            </div>
+          </div>
+          {/* Feature icons row */}
+          <div className="lp-qw-features">
+            {[['🤖','AI Tutor 24/7'],['🃏','Smart Flashcards'],['📝','Practice Tests with Feedback'],['🔊','Audio Lessons'],['📋','Exam Paper Generator']].map(([icon, label]) => (
+              <div key={label} className="lp-qw-feature-item">
+                <span className="lp-qw-feature-icon">{icon}</span>
+                <span>{label}</span>
+              </div>
+            ))}
+          </div>
+          <div className="lp-qw-cta-row">
+            <a href="#demo" className="lp-btn-try-free">TRY IT FREE &nbsp;➡&nbsp; arthavi.in</a>
+            <div className="lp-qw-badge">No App Download Needed · Works in Your Browser!</div>
+          </div>
+          {/* Result callouts */}
+          <div className="lp-results-row">
+            <div className="lp-result-card" style={{ '--rc-bg': '#FFF9C4' }}>🎯 Students: Score <strong>94%</strong> in Boards!</div>
+            <div className="lp-result-card" style={{ '--rc-bg': '#C8F7C5' }}>💰 Parents: Save <strong>Big</strong> on Tuitions!</div>
+            <div className="lp-result-card" style={{ '--rc-bg': '#DDEEFF' }}>⚡ Schools: Grade Exams in <strong>Minutes!</strong></div>
+          </div>
+        </div>
+      </section>
+
+      {/* ════════════════════ PROBLEM ════════════════════ */}
+      <section className="lp-section lp-bg-cream" id="problem">
+        <div className="lp-section-inner">
+          <div className="lp-section-eyebrow">THE PROBLEM WE ALL FACE</div>
+          <h2 className="lp-h2">Education Is Stressful,<br/>Expensive &amp; Inefficient</h2>
+          <p className="lp-section-sub">Every stakeholder in Indian education is struggling — and spending too much doing it.</p>
+          <div className="lp-roles-grid">
+            {[
+              { emoji:'👨‍👩‍👧‍👦', name:'Parents', color:'#fce7f3', accent:'#9d174d',
+                items:['Paying ₹20,000–₹80,000/year for tuition','No clear visibility into child\'s progress','Constant stress around exams','Dependent on expensive coaching institutes','No consolidated progress reports'] },
+              { emoji:'🎒', name:'Students', color:'#fef9c3', accent:'#ca8a04',
+                items:['Don\'t fully understand concepts in class','Practice feels repetitive and boring','Doubts remain unresolved for days','Exam fear and lack of confidence','No personalised learning path'] },
+              { emoji:'🏫', name:'Schools & Teachers', color:'#dcfce7', accent:'#16a34a',
+                items:['Spend hours correcting answer sheets','Pressure to deliver results + admin work','Managing parents, reports & exams manually','No data on which students are struggling','Time-consuming question paper creation'] },
+            ].map((r, i) => (
+              <div key={r.name} className="lp-role-card lp-fade" style={{ '--card-color': r.color, '--card-accent': r.accent, animationDelay: `${i * 0.08}s` }}>
+                <div className="lp-role-emoji">{r.emoji}</div>
+                <div className="lp-role-name">{r.name}</div>
+                <ul className="lp-role-features">
+                  {r.items.map(f => <li key={f}>{f}</li>)}
+                </ul>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* ════════════════════ MEET ARTHAVI ════════════════════ */}
+      <section className="lp-section lp-how-section">
+        <div className="lp-section-inner" style={{ textAlign:'center' }}>
+          <div className="lp-section-eyebrow lp-eyebrow-light">THE SOLUTION</div>
+          <h2 className="lp-h2" style={{ color:'#fff' }}>Meet Arthavi</h2>
+          <p className="lp-section-sub" style={{ color:'rgba(255,255,255,.8)', maxWidth:640, margin:'12px auto 0', fontSize:20, fontWeight:600 }}>
+            One Platform. Every Academic Need Solved.
+          </p>
+          <p style={{ color:'rgba(255,255,255,.65)', maxWidth:620, margin:'20px auto 0', fontSize:16, lineHeight:1.85 }}>
+            Arthavi is an AI-powered education system designed specifically for Indian K-12 students, parents, and schools — covering CBSE, ICSE, and all State Boards. No tuition fees. No stress. Just intelligent learning.
+          </p>
+        </div>
+      </section>
+
       {/* ════════════════════ FOR WHOM ════════════════════ */}
       <section className="lp-section lp-bg-cream" id="roles">
         <div className="lp-section-inner">
-          <div className="lp-section-eyebrow">WHO IS IT FOR?</div>
-          <h2 className="lp-h2">Built for Every Role<br/>in Indian Education</h2>
-          <p className="lp-section-sub">From classroom teachers to students and parents — Parvidya has tools tailored to your role.</p>
+          <div className="lp-section-eyebrow">DESIGNED FOR YOU</div>
+          <h2 className="lp-h2">Learn Smarter. Teach Better.<br/>Stay Informed.</h2>
+          <p className="lp-section-sub">A dedicated experience for every role — students study smarter, teachers save hours, parents stay informed.</p>
           <div className="lp-roles-grid">
             {[
-              { emoji:'👩‍🏫', name:'Teacher / Tutor', color:'#dcfce7', accent:'#16a34a',
-                features:['NCERT & state curricula auto-loaded','One-click printable exam papers with keys','AI bulk answer sheet evaluation','Detailed parent email reports','Audio & video lesson creation'],
-                cta:'Join as Teacher →', role:'teacher' },
-              { emoji:'🎒', name:'Student', color:'#fef9c3', accent:'#ca8a04',
-                features:['10-point AI chapter summaries','Smart revision flashcards','AI tutor chat — ask anything','Question practice with instant feedback','Audio & video explanations'],
-                cta:'Join as Student →', role:'student' },
-              { emoji:'👨‍👩‍👧', name:'Parent', color:'#fce7f3', accent:'#9d174d',
-                features:['AI performance reports by email','Track exam scores & grades','Learning gap identification','School communication hub','Child progress over time'],
-                cta:'Join as Parent →', role:'parent' },
+              { emoji:'🎒', name:'For Students', color:'#fef9c3', accent:'#ca8a04',
+                features:['Ask doubts anytime — AI tutor knows your syllabus','Practice unlimited questions per chapter','Instant evaluation with mistake analysis','Track your improvement over time','Audio lessons for learning on the go'],
+                cta:'🎒 Start Learning Free', role:'student' },
+              { emoji:'👨‍👩‍👧‍👦', name:'For Parents', color:'#fce7f3', accent:'#9d174d',
+                features:['Know exactly how your child is performing','Reduce dependency on expensive tuition','Get automatic progress reports by email','Real-time learning gap identification','No more chasing school for updates'],
+                cta:'👨‍👩‍👧‍👦 View Sample Report', role:'parent' },
+              { emoji:'🏫', name:'For Schools & Teachers', color:'#dcfce7', accent:'#16a34a',
+                features:['Save hours on evaluation — 40 papers in minutes','Generate question papers with answer keys instantly','Improve student performance with AI insights','Manage everything in one dashboard','Automated parent communication & reports'],
+                cta:'🏫 Book a Demo', role:'school_admin' },
             ].map((r, i) => (
               <div key={r.name} className="lp-role-card lp-fade" style={{ '--card-color': r.color, '--card-accent': r.accent, animationDelay: `${i * 0.08}s` }}>
                 <div className="lp-role-emoji">{r.emoji}</div>
@@ -230,15 +844,104 @@ export default function LandingPage() {
       {/* ════════════════════ FEATURES ════════════════════ */}
       <section className="lp-section lp-bg-white" id="features">
         <div className="lp-section-inner">
-          <div className="lp-section-eyebrow">AI TOOLS</div>
-          <h2 className="lp-h2">Six Powerful Tools,<br/>One Platform</h2>
-          <p className="lp-section-sub">Every tool works with your curriculum — select board, class and subject to begin.</p>
+          <div className="lp-section-eyebrow">CORE BENEFITS</div>
+          <h2 className="lp-h2">Six Ways Arthavi<br/>Changes Education</h2>
+          <p className="lp-section-sub">Every benefit is real, measurable, and immediate — for students, parents, and teachers alike.</p>
           <div className="lp-features-grid">
             {FEATURES.map((f, i) => (
               <div key={f.label} className="lp-feature-card lp-fade" style={{ animationDelay: `${i * 0.06}s` }}>
                 <div className="lp-feature-icon" style={{ background: f.color }}>{f.icon}</div>
                 <div className="lp-feature-name">{f.label}</div>
                 <p className="lp-feature-desc">{f.desc}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* ════════════════════ BEFORE vs AFTER ════════════════════ */}
+      <section className="lp-section lp-bg-cream" id="comparison">
+        <div className="lp-section-inner">
+          <div className="lp-section-eyebrow">TRANSFORMATION</div>
+          <h2 className="lp-h2">Before Arthavi<br/>vs After Arthavi</h2>
+          <p className="lp-section-sub">See the difference Arthavi makes — for students, parents, and teachers.</p>
+          <div style={{ overflowX:'auto', marginTop:40 }}>
+            <table style={{ width:'100%', borderCollapse:'collapse', minWidth:480, borderRadius:16, overflow:'hidden', boxShadow:'0 4px 24px rgba(0,0,0,.07)' }}>
+              <thead>
+                <tr>
+                  <th style={{ padding:'16px 24px', background:'#fef2f2', color:'#991b1b', textAlign:'left', fontSize:15, fontWeight:700 }}>Before Arthavi ❌</th>
+                  <th style={{ padding:'16px 24px', background:'#f0fdf4', color:'#166534', textAlign:'left', fontSize:15, fontWeight:700 }}>After Arthavi ✅</th>
+                </tr>
+              </thead>
+              <tbody>
+                {[
+                  ['₹2,000/hour private tutors', '24/7 AI tutor — no extra cost'],
+                  ['2–3 days for answer sheet evaluation', 'Entire class evaluated in minutes'],
+                  ['No parent visibility into child\'s progress', 'Real-time progress reports & email alerts'],
+                  ['Static, repetitive learning material', 'Adaptive AI-generated practice every time'],
+                  ['Manual question paper creation (hours)', 'One-click question papers with answer keys'],
+                  ['₹80,000+/year education spend', 'One platform. Fraction of the cost.'],
+                ].map(([before, after], i) => (
+                  <tr key={i} style={{ background: i % 2 === 0 ? '#fff' : '#f8fafc' }}>
+                    <td style={{ padding:'14px 24px', color:'#64748b', fontSize:14, borderTop:'1px solid #e2e8f0' }}>❌ {before}</td>
+                    <td style={{ padding:'14px 24px', color:'#16a34a', fontSize:14, fontWeight:600, borderTop:'1px solid #e2e8f0' }}>✅ {after}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      {/* ════════════════════ COST COMPARISON ════════════════════ */}
+      <section className="lp-section lp-bg-white" id="cost">
+        <div className="lp-section-inner">
+          <div className="lp-section-eyebrow">COST SAVINGS</div>
+          <h2 className="lp-h2">Education Shouldn't Cost<br/>₹80,000 a Year</h2>
+          <p className="lp-section-sub">The average Indian family spends ₹80,000+ on tuition and test prep annually. Arthavi changes that.</p>
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(280px,1fr))', gap:24, maxWidth:720, margin:'40px auto 0' }}>
+            <div style={{ background:'#fef2f2', borderRadius:20, padding:32, border:'2px solid #fecaca' }}>
+              <div style={{ fontSize:32, marginBottom:12 }}>😰</div>
+              <div style={{ fontWeight:700, fontSize:19, color:'#991b1b', marginBottom:20 }}>What You Pay Today</div>
+              {[['Private Tuition', '₹30,000/yr'],['Test Prep Apps', '₹50,000/yr'],['Grand Total', '₹80,000+/yr']].map(([label, amt]) => (
+                <div key={label} style={{ display:'flex', justifyContent:'space-between', padding:'10px 0', borderBottom:'1px solid #fecaca' }}>
+                  <span style={{ color:'#7f1d1d', fontSize:14 }}>{label}</span>
+                  <span style={{ fontWeight:700, color:'#991b1b', fontSize:14 }}>{amt}</span>
+                </div>
+              ))}
+            </div>
+            <div style={{ background:'#f0fdf4', borderRadius:20, padding:32, border:'2px solid #86efac' }}>
+              <div style={{ fontSize:32, marginBottom:12 }}>🎉</div>
+              <div style={{ fontWeight:700, fontSize:19, color:'#166534', marginBottom:20 }}>With Arthavi</div>
+              <div style={{ color:'#15803d', fontSize:14, lineHeight:2.0, marginBottom:20 }}>
+                ✅ AI Tutor (24/7, included)<br/>
+                ✅ Unlimited Practice Tests<br/>
+                ✅ Audio &amp; Video Lessons<br/>
+                ✅ Automatic Parent Reports<br/>
+                ✅ Teacher Evaluation Tools
+              </div>
+              <div style={{ fontWeight:800, fontSize:20, color:'#15803d', borderTop:'1px solid #86efac', paddingTop:16 }}>One platform. Fraction of the cost.</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* ════════════════════ WHY ARTHAVI ════════════════════ */}
+      <section className="lp-section lp-bg-paper" id="why">
+        <div className="lp-section-inner" style={{ textAlign:'center' }}>
+          <div className="lp-section-eyebrow">WHY ARTHAVI</div>
+          <h2 className="lp-h2">Built Specifically<br/>for India</h2>
+          <p className="lp-section-sub">Not a global product retrofitted for India — built ground-up for the Indian education system.</p>
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(220px, 1fr))', gap:20, maxWidth:900, margin:'40px auto 0', textAlign:'left' }}>
+            {[
+              { icon:'🇮🇳', text:'Covers CBSE, ICSE &amp; all 35+ State Boards with official NCERT &amp; government textbook content' },
+              { icon:'🧠', text:'Powered by advanced AI (GPT-4o level intelligence) — not basic rule-based chatbots' },
+              { icon:'🎓', text:'Designed specifically for Indian K-12 exam patterns, board structures, and student needs' },
+              { icon:'👨‍👩‍👧', text:'Works for students, parents, and schools together — each with their own dashboard &amp; tools' },
+            ].map((item, i) => (
+              <div key={i} className="lp-fade" style={{ background:'#fff', borderRadius:16, padding:'24px 20px', boxShadow:'0 2px 12px rgba(0,0,0,.06)', display:'flex', gap:16, alignItems:'flex-start' }}>
+                <span style={{ fontSize:28, flexShrink:0 }}>{item.icon}</span>
+                <p style={{ margin:0, color:'#374151', fontSize:14, lineHeight:1.75, fontWeight:500 }} dangerouslySetInnerHTML={{ __html: item.text }} />
               </div>
             ))}
           </div>
@@ -262,6 +965,8 @@ export default function LandingPage() {
           </div>
         </div>
       </section>
+
+      <DemoSection onRegister={() => openModal('register')} />
 
       {/* ════════════════════ BOARDS ════════════════════ */}
       <section className="lp-section lp-bg-paper" id="boards">
@@ -301,15 +1006,15 @@ export default function LandingPage() {
       {/* ════════════════════ CTA BANNER ════════════════════ */}
       <section className="lp-cta-banner">
         <div className="lp-cta-inner">
-          <h2 className="lp-cta-heading">Start Teaching Smarter Today</h2>
-          <p className="lp-cta-sub">Free to start. No credit card required. All Indian boards supported.</p>
+          <h2 className="lp-cta-heading">Education Shouldn't Be Expensive, Stressful, or Inefficient.</h2>
+          <p className="lp-cta-sub">Arthavi makes it simple, affordable, and intelligent. Free to start — no credit card required.</p>
           <div className="lp-cta-btns">
-            <button className="lp-btn-primary lp-btn-xl" onClick={() => openModal('register')}>
-              🚀 Create Free Account
+            <button className="lp-btn-primary lp-btn-xl" onClick={() => openModal('register', 'student')}>
+              🎒 Start Free as Student
             </button>
             <button className="lp-btn-ghost lp-btn-xl" style={{ color:'#fff', borderColor:'rgba(255,255,255,.4)' }}
-              onClick={() => openModal('login')}>
-              Sign In →
+              onClick={() => openModal('register', 'school_admin')}>
+              🏫 Book School Demo →
             </button>
           </div>
         </div>
@@ -321,16 +1026,17 @@ export default function LandingPage() {
           <div className="lp-footer-top">
             <div className="lp-footer-brand">
               <div style={{ marginBottom:16 }}>
-                <Logo size={36} full={true} dark={true} />
+                <Logo size={52} full={true} dark={true} />
               </div>
               <p style={{ fontSize:13, lineHeight:1.75, color:'rgba(255,255,255,.45)', maxWidth:260 }}>
-                AI-powered education for every Indian school and student. Making quality learning accessible across all 36 states.
+                Arthavi is an AI-powered education platform helping students learn smarter through technology, courses, notes, and AI tools.
               </p>
+              <p style={{ fontSize:12, color:'rgba(255,255,255,.35)', marginTop:10 }}>📍 Odisha, India</p>
             </div>
             {[
               { heading: 'Platform', links: ['For Schools','For Teachers','For Students','For Parents'] },
               { heading: 'Features', links: ['AI Summaries','Flashcards','Question Papers','Evaluation','Audio Lessons'] },
-              { heading: 'Support',  links: ['Help Center','Contact Us','Privacy Policy','Terms of Use'] },
+              { heading: 'Legal',    links: ['Privacy Policy','Terms & Conditions','Refund Policy','Disclaimer','Contact'] },
             ].map(col => (
               <div key={col.heading} className="lp-footer-col">
                 <h4>{col.heading}</h4>
@@ -339,8 +1045,8 @@ export default function LandingPage() {
             ))}
           </div>
           <div className="lp-footer-bottom">
-            <p>© 2025 Parvidya. Made with ❤️ for Indian Education · Smart Learning with AI</p>
-            <p>hello@parvidya.in</p>
+            <p>© 2026 Arthavi. All rights reserved. Smart Learning with AI.</p>
+            <p>support@arthavi.com</p>
           </div>
         </div>
       </footer>
@@ -360,148 +1066,174 @@ export default function LandingPage() {
           position:fixed; top:0; left:0; right:0; z-index:200;
           height:68px; display:flex; align-items:center;
           padding:0 40px; gap:32px;
-          background:rgba(248,247,255,.88);
+          background:#F4F0FF;
           backdrop-filter:blur(18px);
-          border-bottom:1px solid transparent;
+          border-bottom:1px solid rgba(107,82,176,.12);
           transition:background .25s, border-color .25s, box-shadow .25s;
         }
         .lp-nav-scrolled {
-          background:rgba(248,247,255,.97);
-          border-color:rgba(109,40,217,.12);
-          box-shadow:0 2px 20px rgba(109,40,217,.08);
+          background:#F4F0FF;
+          border-color:rgba(107,82,176,.2);
+          box-shadow:0 2px 12px rgba(107,82,176,.1);
         }
         .lp-nav-brand { display:flex; align-items:center; gap:10px; text-decoration:none; flex-shrink:0; }
-        .lp-brand-name { font-family:var(--sans); font-size:18px; font-weight:800; color:var(--brand-dark,#4C1D95); line-height:1.1; }
-        .lp-brand-sub  { font-size:10px; color:var(--muted,#6B7280); letter-spacing:.3px; }
+        .lp-brand-name { font-family:var(--sans); font-size:18px; font-weight:800; color:#1B1A3E; line-height:1.1; }
+        .lp-brand-sub  { font-size:10px; color:#6B6B6B; letter-spacing:.3px; }
         .lp-nav-links  { display:flex; gap:28px; margin-left:auto; }
-        .lp-nav-links a { font-size:14px; font-weight:500; color:var(--muted,#6B7280); text-decoration:none; transition:.15s; }
-        .lp-nav-links a:hover { color:#7C3AED; }
+        .lp-nav-links a { font-size:14px; font-weight:500; color:#4A3890; text-decoration:none; transition:.15s; }
+        .lp-nav-links a:hover { color:#6B52B0; }
         .lp-nav-actions { display:flex; gap:10px; }
         .lp-hamburger { display:none; flex-direction:column; gap:5px; background:none; border:none; cursor:pointer; padding:6px; margin-left:auto; }
-        .lp-hamburger span { display:block; width:24px; height:2px; background:#4C1D95; border-radius:2px; }
+        .lp-hamburger span { display:block; width:24px; height:2px; background:#1B1A3E; border-radius:2px; }
 
         /* Buttons */
-        .lp-btn-primary { padding:10px 22px; background:linear-gradient(135deg,#6D28D9,#7C3AED); border:none; border-radius:10px; color:#fff; font-family:var(--sans); font-size:13px; font-weight:700; cursor:pointer; transition:.2s; white-space:nowrap; }
-        .lp-btn-primary:hover { transform:translateY(-1px); box-shadow:0 4px 16px rgba(109,40,217,.4); }
-        .lp-btn-ghost { padding:10px 22px; background:transparent; border:1.5px solid #DDD6FE; border-radius:10px; color:var(--text,#1E1B4B); font-family:var(--sans); font-size:13px; font-weight:600; cursor:pointer; transition:.2s; white-space:nowrap; }
-        .lp-btn-ghost:hover { background:#EDE9FE; border-color:#8B5CF6; }
+        .lp-btn-primary { padding:10px 22px; background:linear-gradient(135deg,#6B52B0,#4A3890); border:none; border-radius:10px; color:#fff; font-family:var(--sans); font-size:13px; font-weight:700; cursor:pointer; transition:.2s; white-space:nowrap; }
+        .lp-btn-primary:hover { transform:translateY(-1px); box-shadow:0 4px 16px rgba(107,82,176,.4); }
+        .lp-btn-ghost { padding:10px 22px; background:transparent; border:1.5px solid #6B52B0; border-radius:10px; color:#4A3890; font-family:var(--sans); font-size:13px; font-weight:600; cursor:pointer; transition:.2s; white-space:nowrap; }
+        .lp-btn-ghost:hover { background:rgba(107,82,176,.08); border-color:#4A3890; }
         .lp-btn-xl { padding:14px 32px; font-size:15px; border-radius:12px; }
 
         /* Mobile menu */
-        .lp-mobile-overlay { position:fixed; inset:0; background:rgba(30,27,75,.55); z-index:1000; backdrop-filter:blur(6px); }
+        .lp-mobile-overlay { position:fixed; inset:0; background:rgba(11,31,58,.88); z-index:1000; backdrop-filter:blur(6px); }
         .lp-mobile-drawer { position:absolute; top:0; right:0; width:min(320px,90vw); height:100%; background:#fff; padding:24px; display:flex; flex-direction:column; animation:slideInRight .25s ease; }
         @keyframes slideInRight { from{transform:translateX(100%)} to{transform:none} }
         .lp-mobile-top { display:flex; align-items:center; gap:10px; margin-bottom:32px; }
         .lp-mobile-close { margin-left:auto; background:none; border:none; font-size:22px; cursor:pointer; color:var(--muted,#6B7280); width:36px; height:36px; display:grid; place-items:center; }
         .lp-mobile-links { display:flex; flex-direction:column; gap:6px; flex:1; }
-        .lp-mobile-links a { display:block; padding:13px 14px; border-radius:10px; color:var(--text,#1E1B4B); text-decoration:none; font-size:15px; font-weight:600; transition:.15s; }
-        .lp-mobile-links a:hover { background:#EDE9FE; color:#6D28D9; }
-        .lp-mobile-btns { display:flex; flex-direction:column; gap:10px; padding-top:20px; border-top:1px solid #DDD6FE; }
+        .lp-mobile-links a { display:block; padding:13px 14px; border-radius:10px; color:var(--text,#1A1A1A); text-decoration:none; font-size:15px; font-weight:600; transition:.15s; }
+        .lp-mobile-links a:hover { background:#F0EAFF; color:#6B52B0; }
+        .lp-mobile-btns { display:flex; flex-direction:column; gap:10px; padding-top:20px; border-top:1px solid #D4D9E4; }
 
         /* ── HERO ── */
-        .lp-hero { min-height:100vh; display:flex; align-items:center; position:relative; overflow:hidden; padding:90px 40px 60px; gap:60px; background:linear-gradient(135deg, #F8F7FF 0%, #EDE9FE 50%, #DBEAFE 100%); }
+        .lp-hero { min-height:100vh; display:flex; align-items:center; position:relative; overflow:hidden; padding:90px 40px 60px; gap:60px; background:linear-gradient(135deg, #FFFFFF 0%, #F0EAFF 50%, #EDF0F7 100%); }
         .lp-hero-bg { position:absolute; inset:0; z-index:0; pointer-events:none; }
         .lp-hero-blob { position:absolute; border-radius:50%; filter:blur(80px); }
-        .lp-hero-blob1 { width:600px; height:600px; right:-150px; top:50%; transform:translateY(-50%); background:radial-gradient(circle,rgba(109,40,217,.18),transparent 70%); }
-        .lp-hero-blob2 { width:400px; height:400px; left:-80px; bottom:-60px; background:radial-gradient(circle,rgba(14,165,233,.15),transparent 70%); }
-        .lp-hero-grid { position:absolute; inset:0; background-image:linear-gradient(rgba(109,40,217,.06) 1px,transparent 1px),linear-gradient(90deg,rgba(109,40,217,.06) 1px,transparent 1px); background-size:52px 52px; }
+        .lp-hero-blob1 { width:600px; height:600px; right:-150px; top:50%; transform:translateY(-50%); background:radial-gradient(circle,rgba(107,82,176,.22),transparent 70%); }
+        .lp-hero-blob2 { width:400px; height:400px; left:-80px; bottom:-60px; background:radial-gradient(circle,rgba(107,82,176,.15),transparent 70%); }
+        .lp-hero-grid { position:absolute; inset:0; background-image:linear-gradient(rgba(107,82,176,.05) 1px,transparent 1px),linear-gradient(90deg,rgba(107,82,176,.05) 1px,transparent 1px); background-size:52px 52px; }
         .lp-hero-inner { position:relative; z-index:1; flex:1; max-width:600px; }
-        .lp-hero-badge { display:inline-flex; align-items:center; gap:8px; background:linear-gradient(135deg,#EDE9FE,#DBEAFE); border:1px solid rgba(109,40,217,.2); border-radius:50px; padding:7px 18px; font-size:12px; font-weight:700; color:#6D28D9; margin-bottom:28px; letter-spacing:.3px; text-transform:uppercase; }
-        .lp-badge-dot { width:7px; height:7px; border-radius:50%; background:#7C3AED; animation:pd 2s infinite; flex-shrink:0; }
-        .lp-h1 { font-family:var(--serif,serif); font-size:clamp(40px,5.5vw,72px); line-height:1.07; color:#1E1B4B; margin-bottom:22px; }
-        .lp-gradient-text { background:linear-gradient(135deg,#6D28D9,#2563EB); -webkit-background-clip:text; -webkit-text-fill-color:transparent; background-clip:text; font-style:italic; }
+        .lp-hero-badge { display:inline-flex; align-items:center; gap:8px; background:linear-gradient(135deg,#F0EAFF,#EDF0F7); border:1px solid rgba(107,82,176,.3); border-radius:50px; padding:7px 18px; font-size:12px; font-weight:700; color:#6B52B0; margin-bottom:28px; letter-spacing:.3px; text-transform:uppercase; }
+        .lp-badge-dot { width:7px; height:7px; border-radius:50%; background:#6B52B0; animation:pd 2s infinite; flex-shrink:0; }
+        .lp-h1 { font-family:var(--serif,serif); font-size:clamp(34px,4.2vw,62px); line-height:1.1; color:#1A1A1A; margin-bottom:20px; letter-spacing:-0.5px; }
+        .lp-hero-chips { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:22px; }
+        .lp-chip { display:inline-flex; align-items:center; gap:6px; padding:6px 14px; background:#fff; border:1.5px solid rgba(107,82,176,.2); border-radius:50px; font-size:12px; font-weight:600; color:#4A3890; white-space:nowrap; box-shadow:0 1px 4px rgba(107,82,176,.08); }
+        .lp-gradient-text { background:linear-gradient(135deg,#6B52B0,#4A3890); -webkit-background-clip:text; -webkit-text-fill-color:transparent; background-clip:text; font-style:italic; }
         .lp-hero-sub { font-size:clamp(15px,1.8vw,19px); color:#6B7280; line-height:1.75; margin-bottom:36px; max-width:520px; }
         .lp-hero-ctas { display:flex; gap:12px; flex-wrap:wrap; margin-bottom:52px; }
-        .lp-btn-hero-primary { padding:14px 32px; background:linear-gradient(135deg,#6D28D9,#2563EB); border:none; border-radius:12px; color:#fff; font-family:var(--sans); font-size:15px; font-weight:700; cursor:pointer; transition:.2s; box-shadow:0 4px 18px rgba(109,40,217,.35); }
-        .lp-btn-hero-primary:hover { transform:translateY(-2px); box-shadow:0 8px 28px rgba(109,40,217,.45); }
-        .lp-btn-hero-sec { padding:14px 28px; background:transparent; border:1.5px solid #DDD6FE; border-radius:12px; color:#1E1B4B; font-family:var(--sans); font-size:15px; font-weight:600; cursor:pointer; transition:.2s; }
-        .lp-btn-hero-sec:hover { background:#EDE9FE; border-color:#7C3AED; }
+        .lp-btn-hero-primary { padding:14px 32px; background:linear-gradient(135deg,#6B52B0,#4A3890); border:none; border-radius:12px; color:#fff; font-family:var(--sans); font-size:15px; font-weight:700; cursor:pointer; transition:.2s; box-shadow:0 4px 18px rgba(107,82,176,.4); }
+        .lp-btn-hero-primary:hover { transform:translateY(-2px); box-shadow:0 8px 28px rgba(107,82,176,.5); }
+        .lp-btn-hero-sec { padding:14px 28px; background:transparent; border:1.5px solid #D4D9E4; border-radius:12px; color:#1A1A1A; font-family:var(--sans); font-size:15px; font-weight:600; cursor:pointer; transition:.2s; }
+        .lp-btn-hero-sec:hover { background:#F0EAFF; border-color:#4A3890; }
+        .lp-btn-try-demo { padding:14px 28px; background:linear-gradient(135deg,#F59E0B,#D97706); border:none; border-radius:12px; color:#fff; font-family:var(--sans); font-size:15px; font-weight:700; cursor:pointer; transition:.2s; text-decoration:none; display:inline-flex; align-items:center; box-shadow:0 4px 18px rgba(245,158,11,.35); }
+        .lp-btn-try-demo:hover { transform:translateY(-2px); box-shadow:0 8px 28px rgba(245,158,11,.5); }
+
+        /* For Students / For Parents quick-wins section */
+        .lp-qw-section { background:linear-gradient(160deg,#1B3A6B 0%,#0F2348 100%); padding:70px 0 60px; }
+        .lp-qw-pain { text-align:center; color:rgba(255,255,255,.8); font-size:clamp(16px,2vw,22px); font-weight:600; margin-bottom:8px; }
+        .lp-qw-hook { text-align:center; color:#fff; font-size:clamp(20px,2.5vw,28px); font-weight:800; margin-bottom:40px; }
+        .lp-qw-hook strong { color:#F59E0B; }
+        .lp-qw-highlight { color:#F59E0B; font-style:italic; text-decoration:underline; text-underline-offset:4px; }
+        .lp-qw-cols { display:grid; grid-template-columns:1fr 1fr; gap:24px; max-width:860px; margin:0 auto 36px; }
+        .lp-qw-card { background:var(--qw-bg); border:2.5px solid var(--qw-accent); border-radius:18px; padding:28px; }
+        .lp-qw-card-title { font-size:17px; font-weight:800; color:var(--qw-accent); margin-bottom:14px; }
+        .lp-qw-list { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:9px; }
+        .lp-qw-list li { font-size:14px; font-weight:600; color:#1E293B; line-height:1.5; }
+        .lp-qw-features { display:flex; gap:16px; flex-wrap:wrap; justify-content:center; margin:0 auto 32px; max-width:900px; }
+        .lp-qw-feature-item { display:flex; flex-direction:column; align-items:center; gap:6px; background:rgba(255,255,255,.1); border-radius:12px; padding:14px 18px; min-width:110px; color:#fff; font-size:12px; font-weight:600; text-align:center; }
+        .lp-qw-feature-icon { font-size:28px; }
+        .lp-qw-cta-row { display:flex; flex-direction:column; align-items:center; gap:12px; margin-bottom:32px; }
+        .lp-btn-try-free { display:inline-block; background:linear-gradient(135deg,#DC2626,#B91C1C); color:#fff; font-size:clamp(16px,2vw,22px); font-weight:900; padding:16px 48px; border-radius:50px; text-decoration:none; letter-spacing:.5px; box-shadow:0 6px 28px rgba(220,38,38,.45); transition:.2s; }
+        .lp-btn-try-free:hover { transform:translateY(-3px); box-shadow:0 12px 40px rgba(220,38,38,.6); }
+        .lp-qw-badge { color:rgba(255,255,255,.7); font-size:13px; font-weight:500; }
+        .lp-results-row { display:grid; grid-template-columns:repeat(3,1fr); gap:16px; max-width:860px; margin:0 auto 28px; }
+        .lp-result-card { background:var(--rc-bg); border-radius:14px; padding:18px 20px; font-size:16px; font-weight:700; color:#1E293B; text-align:center; border:2px solid rgba(0,0,0,.07); }
+        .lp-result-card strong { color:#6B52B0; }
         .lp-stats { display:flex; gap:40px; flex-wrap:wrap; }
-        .lp-stat-num { font-family:var(--serif,serif); font-size:clamp(28px,3.5vw,38px); color:#4C1D95; line-height:1; }
+        .lp-stat-num { font-family:var(--serif,serif); font-size:clamp(28px,3.5vw,38px); color:#6B52B0; line-height:1; }
         .lp-stat-label { font-size:12px; color:#6B7280; margin-top:4px; font-weight:500; }
 
         /* Hero mockup */
         .lp-hero-mockup { position:relative; z-index:1; flex-shrink:0; width:360px; display:none; }
-        .lp-mockup-card { background:#fff; border-radius:20px; padding:22px; border:1px solid #DDD6FE; box-shadow:0 20px 60px rgba(109,40,217,.12),0 4px 16px rgba(109,40,217,.06); }
-        .lp-mockup-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:14px; padding-bottom:12px; border-bottom:1px solid #EDE9FE; }
-        .lp-mockup-subject { font-size:13px; font-weight:700; color:#4C1D95; margin-bottom:12px; }
+        .lp-mockup-card { background:#fff; border-radius:20px; padding:22px; border:1px solid #D4D9E4; box-shadow:0 20px 60px rgba(107,82,176,.14),0 4px 16px rgba(107,82,176,.08); }
+        .lp-mockup-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:14px; padding-bottom:12px; border-bottom:1px solid #F0EAFF; }
+        .lp-mockup-subject { font-size:13px; font-weight:700; color:#1B1A3E; margin-bottom:12px; }
         .lp-mockup-tools { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:16px; }
-        .lp-mockup-tool { padding:5px 10px; background:#F0EEFF; border-radius:50px; font-size:11px; font-weight:600; color:#6D28D9; border:1px solid #DDD6FE; }
+        .lp-mockup-tool { padding:5px 10px; background:#F0EAFF; border-radius:50px; font-size:11px; font-weight:600; color:#6B52B0; border:1px solid #D4D9E4; }
         .lp-mockup-summary { display:flex; flex-direction:column; gap:8px; }
-        .lp-mockup-point { display:flex; gap:10px; align-items:flex-start; font-size:12px; color:#1E1B4B; line-height:1.55; }
-        .lp-mockup-point span { width:20px; height:20px; border-radius:50%; background:linear-gradient(135deg,#6D28D9,#2563EB); color:#fff; display:grid; place-items:center; font-size:10px; font-weight:800; flex-shrink:0; }
+        .lp-mockup-point { display:flex; gap:10px; align-items:flex-start; font-size:12px; color:#1A1A1A; line-height:1.55; }
+        .lp-mockup-point span { width:20px; height:20px; border-radius:50%; background:linear-gradient(135deg,#6B52B0,#4A3890); color:#fff; display:grid; place-items:center; font-size:10px; font-weight:800; flex-shrink:0; }
         .lp-mockup-point-muted { opacity:.5; }
 
         /* ── TRUST BAR ── */
-        .lp-trust-bar { background:linear-gradient(135deg,#4C1D95,#6D28D9,#1D4ED8); padding:16px 40px; display:flex; gap:32px; justify-content:center; flex-wrap:wrap; overflow:hidden; }
+        .lp-trust-bar { background:linear-gradient(135deg,#1B1A3E,#6B52B0,#2A2858); padding:16px 40px; display:flex; gap:32px; justify-content:center; flex-wrap:wrap; overflow:hidden; }
         .lp-trust-item { display:flex; align-items:center; gap:8px; color:rgba(255,255,255,.85); font-size:13px; font-weight:500; white-space:nowrap; }
 
         /* ── SECTIONS ── */
         .lp-section { padding:96px 40px; }
         .lp-section-inner { max-width:1200px; margin:0 auto; }
-        .lp-bg-cream  { background:#F8F7FF; }
+        .lp-bg-cream  { background:#FFFFFF; }
         .lp-bg-white  { background:#fff; }
-        .lp-bg-paper  { background:#F0EEFF; }
-        .lp-section-eyebrow { display:inline-block; font-size:11px; font-weight:800; letter-spacing:1.2px; color:#7C3AED; text-transform:uppercase; margin-bottom:12px; }
+        .lp-bg-paper  { background:#EDF0F7; }
+        .lp-section-eyebrow { display:inline-block; font-size:11px; font-weight:800; letter-spacing:1.2px; color:#6B52B0; text-transform:uppercase; margin-bottom:12px; }
         .lp-eyebrow-light { color:rgba(255,255,255,.7); }
-        .lp-h2 { font-family:var(--serif,serif); font-size:clamp(30px,4vw,50px); line-height:1.1; color:#1E1B4B; margin-bottom:16px; }
+        .lp-h2 { font-family:var(--serif,serif); font-size:clamp(30px,4vw,50px); line-height:1.1; color:#1A1A1A; margin-bottom:16px; }
         .lp-section-sub { font-size:16px; color:#6B7280; line-height:1.75; max-width:540px; margin-bottom:0; }
 
         /* ── ROLES ── */
         .lp-roles-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(250px,1fr)); gap:18px; margin-top:48px; }
         .lp-role-card { background:var(--card-color); border-radius:22px; padding:28px; border:1.5px solid transparent; transition:.25s; cursor:default; display:flex; flex-direction:column; }
-        .lp-role-card:hover { transform:translateY(-4px); box-shadow:0 12px 40px rgba(109,40,217,.12); border-color:var(--card-accent); }
+        .lp-role-card:hover { transform:translateY(-4px); box-shadow:0 12px 40px rgba(107,82,176,.14); border-color:var(--card-accent); }
         .lp-role-emoji { font-size:38px; margin-bottom:14px; }
-        .lp-role-name  { font-family:var(--serif,serif); font-size:21px; color:#1E1B4B; margin-bottom:14px; }
+        .lp-role-name  { font-family:var(--serif,serif); font-size:21px; color:#1A1A1A; margin-bottom:14px; }
         .lp-role-features { list-style:none; display:flex; flex-direction:column; gap:7px; flex:1; margin-bottom:20px; }
-        .lp-role-features li { font-size:12.5px; color:#1E1B4B; padding-left:18px; position:relative; line-height:1.5; }
-        .lp-role-features li::before { content:'✓'; position:absolute; left:0; color:var(--card-accent,#6D28D9); font-weight:800; }
-        .lp-role-cta { padding:10px 20px; background:#4C1D95; border:none; border-radius:10px; color:#fff; font-family:var(--sans); font-size:13px; font-weight:700; cursor:pointer; transition:.2s; align-self:flex-start; }
-        .lp-role-cta:hover { background:#6D28D9; transform:translateY(-1px); }
+        .lp-role-features li { font-size:12.5px; color:#1A1A1A; padding-left:18px; position:relative; line-height:1.5; }
+        .lp-role-features li::before { content:'✓'; position:absolute; left:0; color:var(--card-accent,#6B52B0); font-weight:800; }
+        .lp-role-cta { padding:10px 20px; background:#1B1A3E; border:none; border-radius:10px; color:#fff; font-family:var(--sans); font-size:13px; font-weight:700; cursor:pointer; transition:.2s; align-self:flex-start; }
+        .lp-role-cta:hover { background:#6B52B0; transform:translateY(-1px); }
 
         /* ── FEATURES ── */
         .lp-features-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); gap:20px; margin-top:48px; }
-        .lp-feature-card { background:#fff; border-radius:18px; padding:26px 22px; border:1px solid #DDD6FE; transition:.25s; }
-        .lp-feature-card:hover { transform:translateY(-5px); box-shadow:0 14px 40px rgba(109,40,217,.12); }
+        .lp-feature-card { background:#fff; border-radius:18px; padding:26px 22px; border:1px solid #D4D9E4; transition:.25s; }
+        .lp-feature-card:hover { transform:translateY(-5px); box-shadow:0 14px 40px rgba(107,82,176,.14); }
         .lp-feature-icon { width:52px; height:52px; border-radius:14px; display:grid; place-items:center; font-size:24px; margin-bottom:16px; }
-        .lp-feature-name { font-family:var(--serif,serif); font-size:17px; color:#1E1B4B; margin-bottom:8px; }
+        .lp-feature-name { font-family:var(--serif,serif); font-size:17px; color:#1A1A1A; margin-bottom:8px; }
         .lp-feature-desc { font-size:13px; color:#6B7280; line-height:1.65; }
 
         /* ── HOW ── */
-        .lp-how-section { background:linear-gradient(155deg,#2D1B69 0%,#4C1D95 50%,#1E3A8A 100%); position:relative; overflow:hidden; }
+        .lp-how-section { background:linear-gradient(155deg,#1B1A3E 0%,#1B1A3E 50%,#2A2858 100%); position:relative; overflow:hidden; }
         .lp-how-section::before { content:''; position:absolute; inset:0; background:url("data:image/svg+xml,%3Csvg width='60' height='60' xmlns='http://www.w3.org/2000/svg'%3E%3Ccircle cx='30' cy='30' r='1' fill='rgba(255,255,255,.05)'/%3E%3C/svg%3E"); }
         .lp-steps { display:grid; grid-template-columns:repeat(4,1fr); gap:4px; margin-top:52px; position:relative; }
         .lp-step { background:rgba(255,255,255,.07); border-radius:18px; padding:28px 22px; text-align:center; border:1px solid rgba(255,255,255,.1); transition:.25s; }
         .lp-step:hover { background:rgba(255,255,255,.12); }
-        .lp-step-num { font-family:var(--serif,serif); font-size:32px; color:#A78BFA; margin-bottom:14px; display:block; }
+        .lp-step-num { font-family:var(--serif,serif); font-size:32px; color:#6B52B0; margin-bottom:14px; display:block; }
         .lp-step-title { font-family:var(--serif,serif); font-size:18px; color:#fff; margin-bottom:10px; }
         .lp-step-desc { font-size:13px; color:rgba(255,255,255,.55); line-height:1.65; }
 
         /* ── BOARDS ── */
         .lp-boards-wrap { display:flex; gap:10px; flex-wrap:wrap; margin-top:36px; }
-        .lp-board-pill { padding:10px 22px; border-radius:50px; background:#fff; border:1.5px solid #DDD6FE; font-size:13px; font-weight:600; color:#1E1B4B; transition:.2s; cursor:default; }
-        .lp-board-pill:hover { border-color:#7C3AED; color:#6D28D9; background:#EDE9FE; }
+        .lp-board-pill { padding:10px 22px; border-radius:50px; background:#fff; border:1.5px solid #D4D9E4; font-size:13px; font-weight:600; color:#1A1A1A; transition:.2s; cursor:default; }
+        .lp-board-pill:hover { border-color:#6B52B0; color:#6B52B0; background:#F0EAFF; }
 
         /* ── TESTIMONIALS ── */
         .lp-testi-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:20px; margin-top:48px; }
-        .lp-testi-card { background:#F0EEFF; border-radius:20px; padding:28px; border:1px solid #DDD6FE; transition:.25s; }
-        .lp-testi-card:hover { transform:translateY(-3px); box-shadow:0 12px 40px rgba(109,40,217,.12); }
-        .lp-stars { color:#7C3AED; font-size:15px; margin-bottom:12px; letter-spacing:2px; }
-        .lp-testi-quote { font-size:14px; color:#1E1B4B; line-height:1.75; margin-bottom:18px; font-style:italic; }
+        .lp-testi-card { background:#EDF0F7; border-radius:20px; padding:28px; border:1px solid #D4D9E4; transition:.25s; }
+        .lp-testi-card:hover { transform:translateY(-3px); box-shadow:0 12px 40px rgba(107,82,176,.14); }
+        .lp-stars { color:#6B52B0; font-size:15px; margin-bottom:12px; letter-spacing:2px; }
+        .lp-testi-quote { font-size:14px; color:#1A1A1A; line-height:1.75; margin-bottom:18px; font-style:italic; }
         .lp-testi-author { display:flex; align-items:center; gap:12px; }
-        .lp-testi-av { width:42px; height:42px; border-radius:50%; background:#DDD6FE; display:grid; place-items:center; font-size:20px; flex-shrink:0; }
-        .lp-testi-name { font-size:14px; font-weight:700; color:#1E1B4B; }
+        .lp-testi-av { width:42px; height:42px; border-radius:50%; background:#D4D9E4; display:grid; place-items:center; font-size:20px; flex-shrink:0; }
+        .lp-testi-name { font-size:14px; font-weight:700; color:#1A1A1A; }
         .lp-testi-role { font-size:11px; color:#6B7280; margin-top:2px; }
 
         /* ── CTA BANNER ── */
-        .lp-cta-banner { background:linear-gradient(135deg,#4C1D95,#6D28D9,#1D4ED8); padding:80px 40px; text-align:center; }
+        .lp-cta-banner { background:linear-gradient(135deg,#1B1A3E,#6B52B0,#2A2858); padding:80px 40px; text-align:center; }
         .lp-cta-inner  { max-width:680px; margin:0 auto; }
         .lp-cta-heading { font-family:var(--serif,serif); font-size:clamp(28px,4vw,44px); color:#fff; margin-bottom:14px; line-height:1.1; }
         .lp-cta-sub { font-size:16px; color:rgba(255,255,255,.8); margin-bottom:36px; line-height:1.65; }
         .lp-cta-btns { display:flex; gap:14px; justify-content:center; flex-wrap:wrap; }
 
         /* ── FOOTER ── */
-        .lp-footer { background:#1E1B4B; padding:64px 40px 32px; }
+        .lp-footer { background:#1B1A3E; padding:64px 40px 32px; }
         .lp-footer-inner { max-width:1200px; margin:0 auto; }
         .lp-footer-top { display:grid; grid-template-columns:2fr 1fr 1fr 1fr; gap:48px; margin-bottom:48px; }
         .lp-footer-brand { }
@@ -509,8 +1241,180 @@ export default function LandingPage() {
         .lp-footer-col ul { list-style:none; }
         .lp-footer-col ul li { margin-bottom:10px; }
         .lp-footer-col ul li a { font-size:13px; color:rgba(255,255,255,.4); text-decoration:none; transition:.2s; }
-        .lp-footer-col ul li a:hover { color:#A78BFA; }
+        .lp-footer-col ul li a:hover { color:#6B52B0; }
         .lp-footer-bottom { border-top:1px solid rgba(255,255,255,.08); padding-top:24px; display:flex; justify-content:space-between; align-items:center; font-size:12px; color:rgba(255,255,255,.35); flex-wrap:wrap; gap:8px; }
+
+        /* ── DEMO SECTION ── */
+        .lp-demo-section { background: linear-gradient(160deg,#0F0D2A 0%,#1B1245 50%,#0F0D2A 100%); padding:100px 0; }
+        .lp-demo-section .lp-h2 { color:#fff; }
+        .lp-demo-section .lp-section-sub { color:rgba(255,255,255,.65); max-width:560px; }
+        .lp-demo-live-badge { display:inline-flex; align-items:center; gap:8px; background:rgba(107,82,176,.25); border:1px solid rgba(107,82,176,.5); color:#A78BFA; border-radius:100px; padding:6px 16px; font-size:13px; font-weight:600; }
+        .lp-badge-dot { width:8px; height:8px; border-radius:50%; background:#22C55E; animation:lp-pulse 2s infinite; }
+        @keyframes lp-pulse { 0%,100%{opacity:1;box-shadow:0 0 0 0 rgba(34,197,94,.4)} 50%{opacity:.8;box-shadow:0 0 0 6px rgba(34,197,94,0)} }
+
+        .lp-demo-tabs { display:flex; gap:12px; margin-bottom:24px; flex-wrap:wrap; }
+        .lp-demo-tab { display:flex; align-items:center; gap:10px; padding:12px 20px; border-radius:12px; border:1.5px solid rgba(107,82,176,.3); background:rgba(255,255,255,.04); color:rgba(255,255,255,.6); font-size:14px; font-weight:500; cursor:pointer; transition:.2s; white-space:nowrap; }
+        .lp-demo-tab:hover { border-color:rgba(107,82,176,.7); color:#fff; background:rgba(107,82,176,.12); }
+        .lp-dt-active { border-color:#6B52B0 !important; background:linear-gradient(135deg,#6B52B0,#4A3890) !important; color:#fff !important; box-shadow:0 4px 20px rgba(107,82,176,.4); }
+        .lp-dt-used { border-color:rgba(34,197,94,.5) !important; }
+        .lp-demo-tab-icon { font-size:18px; }
+        .lp-demo-tab-label { flex:1; }
+        .lp-demo-tab-check { width:20px; height:20px; border-radius:50%; background:#22C55E; color:#fff; font-size:11px; display:flex; align-items:center; justify-content:center; font-weight:700; }
+
+        .lp-demo-box { background:#fff; border-radius:20px; overflow:hidden; box-shadow:0 20px 60px rgba(0,0,0,.35); min-height:440px; }
+        .lp-demo-panel { padding:32px; }
+        .lp-demo-panel-chat { padding:0; display:flex; flex-direction:column; }
+        .lp-demo-panel-hdr { display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:24px; gap:16px; }
+        .lp-demo-panel-title { font-size:18px; font-weight:700; color:#1B1A3E; }
+        .lp-demo-panel-hint { font-size:13px; color:#6B7280; margin-top:4px; }
+        .lp-demo-badge-free { background:#FEF3C7; color:#92400E; border:1px solid #FCD34D; border-radius:100px; padding:4px 12px; font-size:12px; font-weight:600; white-space:nowrap; }
+        .lp-demo-badge-used { background:#D1FAE5; color:#065F46; border:1px solid #6EE7B7; border-radius:100px; padding:4px 12px; font-size:12px; font-weight:600; white-space:nowrap; }
+
+        .lp-demo-selectors { display:flex; gap:12px; margin-bottom:24px; flex-wrap:wrap; }
+        .lp-demo-select { flex:1; min-width:140px; padding:10px 14px; border:1.5px solid #E5E7EB; border-radius:10px; font-size:14px; color:#374151; background:#fff; cursor:pointer; transition:.2s; }
+        .lp-demo-select:focus { outline:none; border-color:#6B52B0; box-shadow:0 0 0 3px rgba(107,82,176,.1); }
+        .lp-demo-select:disabled { background:#F9FAFB; color:#9CA3AF; cursor:not-allowed; }
+
+        .lp-demo-empty { text-align:center; padding:48px 24px; color:#9CA3AF; }
+        .lp-demo-empty-icon { font-size:48px; margin-bottom:16px; }
+        .lp-demo-empty p { font-size:14px; max-width:360px; margin:0 auto; }
+
+        .lp-demo-chapter-row { background:#F8F5FF; border-radius:14px; padding:20px; display:flex; gap:20px; flex-direction:column; }
+        .lp-demo-chapter-info-box { flex:1; }
+        .lp-demo-tag-row { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:10px; }
+        .lp-demo-tag { background:#EDE9FE; color:#6B52B0; border-radius:100px; padding:4px 10px; font-size:12px; font-weight:600; }
+        .lp-demo-chapter-name { font-size:16px; font-weight:700; color:#1B1A3E; margin-bottom:4px; }
+        .lp-demo-chapter-sub { font-size:13px; color:#6B7280; }
+        .lp-demo-tool-btns { display:flex; gap:10px; flex-wrap:wrap; }
+        .lp-demo-tool-btn { display:flex; align-items:center; gap:12px; padding:12px 16px; background:#fff; border:1.5px solid #E5E7EB; border-radius:12px; cursor:pointer; transition:.2s; flex:1; min-width:140px; }
+        .lp-demo-tool-btn:hover { border-color:#6B52B0; background:#F8F5FF; transform:translateY(-2px); box-shadow:0 4px 12px rgba(107,82,176,.15); }
+        .lp-demo-tool-icon { font-size:24px; }
+        .lp-demo-tool-label { font-size:13px; font-weight:600; color:#1B1A3E; }
+        .lp-demo-tool-desc { font-size:12px; color:#6B7280; }
+
+        .lp-demo-loading { display:flex; align-items:center; gap:16px; padding:32px 24px; color:#6B7280; }
+        .lp-demo-spinner { width:28px; height:28px; border:3px solid #EDE9FE; border-top-color:#6B52B0; border-radius:50%; animation:lp-spin .8s linear infinite; flex-shrink:0; }
+        .lp-demo-spinner-sm { width:14px; height:14px; border:2px solid rgba(255,255,255,.3); border-top-color:#fff; border-radius:50%; animation:lp-spin .8s linear infinite; display:inline-block; vertical-align:middle; margin-right:8px; }
+        @keyframes lp-spin { to{transform:rotate(360deg)} }
+
+        .lp-demo-result-box { background:#F8F5FF; border-radius:14px; padding:24px; border:1px solid #EDE9FE; }
+        .lp-demo-result-title { font-size:15px; font-weight:700; color:#1B1A3E; margin-bottom:16px; padding-bottom:12px; border-bottom:1px solid #EDE9FE; }
+        .lp-demo-summary-list { list-style:none; padding:0; margin:0 0 16px; display:flex; flex-direction:column; gap:10px; }
+        .lp-demo-summary-list li { display:flex; gap:12px; align-items:flex-start; }
+        .lp-demo-summary-list li span { width:24px; height:24px; border-radius:50%; background:linear-gradient(135deg,#6B52B0,#4A3890); color:#fff; font-size:12px; font-weight:700; display:flex; align-items:center; justify-content:center; flex-shrink:0; margin-top:1px; }
+        .lp-demo-summary-list li p { margin:0; font-size:14px; color:#374151; line-height:1.6; }
+
+        .lp-demo-fc-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(200px,1fr)); gap:12px; margin-bottom:16px; }
+        .lp-demo-fc { perspective:800px; min-height:140px; cursor:pointer; }
+        .lp-demo-fc-inner { width:100%; height:100%; min-height:140px; position:relative; transform-style:preserve-3d; transition:transform .5s ease; border-radius:12px; }
+        .lp-fc-flipped .lp-demo-fc-inner { transform:rotateY(180deg); }
+        .lp-demo-fc-front, .lp-demo-fc-back { position:absolute; inset:0; border-radius:12px; backface-visibility:hidden; padding:16px; display:flex; flex-direction:column; gap:8px; }
+        .lp-demo-fc-front { background:#fff; border:1.5px solid #E5E7EB; }
+        .lp-demo-fc-back { background:linear-gradient(135deg,#6B52B0,#4A3890); color:#fff; transform:rotateY(180deg); border:none; }
+        .lp-demo-fc-label { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.08em; opacity:.6; }
+        .lp-demo-fc-front .lp-demo-fc-label { color:#6B52B0; }
+        .lp-demo-fc-front p, .lp-demo-fc-back p { font-size:13px; line-height:1.5; flex:1; margin:0; color:inherit; }
+        .lp-demo-fc-back p { color:rgba(255,255,255,.9); }
+        .lp-demo-fc-hint { font-size:11px; opacity:.5; text-align:right; }
+
+        .lp-demo-mcq-q { font-size:15px; font-weight:600; color:#1B1A3E; margin-bottom:16px; }
+        .lp-demo-mcq-opts { display:flex; flex-direction:column; gap:8px; margin-bottom:16px; }
+        .lp-demo-mcq-opt { display:flex; align-items:center; gap:10px; padding:10px 14px; border-radius:10px; border:1.5px solid #E5E7EB; font-size:14px; color:#374151; }
+        .lp-demo-mcq-opt span:first-child { width:24px; height:24px; border-radius:50%; background:#F3F4F6; font-size:12px; font-weight:700; color:#374151; display:flex; align-items:center; justify-content:center; flex-shrink:0; }
+        .lp-mcq-correct { background:#F0FDF4; border-color:#22C55E; color:#166534; }
+        .lp-mcq-correct span:first-child { background:#22C55E; color:#fff; }
+        .lp-mcq-tick { margin-left:auto; color:#22C55E; font-weight:700; }
+        .lp-demo-expl { background:#FFFBEB; border:1px solid #FCD34D; border-radius:10px; padding:12px 16px; font-size:13px; color:#78350F; line-height:1.6; }
+
+        .lp-demo-practice-card { background:#F8F5FF; border-radius:14px; padding:24px; border:1px solid #EDE9FE; }
+        .lp-demo-practice-meta { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:16px; align-items:center; font-size:12px; color:#6B7280; }
+        .lp-demo-type-pill { background:#EDE9FE; color:#6B52B0; border-radius:100px; padding:3px 10px; font-weight:600; }
+        .lp-demo-practice-q { font-size:16px; font-weight:600; color:#1B1A3E; margin-bottom:20px; }
+        .lp-demo-practice-opts { display:flex; flex-direction:column; gap:10px; margin-bottom:20px; }
+        .lp-demo-pr-opt { display:flex; align-items:center; gap:12px; padding:12px 16px; border-radius:12px; border:1.5px solid #E5E7EB; background:#fff; cursor:pointer; transition:.2s; font-size:14px; color:#374151; }
+        .lp-demo-pr-opt:hover { border-color:#6B52B0; background:#F8F5FF; }
+        .lp-pr-selected { border-color:#6B52B0 !important; background:#F8F5FF !important; }
+        .lp-pr-correct  { border-color:#22C55E !important; background:#F0FDF4 !important; color:#166534 !important; }
+        .lp-pr-wrong    { border-color:#EF4444 !important; background:#FEF2F2 !important; color:#991B1B !important; }
+        .lp-demo-pr-letter { width:28px; height:28px; border-radius:50%; background:#F3F4F6; font-size:13px; font-weight:700; display:flex; align-items:center; justify-content:center; flex-shrink:0; }
+        .lp-pr-icon { margin-left:auto; font-weight:700; }
+        .lp-pr-check { color:#22C55E; }
+        .lp-pr-cross  { color:#EF4444; }
+        .lp-demo-submit-btn { width:100%; padding:14px; background:linear-gradient(135deg,#6B52B0,#4A3890); color:#fff; border:none; border-radius:12px; font-size:15px; font-weight:700; cursor:pointer; transition:.2s; }
+        .lp-demo-submit-btn:disabled { opacity:.5; cursor:not-allowed; }
+        .lp-demo-submit-btn:not(:disabled):hover { transform:translateY(-2px); box-shadow:0 6px 20px rgba(107,82,176,.4); }
+        .lp-demo-pr-feedback { display:flex; flex-direction:column; gap:12px; }
+        .lp-demo-pr-verdict { padding:12px 16px; border-radius:10px; font-weight:700; font-size:15px; }
+        .lp-verdict-ok { background:#F0FDF4; color:#166534; }
+        .lp-verdict-no { background:#FEF2F2; color:#991B1B; }
+
+        .lp-demo-chat-wrap { display:flex; flex-direction:column; height:460px; }
+        .lp-demo-chat-msgs { flex:1; overflow-y:auto; padding:20px 24px; display:flex; flex-direction:column; gap:16px; }
+        .lp-demo-msg { display:flex; gap:10px; align-items:flex-start; }
+        .lp-demo-msg-user { flex-direction:row-reverse; }
+        .lp-demo-vidya-av { width:32px; height:32px; border-radius:50%; background:linear-gradient(135deg,#6B52B0,#4A3890); color:#fff; font-size:13px; font-weight:700; display:flex; align-items:center; justify-content:center; flex-shrink:0; }
+        .lp-demo-msg-bubble { background:#F3F4F6; border-radius:14px; padding:12px 16px; max-width:78%; }
+        .lp-demo-msg-bubble p { margin:0 0 4px; font-size:13px; color:#374151; line-height:1.6; }
+        .lp-demo-msg-bubble p:last-child { margin-bottom:0; }
+        .lp-demo-msg-ai .lp-demo-msg-bubble { background:#F8F5FF; border:1px solid #EDE9FE; }
+        .lp-demo-msg-user .lp-demo-msg-bubble { background:#6B52B0; }
+        .lp-demo-msg-user .lp-demo-msg-bubble p { color:#fff; }
+        .lp-demo-typing span { display:inline-block; width:6px; height:6px; background:#6B52B0; border-radius:50%; animation:lp-bounce 1s ease infinite; margin:0 2px; }
+        .lp-demo-typing span:nth-child(2){animation-delay:.15s}
+        .lp-demo-typing span:nth-child(3){animation-delay:.3s}
+        @keyframes lp-bounce { 0%,80%,100%{transform:translateY(0)} 40%{transform:translateY(-6px)} }
+        .lp-demo-chat-bar { display:flex; gap:8px; padding:12px 16px; border-top:1px solid #F0EAFF; }
+        .lp-demo-chat-inp { flex:1; padding:10px 14px; border:1.5px solid #E5E7EB; border-radius:10px; font-size:14px; color:#374151; }
+        .lp-demo-chat-inp:focus { outline:none; border-color:#6B52B0; }
+        .lp-demo-chat-inp:disabled { background:#F9FAFB; cursor:not-allowed; }
+        .lp-demo-chat-send { width:40px; height:40px; border-radius:10px; background:linear-gradient(135deg,#6B52B0,#4A3890); color:#fff; border:none; cursor:pointer; font-size:16px; display:flex; align-items:center; justify-content:center; transition:.2s; flex-shrink:0; }
+        .lp-demo-chat-send:disabled { opacity:.4; cursor:not-allowed; }
+        .lp-demo-chat-note { font-size:12px; color:#9CA3AF; text-align:center; padding:8px 16px; margin:0; border-top:1px solid #F0EAFF; }
+
+        .lp-demo-qm-wrap { display:flex; flex-direction:column; gap:20px; }
+        .lp-demo-qm-config { display:grid; grid-template-columns:1fr 1fr; gap:8px; background:#F8F5FF; border-radius:12px; padding:16px; border:1px solid #EDE9FE; }
+        .lp-demo-qm-cfg-row { display:flex; justify-content:space-between; align-items:center; padding:6px 8px; background:#fff; border-radius:8px; font-size:13px; }
+        .lp-demo-qm-cfg-row span { color:#6B7280; }
+        .lp-demo-qm-cfg-row strong { color:#1B1A3E; }
+        .lp-demo-gen-btn { padding:14px; background:linear-gradient(135deg,#6B52B0,#4A3890); color:#fff; border:none; border-radius:12px; font-size:15px; font-weight:700; cursor:pointer; transition:.2s; display:flex; align-items:center; justify-content:center; gap:8px; }
+        .lp-demo-gen-btn:disabled { opacity:.7; cursor:not-allowed; }
+        .lp-demo-gen-btn:not(:disabled):hover { transform:translateY(-2px); box-shadow:0 6px 24px rgba(107,82,176,.45); }
+        .lp-demo-paper { background:#F8F5FF; border-radius:14px; padding:20px; border:1px solid #EDE9FE; }
+        .lp-demo-paper-hdr { display:flex; justify-content:space-between; align-items:center; padding-bottom:14px; border-bottom:1px solid #EDE9FE; margin-bottom:16px; font-size:13px; color:#374151; flex-wrap:wrap; gap:8px; }
+        .lp-demo-paper-hdr strong { color:#1B1A3E; font-size:14px; }
+        .lp-demo-paper-q { background:#fff; border-radius:10px; padding:14px 16px; margin-bottom:10px; border:1px solid #E5E7EB; }
+        .lp-demo-paper-q-hdr { display:flex; align-items:center; gap:8px; margin-bottom:8px; }
+        .lp-demo-paper-qnum { font-size:14px; font-weight:800; color:#6B52B0; }
+        .lp-demo-paper-qtype { background:#EDE9FE; color:#6B52B0; border-radius:100px; padding:2px 10px; font-size:11px; font-weight:600; }
+        .lp-demo-paper-qtext { font-size:14px; color:#1B1A3E; margin:0 0 8px; }
+        .lp-demo-paper-opts { font-size:13px; color:#4B5563; margin-bottom:8px; }
+        .lp-demo-paper-ans { font-size:12px; font-weight:600; color:#059669; background:#F0FDF4; border-radius:8px; padding:6px 10px; }
+
+        .lp-demo-nudge { font-size:13px; color:#6B7280; }
+        .lp-demo-nudge button { background:none; border:none; color:#6B52B0; font-weight:700; cursor:pointer; font-size:13px; }
+        .lp-demo-nudge button:hover { text-decoration:underline; }
+
+        .lp-demo-cta-row { margin-top:40px; display:flex; align-items:center; justify-content:space-between; background:rgba(255,255,255,.06); border:1px solid rgba(107,82,176,.3); border-radius:16px; padding:24px 32px; gap:20px; flex-wrap:wrap; }
+        .lp-demo-cta-text { display:flex; flex-direction:column; gap:4px; }
+        .lp-demo-cta-text strong { font-size:17px; font-weight:700; color:#fff; }
+        .lp-demo-cta-text span { font-size:14px; color:rgba(255,255,255,.6); }
+
+        .lp-demo-gate-overlay { position:fixed; inset:0; background:rgba(0,0,0,.6); backdrop-filter:blur(4px); z-index:9000; display:flex; align-items:center; justify-content:center; padding:20px; }
+        .lp-demo-gate-modal { background:#fff; border-radius:20px; padding:40px; max-width:480px; width:100%; position:relative; animation:lp-modal-in .25s ease; }
+        @keyframes lp-modal-in { from{opacity:0;transform:scale(.92) translateY(20px)} to{opacity:1;transform:none} }
+        .lp-demo-gate-close { position:absolute; top:16px; right:16px; background:#F3F4F6; border:none; border-radius:50%; width:32px; height:32px; cursor:pointer; font-size:16px; display:flex; align-items:center; justify-content:center; color:#374151; transition:.15s; }
+        .lp-demo-gate-close:hover { background:#E5E7EB; }
+        .lp-demo-gate-ico { font-size:48px; text-align:center; margin-bottom:16px; }
+        .lp-demo-gate-title { font-size:20px; font-weight:800; color:#1B1A3E; text-align:center; margin-bottom:8px; }
+        .lp-demo-gate-sub { font-size:14px; color:#4B5563; text-align:center; line-height:1.7; margin-bottom:24px; }
+        .lp-demo-gate-feats { display:flex; flex-direction:column; gap:8px; margin-bottom:24px; background:#F8F5FF; border-radius:12px; padding:16px; }
+        .lp-demo-gate-feat { display:flex; align-items:center; gap:10px; font-size:14px; color:#374151; }
+        .lp-demo-gate-feat span { width:20px; height:20px; border-radius:50%; background:#6B52B0; color:#fff; font-size:11px; display:flex; align-items:center; justify-content:center; font-weight:700; flex-shrink:0; }
+        .lp-demo-gate-btns { display:flex; flex-direction:column; gap:10px; margin-bottom:16px; }
+        .lp-demo-gate-note { font-size:12px; color:#9CA3AF; text-align:center; }
+
+        @media(max-width:900px){ .lp-demo-tabs{ flex-direction:row; overflow-x:auto; flex-wrap:nowrap; padding-bottom:4px; -webkit-overflow-scrolling:touch; scrollbar-width:none; } .lp-demo-tabs::-webkit-scrollbar{ display:none; } .lp-demo-tab{ flex-shrink:0; justify-content:flex-start; } .lp-demo-cta-row{ flex-direction:column; align-items:flex-start; } }
+        @media(max-width:600px){ .lp-demo-box{ border-radius:14px; } .lp-demo-panel{ padding:20px; } .lp-demo-fc-grid{ grid-template-columns:1fr; } .lp-demo-qm-config{ grid-template-columns:1fr; } .lp-demo-gate-modal{ padding:28px 20px; } }
 
         /* ── RESPONSIVE ── */
         @media(min-width:1100px) { .lp-hero-mockup { display:block; } }
@@ -535,10 +1439,13 @@ export default function LandingPage() {
           .lp-steps { grid-template-columns:1fr; }
           .lp-footer-top { grid-template-columns:1fr; gap:28px; }
           .lp-hero-ctas { flex-direction:column; }
-          .lp-btn-hero-primary, .lp-btn-hero-sec { width:100%; text-align:center; }
+          .lp-btn-hero-primary, .lp-btn-hero-sec, .lp-btn-try-demo { width:100%; text-align:center; justify-content:center; }
           .lp-cta-btns { flex-direction:column; align-items:center; }
           .lp-section { padding:52px 16px; }
           .lp-trust-bar { justify-content:flex-start; }
+          .lp-qw-cols { grid-template-columns:1fr; }
+          .lp-results-row { grid-template-columns:1fr; }
+          .lp-btn-try-free { padding:14px 32px; font-size:16px; }
         }
       `}</style>
     </div>

@@ -36,12 +36,12 @@ export default function Topbar({ onMenuClick }) {
       )}
 
       {/* Paarthivi wordmark in topbar (desktop) */}
-      <div style={{
+      <div className="topbar-brand" style={{
         display: 'flex', alignItems: 'center', gap: 8,
-        paddingLeft: 16, borderLeft: '1px solid #EDE9FE',
+        paddingLeft: 16, borderLeft: '1px solid rgba(107,82,176,.15)',
         marginLeft: 8,
       }}>
-        <Logo size={24} full={true} />
+        <Logo size={50} full={true} />
       </div>
     </div>
   )

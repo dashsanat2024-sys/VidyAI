@@ -19,7 +19,7 @@ const NAV = [
   },
   {
     group: 'Teach',
-    roles: ['teacher', 'tutor', 'school_admin', 'admin'],
+    roles: ['teacher', 'institute_admin', 'admin'],
     items: [
       { id: 'qmaster',  icon: '📋', label: 'Question Master' },
       { id: 'qgen',     icon: '✨', label: 'Quick QGen'      },
@@ -29,11 +29,12 @@ const NAV = [
   },
   {
     group: 'Manage',
-    roles: ['school_admin', 'admin'],
+    roles: ['institute_admin', 'admin'],
     items: [
       { id: 'institute', icon: '🏫', label: 'Institute'  },
       { id: 'analytics', icon: '📉', label: 'Analytics'  },
       { id: 'visitor-log', icon: '👥', label: 'Visitor Log' },
+      { id: 'quota',     icon: '🛡', label: 'Quota Manager' },
       { id: 'settings',  icon: '⚙️', label: 'Settings'   },
     ],
   },
@@ -61,10 +62,10 @@ export default function Sidebar({ isOpen, onClose }) {
         {/* Brand header */}
         <div className="sb-header">
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-            <Logo size={36} />
+            <Logo size={56} />
             <div>
               <div style={{ color: '#fff', fontWeight: '800', fontSize: '14px',
-                lineHeight: 1.2 }}>Paarthivi</div>
+                lineHeight: 1.2 }}>Arthavi</div>
               <div style={{ color: 'rgba(255,255,255,.45)', fontSize: '10px',
                 textTransform: 'uppercase', letterSpacing: '1px' }}>Smart Learning</div>
             </div>
@@ -81,7 +82,7 @@ export default function Sidebar({ isOpen, onClose }) {
             const visibleItems = group.items.filter(item => {
               if (item.roles && !item.roles.includes(role)) return false
               // Settings always visible for admin
-              if (item.id === 'settings' && (role === 'admin' || role === 'school_admin')) return true
+              if (item.id === 'settings' && (role === 'admin' || role === 'institute_admin')) return true
               // Check platform visibility settings
               if (platformSettings?.sidebar?.[item.id] === false) return false
               return true

@@ -8,12 +8,11 @@ import { apiGet, apiPost } from '../../utils/api'
 
 // ── Role badge colours ─────────────────────────────────────────────────────
 const ROLE_STYLE = {
-  teacher:     { bg: '#d1fae5', color: '#065f46' },
-  tutor:       { bg: '#d1fae5', color: '#065f46' },
-  student:     { bg: 'var(--indigo3)', color: 'var(--indigo)' },
-  parent:      { bg: '#fce7f3', color: '#9d174d' },
-  school_admin:{ bg: '#e0f2fe', color: '#0369a1' },
-  admin:       { bg: '#fee2e2', color: '#991b1b' },
+  teacher:        { bg: '#d1fae5', color: '#065f46' },
+  student:        { bg: 'var(--indigo3)', color: 'var(--indigo)' },
+  parent:         { bg: '#fce7f3', color: '#9d174d' },
+  institute_admin:{ bg: '#e0f2fe', color: '#0369a1' },
+  admin:          { bg: '#fee2e2', color: '#991b1b' },
 }
 
 // ── Institute Manager Panel ────────────────────────────────────────────────
@@ -26,17 +25,15 @@ export function InstitutePanel({ showToast }) {
   const [editing, setEditing] = useState(null)   // user being edited
   const [editData,setEditData]= useState({})
   const [saving,  setSaving]  = useState(false)
+  const [activeTab, setActiveTab] = useState('users')
 
   useEffect(() => { fetchUsers() }, [])
 
   const fetchUsers = async () => {
     setLoading(true)
     try {
-      const res = await apiGet('/admin/users', token)
-      if (res.ok) {
-        const data = await res.json()
-        setUsers(data.users || [])
-      }
+      const data = await apiGet('/admin/users', token)
+      setUsers(data.users || [])
     } catch { }
     setLoading(false)
   }
@@ -82,7 +79,7 @@ export function InstitutePanel({ showToast }) {
     } catch { }
   }
 
-  const ALL_FILTER_TABS = ['all', 'teacher', 'tutor', 'student', 'parent', 'school_admin']
+  const ALL_FILTER_TABS = ['all', 'teacher', 'student', 'parent', 'institute_admin', 'admin']
   const filtered = filter === 'all' ? users : users.filter(u => u.role === filter)
 
   return (
@@ -95,19 +92,35 @@ export function InstitutePanel({ showToast }) {
               {users.length} registered users · All sign-ups appear here automatically
             </p>
           </div>
-          <button className="btn-saffron" onClick={fetchUsers} disabled={loading} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            🔄 Refresh
-          </button>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            {/* View tabs */}
+            <div style={{ display: 'flex', background: 'var(--paper)', borderRadius: 10, padding: 3, gap: 2 }}>
+              {[['users','👥 Users'], ['analytics','📊 Analytics']].map(([tab, label]) => (
+                <button key={tab} onClick={() => setActiveTab(tab)}
+                  style={{ padding: '6px 14px', borderRadius: 8, border: 'none', cursor: 'pointer',
+                    fontWeight: 700, fontSize: 11, fontFamily: 'var(--sans)',
+                    background: activeTab === tab ? '#fff' : 'transparent',
+                    color: activeTab === tab ? 'var(--indigo)' : 'var(--muted)',
+                    boxShadow: activeTab === tab ? '0 1px 4px rgba(0,0,0,.08)' : 'none', transition: '.2s' }}>
+                  {label}
+                </button>
+              ))}
+            </div>
+            <button className="btn-saffron" onClick={fetchUsers} disabled={loading} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              🔄 Refresh
+            </button>
+          </div>
         </div>
 
         <div className="stats-grid" style={{ marginBottom: 20 }}>
-          <div className="stat-card"><div className="stat-label">Teachers / Tutors</div><div className="stat-val">{adminStats?.teacher_count ?? users.filter(u => ['teacher','tutor'].includes(u.role)).length}</div></div>
+          <div className="stat-card"><div className="stat-label">Teachers</div><div className="stat-val">{adminStats?.teacher_count ?? users.filter(u => u.role === 'teacher').length}</div></div>
           <div className="stat-card"><div className="stat-label">Students</div><div className="stat-val">{adminStats?.student_count ?? users.filter(u => u.role === 'student').length}</div></div>
           <div className="stat-card"><div className="stat-label">Parents</div><div className="stat-val">{adminStats?.parent_count ?? users.filter(u => u.role === 'parent').length}</div></div>
           <div className="stat-card"><div className="stat-label">Storage Used</div><div className="stat-val">{adminStats?.storage_gb ?? '0.0'} GB</div></div>
         </div>
 
         {/* Role filter tabs */}
+        {activeTab === 'users' && (<>
         <div style={{ display: 'flex', gap: 4, background: 'var(--paper)', borderRadius: 12, padding: 4, marginBottom: 16, flexWrap: 'wrap' }}>
           {ALL_FILTER_TABS.map(r => (
             <button key={r} onClick={() => setFilter(r)}
@@ -158,6 +171,14 @@ export function InstitutePanel({ showToast }) {
                     <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
                       {u.roll_number && <span style={{ fontSize: 11, color: 'var(--muted)' }}>Roll: {u.roll_number}</span>}
                       <span style={{ fontSize: 11, color: 'var(--muted)' }}>Joined: {u.joined || '—'}</span>
+                      <span style={{ fontSize: 11, color: u.last_login ? '#059669' : 'var(--muted)' }}>
+                        🕐 {u.last_login
+                          ? new Date(u.last_login).toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })
+                          : 'Never logged in'}
+                      </span>
+                      {u.login_count > 0 && (
+                        <span style={{ fontSize: 11, color: 'var(--muted)' }}>({u.login_count} login{u.login_count !== 1 ? 's' : ''})</span>
+                      )}
                       <span style={{ padding: '3px 10px', borderRadius: 50, fontSize: 10, fontWeight: 800, background: rs.bg, color: rs.color, textTransform: 'uppercase', letterSpacing: '.4px' }}>
                         {u.role.replace('_',' ')}
                       </span>
@@ -188,7 +209,7 @@ export function InstitutePanel({ showToast }) {
                       <div className="fg" style={{ marginBottom: 0 }}>
                         <label>Role</label>
                         <select className="fi sel" value={editData.role} onChange={e => setEditData(d => ({ ...d, role: e.target.value }))}>
-                          {['student','teacher','tutor','parent','school_admin'].map(r => (
+                          {['student','teacher','parent','institute_admin'].map(r => (
                             <option key={r} value={r}>{r.replace('_',' ')}</option>
                           ))}
                         </select>
@@ -221,6 +242,117 @@ export function InstitutePanel({ showToast }) {
             )
           })}
         </div>
+        </>)}
+
+        {/* ── Usage Analytics Tab ──────────────────────────────────────── */}
+        {activeTab === 'analytics' && (() => {
+          const FEATURE_LABELS = {
+            chat: 'AI Tutor Chat', summarise: 'Summarise', flashcards: 'Flashcards',
+            curriculum_load: 'Curriculum Hub', uk_curriculum: 'UK Curriculum',
+            curriculum_tool: 'Curriculum Tool', video_explanation: 'Video Explanation',
+            generate_questions: 'Question Generator', evaluate: 'Evaluate',
+            practice_generate: 'Practice Generate', practice_evaluate: 'Practice Evaluate',
+          }
+          const totals = adminStats?.feature_totals || {}
+          const recentUsers = adminStats?.recently_active || []
+          const topUsers = adminStats?.top_users_by_usage || []
+          const totalActions = Object.values(totals).reduce((a, b) => a + b, 0)
+          const sortedFeatures = Object.entries(totals).sort((a, b) => b[1] - a[1])
+          const maxVal = sortedFeatures[0]?.[1] || 1
+
+          return (
+            <div>
+              {/* Summary cards */}
+              <div className="stats-grid" style={{ marginBottom: 20 }}>
+                <div className="stat-card"><div className="stat-label">Total Feature Uses (30d)</div><div className="stat-val">{totalActions.toLocaleString()}</div></div>
+                <div className="stat-card"><div className="stat-label">Active Users (7d)</div><div className="stat-val">{recentUsers.length}</div></div>
+                <div className="stat-card"><div className="stat-label">Features Tracked</div><div className="stat-val">{sortedFeatures.length}</div></div>
+                <div className="stat-card"><div className="stat-label">Most Used</div><div className="stat-val" style={{ fontSize: 13 }}>{sortedFeatures[0] ? (FEATURE_LABELS[sortedFeatures[0][0]] || sortedFeatures[0][0]) : '—'}</div></div>
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr', gap: 20, marginBottom: 20 }}>
+                {/* Feature usage bar chart */}
+                <div className="card" style={{ padding: 24 }}>
+                  <h4 style={{ margin: '0 0 16px', fontFamily: 'var(--serif)', color: 'var(--indigo)' }}>📊 Feature Usage (Last 30 Days)</h4>
+                  {sortedFeatures.length === 0
+                    ? <p style={{ color: 'var(--muted)', fontSize: 13 }}>No usage data yet. Data appears once users interact with features.</p>
+                    : sortedFeatures.map(([feat, cnt]) => (
+                      <div key={feat} style={{ marginBottom: 10 }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 3 }}>
+                          <span style={{ fontWeight: 600 }}>{FEATURE_LABELS[feat] || feat}</span>
+                          <span style={{ color: 'var(--muted)' }}>{cnt.toLocaleString()}</span>
+                        </div>
+                        <div style={{ background: 'var(--paper)', borderRadius: 4, height: 8, overflow: 'hidden' }}>
+                          <div style={{ width: `${Math.round((cnt / maxVal) * 100)}%`, height: '100%', background: 'var(--indigo)', borderRadius: 4, transition: 'width .4s' }} />
+                        </div>
+                      </div>
+                    ))
+                  }
+                </div>
+
+                {/* Top users by usage */}
+                <div className="card" style={{ padding: 24 }}>
+                  <h4 style={{ margin: '0 0 16px', fontFamily: 'var(--serif)', color: 'var(--indigo)' }}>🏆 Top Users (30d)</h4>
+                  {topUsers.length === 0
+                    ? <p style={{ color: 'var(--muted)', fontSize: 13 }}>No usage data yet.</p>
+                    : topUsers.map((u, i) => (
+                      <div key={u.uid} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 0', borderBottom: i < topUsers.length - 1 ? '1px solid #f1f5f9' : 'none' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <span style={{ fontSize: 16 }}>{['🥇','🥈','🥉'][i] || `${i+1}.`}</span>
+                          <span style={{ fontWeight: 600, fontSize: 13 }}>{u.name}</span>
+                        </div>
+                        <span style={{ fontWeight: 700, color: 'var(--indigo)', fontSize: 13 }}>{u.total} uses</span>
+                      </div>
+                    ))
+                  }
+                </div>
+              </div>
+
+              {/* Recently active users */}
+              <div className="card" style={{ padding: 24 }}>
+                <h4 style={{ margin: '0 0 16px', fontFamily: 'var(--serif)', color: 'var(--indigo)' }}>🕐 Recently Active Users (Last 7 Days)</h4>
+                {recentUsers.length === 0
+                  ? <p style={{ color: 'var(--muted)', fontSize: 13 }}>No users have logged in within the last 7 days.</p>
+                  : (
+                    <div style={{ overflowX: 'auto' }}>
+                      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                        <thead>
+                          <tr style={{ borderBottom: '2px solid #f1f5f9' }}>
+                            {['Name','Email','Role','Institution','Last Login','Logins'].map(h => (
+                              <th key={h} style={{ textAlign: 'left', padding: '6px 10px', fontWeight: 700, color: 'var(--muted)', fontSize: 11, textTransform: 'uppercase' }}>{h}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {recentUsers.map((ru, i) => {
+                            const rs = ROLE_STYLE[ru.role] || { bg: 'var(--paper)', color: 'var(--text)' }
+                            return (
+                              <tr key={ru.id} style={{ borderBottom: '1px solid #f8fafc', background: i % 2 === 0 ? 'transparent' : '#fafbfd' }}>
+                                <td style={{ padding: '8px 10px', fontWeight: 600 }}>{ru.name}</td>
+                                <td style={{ padding: '8px 10px', color: 'var(--muted)', fontSize: 12 }}>{ru.email}</td>
+                                <td style={{ padding: '8px 10px' }}>
+                                  <span style={{ padding: '2px 8px', borderRadius: 50, fontSize: 10, fontWeight: 800, background: rs.bg, color: rs.color }}>
+                                    {ru.role.replace('_', ' ')}
+                                  </span>
+                                </td>
+                                <td style={{ padding: '8px 10px', color: 'var(--muted)', fontSize: 12 }}>{ru.institution || '—'}</td>
+                                <td style={{ padding: '8px 10px', color: '#059669', fontSize: 12 }}>
+                                  {ru.last_login ? new Date(ru.last_login).toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : '—'}
+                                </td>
+                                <td style={{ padding: '8px 10px', fontWeight: 700, textAlign: 'center' }}>{ru.login_count}</td>
+                              </tr>
+                            )
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )
+                }
+              </div>
+            </div>
+          )
+        })()}
+
       </div>
     </div>
   )
@@ -238,8 +370,7 @@ export function AnalyticsPanel({ showToast }) {
 
   const fetchExams = async () => {
     try {
-      const res = await apiGet('/questions', token)
-      const data = await res.json()
+      const data = await apiGet('/questions', token)
       setExams(data.exams || [])
     } catch { }
   }
@@ -248,11 +379,9 @@ export function AnalyticsPanel({ showToast }) {
     if (!eid) return
     setLoading(true); setAnalytics(null)
     try {
-      const res = await apiGet(`/exams/${eid}/analytics`, token)
-      const d = await res.json()
-      if (d.error) { showToast(d.error, 'error'); setLoading(false); return }
+      const d = await apiGet(`/exams/${eid}/analytics`, token)
       setAnalytics(d)
-    } catch { showToast('Analytics failed', 'error') }
+    } catch (e) { showToast(e.message || 'Analytics failed', 'error') }
     setLoading(false)
   }
 
@@ -347,13 +476,10 @@ export function AdminSettingsPanel({ showToast }) {
   const fetchSettings = async () => {
     setLoading(true)
     try {
-      const res = await apiGet('/admin/settings', token)
-      if (res.ok) {
-        const data = await res.json()
-        // Ensure sidebar object exists
-        const sidebar = data.settings?.sidebar || {}
-        setSettings({ ...data.settings, sidebar })
-      }
+      const data = await apiGet('/admin/settings', token)
+      // Ensure sidebar object exists
+      const sidebar = data.settings?.sidebar || {}
+      setSettings({ ...data.settings, sidebar })
     } catch { }
     setLoading(false)
   }
@@ -462,12 +588,9 @@ export function VisitorLogPanel({ showToast }) {
   const fetchVisitors = async () => {
     setLoading(true)
     try {
-      const res = await apiGet('/admin/visitors', token)
-      if (res.ok) {
-        const data = await res.json()
-        setVisitors(data.visitors || [])
-      }
-    } catch (err) { }
+      const data = await apiGet('/admin/visitors', token)
+      setVisitors(data.visitors || [])
+    } catch { }
     setLoading(false)
   }
 

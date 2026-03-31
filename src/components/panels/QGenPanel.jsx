@@ -3,6 +3,117 @@ import { useAuth } from '../../context/AuthContext'
 import { useApp } from '../../context/AppContext'
 import { apiPost, apiGet } from '../../utils/api'
 
+// ── Add-custom-question form (used inside QGenPanel preview) ─────────────────────
+function QGenCustomForm({ onAdd, onCancel }) {
+  const [qType,    setQType]    = useState('obj')
+  const [question, setQuestion] = useState('')
+  const [opts,     setOpts]     = useState({ A: '', B: '', C: '', D: '' })
+  const [answer,   setAnswer]   = useState('A')
+  const [marks,    setMarks]    = useState(1)
+  const [criteria, setCriteria] = useState('')
+
+  const valid = question.trim() && (qType === 'subj' || (opts.A.trim() && opts.B.trim()))
+
+  const handleAdd = () => {
+    if (!valid) return
+    const q = { type: qType, question: question.trim(), marks: parseFloat(marks) || 1, source: 'custom' }
+    if (qType === 'obj') {
+      q.options = Object.fromEntries(Object.entries(opts).filter(([, v]) => v.trim()))
+      q.answer  = answer
+    } else {
+      q.evaluation_criteria = criteria
+      q.answer = criteria || '(Teacher-defined)'
+    }
+    onAdd(q)
+  }
+
+  const chip = (active) => ({
+    padding: '5px 14px', borderRadius: 999, fontSize: 13, fontWeight: 600, cursor: 'pointer',
+    border: active ? '1.5px solid var(--indigo)' : '1.5px solid #c7d2fe',
+    background: active ? 'var(--indigo)' : '#eef2ff',
+    color: active ? '#fff' : 'var(--indigo)',
+    transition: 'all .15s', userSelect: 'none',
+  })
+
+  return (
+    <div style={{ marginTop: 16, padding: 18, background: '#f5f3ff', borderRadius: 12, border: '2px solid #ddd6fe' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+        <div style={{ fontWeight: 700, color: '#7c3aed', fontSize: 14 }}>➕ Add Custom Question</div>
+        <button className="btn-outline" style={{ fontSize: 11, padding: '3px 10px' }} onClick={onCancel}>✕ Cancel</button>
+      </div>
+
+      <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+        <span style={chip(qType === 'obj')} onClick={() => setQType('obj')}>MCQ</span>
+        <span style={chip(qType === 'subj')} onClick={() => setQType('subj')}>Written / Subjective</span>
+      </div>
+
+      <div className="fg" style={{ marginBottom: 10 }}>
+        <label>Question *</label>
+        <textarea className="fi" rows={3} value={question} placeholder="Type your question here…"
+          style={{ resize: 'vertical', lineHeight: 1.5 }}
+          onChange={e => setQuestion(e.target.value)} />
+      </div>
+
+      {qType === 'obj' && (
+        <>
+          <div style={{ marginBottom: 10 }}>
+            <label style={{ fontSize: 11, fontWeight: 700, display: 'block', marginBottom: 6, color: '#64748b', textTransform: 'uppercase' }}>Options (A & B required)</label>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+              {['A','B','C','D'].map(k => (
+                <div key={k} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span onClick={() => setAnswer(k)}
+                    style={{ width: 22, height: 22, borderRadius: '50%', flexShrink: 0,
+                      background: answer === k ? '#059669' : '#eef2ff',
+                      color: answer === k ? '#fff' : 'var(--indigo)',
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      fontWeight: 700, fontSize: 11, cursor: 'pointer', userSelect: 'none' }}>{k}</span>
+                  <input className="fi" placeholder={`Option ${k}${k <= 'B' ? ' *' : ''}`}
+                    style={{ flex: 1, margin: 0 }}
+                    value={opts[k]} onChange={e => setOpts(o => ({ ...o, [k]: e.target.value }))} />
+                </div>
+              ))}
+            </div>
+          </div>
+          {['A','B','C','D'].filter(k => opts[k].trim()).length > 0 && (
+            <div style={{ marginBottom: 10 }}>
+              <label style={{ fontSize: 11, fontWeight: 700, display: 'block', marginBottom: 6, color: '#64748b', textTransform: 'uppercase' }}>Correct Answer</label>
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                {['A','B','C','D'].filter(k => opts[k].trim()).map(k => (
+                  <span key={k} style={chip(answer === k)} onClick={() => setAnswer(k)}>{k}: {opts[k].slice(0,18)}</span>
+                ))}
+              </div>
+            </div>
+          )}
+        </>
+      )}
+
+      {qType === 'subj' && (
+        <div className="fg" style={{ marginBottom: 10 }}>
+          <label>Marking Criteria / Rubric</label>
+          <textarea className="fi" rows={2} value={criteria}
+            placeholder="e.g. 1m: definition · 2m: explanation · 1m: example"
+            style={{ resize: 'vertical', lineHeight: 1.5 }}
+            onChange={e => setCriteria(e.target.value)} />
+        </div>
+      )}
+
+      <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+        <div className="fg" style={{ marginBottom: 0, flex: '0 0 110px' }}>
+          <label>Marks *</label>
+          <input className="fi" type="number" min={0.5} step={0.5}
+            value={marks} onChange={e => setMarks(e.target.value)} />
+        </div>
+        <div style={{ flex: 1 }} />
+        <button className="btn-submit indigo" style={{ marginTop: 0 }}
+          onClick={handleAdd} disabled={!valid}>
+          ✅ Add Question
+        </button>
+        <button className="btn-outline" onClick={onCancel}>Cancel</button>
+      </div>
+    </div>
+  )
+}
+
 export default function QGenPanel({ showToast }) {
   const { token } = useAuth()
   const { syllabi, activeSyllabus, refreshData } = useApp()
@@ -20,6 +131,12 @@ export default function QGenPanel({ showToast }) {
   const [loading, setLoading]             = useState(false)
   const [preview, setPreview]             = useState(false)
   const [previewTopic, setPreviewTopic]   = useState('')
+  const [previewMeta, setPreviewMeta]     = useState({ syllabusName: '', chapters: [] })
+
+  // Inline editing state
+  const [editingMarksIdx, setEditingMarksIdx] = useState(-1)
+  const [editingMarksVal, setEditingMarksVal] = useState('')
+  const [showAddQ, setShowAddQ]               = useState(false)
 
   // Paper metadata
   const [schoolName, setSchoolName]       = useState('')
@@ -37,8 +154,7 @@ export default function QGenPanel({ showToast }) {
   const loadChapters = async (sid) => {
     if (!sid) { setChapters([]); return }
     try {
-      const res = await apiGet(`/syllabi/${sid}/chapters`, token)
-      const data = await res.json()
+      const data = await apiGet(`/syllabi/${sid}/chapters`, token)
       const chs = data.chapters || []
       setChapters(chs)
       setSelChapters(chs)
@@ -52,20 +168,21 @@ export default function QGenPanel({ showToast }) {
 
   const generate = async () => {
     if (!selectedSyl) { showToast('Select a syllabus first', 'error'); return }
+    const today = new Date().toISOString().slice(0, 10)
+    if (examDate && examDate < today) { showToast('Exam date cannot be a past date', 'error'); return }
     setLoading(true)
     try {
       const syl = syllabi.find(s => s.id === selectedSyl)
       const parts = syl?.name?.split('-') || []
       const subject = parts.length > 1 ? parts[parts.length - 1].trim() : ''
-      const res = await apiPost('/generate-questions', {
+      const data = await apiPost('/generate-questions', {
         syllabus_id: selectedSyl, topic: topic || 'General', subject,
         chapters: selChapters, objective_count: objCount, subjective_count: subjCount,
         objective_weightage: objMarks, subjective_weightage: subjMarks, difficulty
       }, token)
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.error || 'Generation failed. Check your API key.')
       setQuestions(data.questions || [])
-      setPreviewTopic(data.topic || topic)
+      setPreviewTopic(data.syllabus_name || topic)
+      setPreviewMeta({ syllabusName: data.syllabus_name || topic, chapters: data.chapters || selChapters })
       setPreview(true)
       showToast('Questions generated!', 'success')
       await refreshData()
@@ -90,21 +207,21 @@ export default function QGenPanel({ showToast }) {
         .section-title{font-size:15px;font-weight:700;border-bottom:1px solid #ccc;margin:24px 0 12px;padding-bottom:4px;text-transform:uppercase;letter-spacing:1px}
       </style></head><body>
       <h1>${schoolName || 'VidyAI Examination'}</h1>
-      <div class="meta">Subject: ${previewTopic} &nbsp;|&nbsp; Total Marks: ${totalMarks} &nbsp;|&nbsp; Date: ${examDate || new Date().toLocaleDateString()}</div>
+      <div class="meta">Subject: ${previewMeta.syllabusName || previewTopic} &nbsp;|&nbsp; Total Marks: ${totalMarks} &nbsp;|&nbsp; Date: ${examDate || new Date().toLocaleDateString()}</div>
       <div class="header-row">
         <div>Name: ${studentName || '___________________'}</div>
         <div>Roll No: ${rollNo || '______'}</div>
         <div>Marks Obtained: _______ / ${totalMarks}</div>
       </div>
-      ${questions.filter(q => q.type === 'obj').length > 0 ? '<div class="section-title">Section A — Objective Questions</div>' : ''}
-      ${questions.filter(q => q.type === 'obj').map((q, i) => `
+      ${questions.filter(q => q.type === 'objective').length > 0 ? '<div class="section-title">Section A — Objective Questions</div>' : ''}
+      ${questions.filter(q => q.type === 'objective').map((q, i) => `
         <div class="q">
           <span class="marks">[${q.marks} mark${q.marks > 1 ? 's' : ''}]</span>
           <span class="q-num">Q${i + 1}.</span>${q.question}
           ${q.options ? `<div class="opts">${Object.entries(q.options).map(([k, v]) => `<div>(${k}) ${v}</div>`).join('')}</div>` : ''}
         </div>`).join('')}
-      ${questions.filter(q => q.type === 'subj').length > 0 ? '<div class="section-title">Section B — Subjective Questions</div>' : ''}
-      ${questions.filter(q => q.type === 'subj').map((q, i) => `
+      ${questions.filter(q => q.type !== 'objective').length > 0 ? '<div class="section-title">Section B — Subjective Questions</div>' : ''}
+      ${questions.filter(q => q.type !== 'objective').map((q, i) => `
         <div class="q">
           <span class="marks">[${q.marks} marks]</span>
           <span class="q-num">Q${i + 1}.</span>${q.question}
@@ -143,9 +260,15 @@ export default function QGenPanel({ showToast }) {
                   <div style={{ width: 24, height: 24, borderRadius: '50%', background: 'var(--indigo)', color: '#fff', display: 'grid', placeItems: 'center', fontSize: 12 }}>2</div>
                   Select Chapters
                 </div>
+                <div style={{ display:'flex', justifyContent:'flex-end', marginBottom:6, gap:8 }}>
+                  <button className="btn-outline" style={{ fontSize:11, padding:'3px 10px' }} onClick={() => setSelChapters(chapters)}>Select All</button>
+                  <button className="btn-outline" style={{ fontSize:11, padding:'3px 10px' }} onClick={() => setSelChapters([])}>Deselect All</button>
+                </div>
                 <div className="chips-wrap">
                   {chapters.map(c => (
-                    <div key={c} className={`chip ${selChapters.includes(c) ? 'selected' : ''}`} onClick={() => toggleChapter(c)}>{c}</div>
+                    <div key={c} title={c} className={`chip ${selChapters.includes(c) ? 'selected' : ''}`}
+                      style={{ maxWidth:220, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', borderRadius:8, fontWeight: selChapters.includes(c) ? 500 : 400 }}
+                      onClick={() => toggleChapter(c)}>{c}</div>
                   ))}
                 </div>
               </div>
@@ -182,7 +305,7 @@ export default function QGenPanel({ showToast }) {
                 <div className="fg" style={{ marginBottom: 0 }}><label>School Name</label><input className="fi" placeholder="ABC School" value={schoolName} onChange={e => setSchoolName(e.target.value)} /></div>
                 <div className="fg" style={{ marginBottom: 0 }}><label>Student Name</label><input className="fi" placeholder="Student Name" value={studentName} onChange={e => setStudentName(e.target.value)} /></div>
                 <div className="fg" style={{ marginBottom: 0 }}><label>Roll Number</label><input className="fi" placeholder="101" value={rollNo} onChange={e => setRollNo(e.target.value)} /></div>
-                <div className="fg" style={{ marginBottom: 0 }}><label>Exam Date</label><input className="fi" type="date" value={examDate} onChange={e => setExamDate(e.target.value)} /></div>
+                <div className="fg" style={{ marginBottom: 0 }}><label>Exam Date</label><input className="fi" type="date" value={examDate} min={new Date().toISOString().slice(0, 10)} onChange={e => setExamDate(e.target.value)} /></div>
               </div>
             </div>
 
@@ -195,8 +318,15 @@ export default function QGenPanel({ showToast }) {
             {/* Preview Header */}
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
               <div>
-                <h3 style={{ fontFamily: 'var(--serif)', color: 'var(--indigo)' }}>📄 {previewTopic}</h3>
-                <p style={{ color: 'var(--muted)', fontSize: 13 }}>{questions.length} questions • Total: {questions.reduce((s, q) => s + (q.marks || 0), 0)} marks</p>
+                <h3 style={{ fontFamily: 'var(--serif)', color: 'var(--indigo)', marginBottom: 4 }}>📄 {previewMeta.syllabusName || previewTopic}</h3>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 6 }}>
+                  {previewMeta.chapters.length > 0 && (
+                    <span style={{ background: 'var(--indigo3)', color: 'var(--indigo)', padding: '3px 10px', borderRadius: 50, fontSize: 11, fontWeight: 600 }}>
+                      📚 {previewMeta.chapters.length} chapter{previewMeta.chapters.length !== 1 ? 's' : ''} selected
+                    </span>
+                  )}
+                </div>
+                <p style={{ color: 'var(--muted)', fontSize: 13, margin: 0 }}>{questions.length} questions • Total: {questions.reduce((s, q) => s + (q.marks || 0), 0)} marks</p>
               </div>
               <div style={{ display: 'flex', gap: 10 }}>
                 <button className="btn-outline" onClick={() => setPreview(false)}>← Regenerate</button>
@@ -212,9 +342,27 @@ export default function QGenPanel({ showToast }) {
                     <div style={{ flex: 1 }}>
                       <span style={{ fontWeight: 700 }}>{i + 1}. </span>{q.question}
                     </div>
-                    <span style={{ background: 'var(--indigo3)', color: 'var(--indigo)', padding: '2px 10px', borderRadius: 50, fontSize: 11, fontWeight: 700, marginLeft: 12, whiteSpace: 'nowrap' }}>
-                      {q.marks} mark{q.marks > 1 ? 's' : ''}
-                    </span>
+                    {/* Editable marks badge */}
+                    {editingMarksIdx === i ? (
+                      <input
+                        type="number" min={0.5} step={0.5} value={editingMarksVal} autoFocus
+                        style={{ width: 64, padding: '3px 8px', borderRadius: 20, border: '2px solid var(--indigo)', fontSize: 12, fontWeight: 700, textAlign: 'center', marginLeft: 12, outline: 'none' }}
+                        onChange={e => setEditingMarksVal(e.target.value)}
+                        onBlur={() => {
+                          const v = parseFloat(editingMarksVal)
+                          if (!isNaN(v) && v > 0) setQuestions(prev => prev.map((qx, idx) => idx === i ? { ...qx, marks: v } : qx))
+                          setEditingMarksIdx(-1)
+                        }}
+                        onKeyDown={e => { if (e.key === 'Enter') e.target.blur() }}
+                      />
+                    ) : (
+                      <span
+                        onClick={() => { setEditingMarksIdx(i); setEditingMarksVal(q.marks) }}
+                        title="Click to change marks"
+                        style={{ background: 'var(--indigo3)', color: 'var(--indigo)', padding: '2px 10px', borderRadius: 50, fontSize: 11, fontWeight: 700, marginLeft: 12, whiteSpace: 'nowrap', cursor: 'pointer' }}>
+                        {q.marks} mark{q.marks > 1 ? 's' : ''} ✏️
+                      </span>
+                    )}
                   </div>
                   {q.options && (
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 8, marginTop: 8 }}>
@@ -231,9 +379,44 @@ export default function QGenPanel({ showToast }) {
                     <span style={{ background: q.difficulty === 'hard' ? '#fef2f2' : q.difficulty === 'easy' ? '#d1fae5' : '#fffbeb', color: q.difficulty === 'hard' ? 'var(--red)' : q.difficulty === 'easy' ? 'var(--green)' : '#92400e', padding: '2px 8px', borderRadius: 4, fontSize: 10, fontWeight: 700, marginLeft: 4 }}>
                       {q.difficulty?.toUpperCase()}
                     </span>
+                    {q.source === 'custom' && (
+                      <span style={{ background: '#fffbeb', color: '#d97706', padding: '2px 8px', borderRadius: 4, fontSize: 10, fontWeight: 700, marginLeft: 4 }}>CUSTOM</span>
+                    )}
                   </div>
+                  {/* Marking criteria — editable for subjective/written questions */}
+                  {q.type !== 'obj' && q.type !== 'objective' && (
+                    <div style={{ marginTop: 10 }}>
+                      <div style={{ fontSize: 11, fontWeight: 700, color: '#92400e', marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.04em' }}>✦ Marking Criteria</div>
+                      <textarea
+                        rows={2}
+                        value={q.evaluation_criteria || ''}
+                        placeholder="Set marking criteria / rubric (e.g. 1m for definition · 2m for explanation · 1m for example)…"
+                        style={{ width: '100%', padding: '8px 10px', borderRadius: 8, border: '1.5px solid #fde68a', fontSize: 12, background: '#fffbeb', fontFamily: 'inherit', resize: 'vertical', boxSizing: 'border-box', outline: 'none', lineHeight: 1.5 }}
+                        onChange={e => {
+                          const val = e.target.value
+                          setQuestions(prev => prev.map((qx, idx) => idx === i ? { ...qx, evaluation_criteria: val } : qx))
+                        }}
+                      />
+                      <div style={{ fontSize: 10, color: '#9ca3af', marginTop: 2 }}>Used by AI evaluator · Printed on answer key</div>
+                    </div>
+                  )}
                 </div>
               ))}
+              {/* Add custom question */}
+              {showAddQ ? (
+                <QGenCustomForm
+                  onAdd={(q) => { setQuestions(prev => [...prev, { ...q, id: prev.length + 1 }]); setShowAddQ(false) }}
+                  onCancel={() => setShowAddQ(false)}
+                />
+              ) : (
+                <button
+                  style={{ width: '100%', padding: '11px', marginTop: 10, borderRadius: 10,
+                    border: '2px dashed #c7d2fe', background: '#eef2ff', color: '#3730a3',
+                    fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}
+                  onClick={() => setShowAddQ(true)}>
+                  ➕ Add Your Own Question
+                </button>
+              )}
             </div>
           </div>
         )}

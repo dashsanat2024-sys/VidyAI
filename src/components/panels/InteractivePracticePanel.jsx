@@ -1,7 +1,7 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useAuth } from '../../context/AuthContext'
 import { useApp } from '../../context/AppContext'
-import { apiPost } from '../../utils/api'
+import { apiPost, apiPostForm } from '../../utils/api'
 
 import CurriculumSelector from '../shared/CurriculumSelector'
 
@@ -20,6 +20,11 @@ export default function InteractivePracticePanel({ showToast }) {
   const [report, setReport]           = useState(null)
   const [feedbacks, setFeedbacks]     = useState({})
   const [deleting, setDeleting]       = useState(false)
+
+  // Source mode: 'curriculum' or 'upload'
+  const [sourceMode,    setSourceMode]    = useState('curriculum')
+  const [uploadLoading, setUploadLoading] = useState(false)
+  const uploadRef = useRef(null)
 
   // Knowledge Source details for display
   const [sourceMeta, setSourceMeta]   = useState(null)
@@ -74,6 +79,28 @@ export default function InteractivePracticePanel({ showToast }) {
     setDeleting(false)
   }
 
+  const handleDocUpload = async (e) => {
+    const file = e.target.files[0]
+    if (!file) return
+    setUploadLoading(true)
+    showToast('Processing document…', 'success')
+    try {
+      const fd = new FormData()
+      fd.append('file', file)
+      fd.append('syllabus_name', file.name.replace(/\.[^/.]+$/, ''))
+      const data = await apiPostForm('/upload', fd, token)
+      const name = data.syllabus_name || file.name
+      setSelectedSyl(data.syllabus_id)
+      setSourceMeta({ name, board: 'Uploaded Document', classNum: '', subject: name })
+      addSyllabus({ id: data.syllabus_id, name, board: 'Uploaded', class: '', subject: name })
+      showToast(`✅ Document ready: ${name}`, 'success')
+    } catch (err) {
+      showToast(err.message || 'Upload failed', 'error')
+    }
+    setUploadLoading(false)
+    if (uploadRef.current) uploadRef.current.value = ''
+  }
+
   const generate = async () => {
     if (!selectedSyl) { showToast('Please select a syllabus first', 'warning'); return }
     setLoading(true)
@@ -82,15 +109,10 @@ export default function InteractivePracticePanel({ showToast }) {
     if (qType === 'objective') { objCount = total; subjCount = 0 }
     if (qType === 'subjective') { objCount = 0; subjCount = total }
     try {
-      const res = await apiPost('/curriculum/practice/generate', {
+      const data = await apiPost('/curriculum/practice/generate', {
         syllabus_id: selectedSyl, objective_count: objCount, subjective_count: subjCount,
         topic: 'Comprehensive knowledge check'
       }, token)
-      if (!res.headers.get('content-type')?.includes('application/json')) {
-        throw new Error('Server returned an unexpected response. Check the backend.')
-      }
-      const data = await res.json()
-      if (data.error) throw new Error(data.error)
       setQuestions(data)
       setAnswers({})
       setFeedbacks({})
@@ -116,14 +138,13 @@ export default function InteractivePracticePanel({ showToast }) {
     for (let i = 0; i < questions.length; i++) {
       const q = questions[i]
       try {
-        const res = await apiPost('/curriculum/practice/evaluate', {
+        const ev = await apiPost('/curriculum/practice/evaluate', {
           question: q.question,
           model_answer: q.answer,
           student_answer: answers[i],
           type: q.type,
           options: q.options || {}
         }, token)
-        const ev = await res.json()
         newFeedbacks[i] = ev
       } catch { newFeedbacks[i] = { is_correct: false, score: 0, feedback: 'Evaluation failed.' } }
     }
@@ -136,9 +157,8 @@ export default function InteractivePracticePanel({ showToast }) {
         student_answer: answers[i], evaluation: newFeedbacks[i],
         is_correct: newFeedbacks[i]?.is_correct, score: newFeedbacks[i]?.score || 0
       }))
-      const res = await apiPost('/curriculum/practice/report', { attempts }, token)
-      const reportData = await res.json()
-      if (res.ok) setReport(reportData)
+      const reportData = await apiPost('/curriculum/practice/report', { attempts }, token)
+      setReport(reportData)
     } catch { }
 
     setPhase('report')
@@ -167,12 +187,60 @@ export default function InteractivePracticePanel({ showToast }) {
           </div>
 
           <div style={{ background: '#f8fafc', padding: '16px 0', borderRadius: '12px', border: '1px solid #e2e8f0', marginBottom: '24px' }}>
-             <h4 style={{ fontSize: '11px', fontWeight: '800', color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: '14px', padding: '0 16px' }}>
-                1. Select Curriculum
-             </h4>
-             <div style={{ padding: '0 16px' }}>
-               <CurriculumSelector token={token} onComplete={handleSelectionComplete} buttonLabel="Load Practice Knowledge" />
+             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 16px', marginBottom: '14px' }}>
+               <h4 style={{ fontSize: '11px', fontWeight: '800', color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.1em', margin: 0 }}>
+                  1. Select Knowledge Source
+               </h4>
+               {/* Source mode toggle */}
+               <div style={{ display: 'flex', gap: '6px' }}>
+                 <button
+                   onClick={() => setSourceMode('curriculum')}
+                   style={{ padding: '5px 12px', borderRadius: 7, border: '1.5px solid', fontSize: 11, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit', transition: '.15s',
+                     background: sourceMode === 'curriculum' ? '#4f46e5' : '#fff',
+                     color: sourceMode === 'curriculum' ? '#fff' : '#4f46e5',
+                     borderColor: '#4f46e5' }}>
+                   📚 Curriculum
+                 </button>
+                 <button
+                   onClick={() => setSourceMode('upload')}
+                   style={{ padding: '5px 12px', borderRadius: 7, border: '1.5px solid', fontSize: 11, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit', transition: '.15s',
+                     background: sourceMode === 'upload' ? '#d97706' : '#fff',
+                     color: sourceMode === 'upload' ? '#fff' : '#d97706',
+                     borderColor: '#d97706' }}>
+                   📎 Upload Doc
+                 </button>
+               </div>
              </div>
+
+             {sourceMode === 'curriculum' && (
+               <div style={{ padding: '0 16px' }}>
+                 <CurriculumSelector token={token} onComplete={handleSelectionComplete} buttonLabel="Load Practice Knowledge" />
+               </div>
+             )}
+
+             {sourceMode === 'upload' && (
+               <div style={{ padding: '0 16px' }}>
+                 <p style={{ fontSize: '13px', color: '#64748b', marginBottom: '12px', lineHeight: 1.6 }}>
+                   Upload any PDF, Word, or text document — AI will generate practice questions directly from its content.
+                 </p>
+                 <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
+                   <button
+                     onClick={() => uploadRef.current?.click()}
+                     disabled={uploadLoading}
+                     style={{ padding: '10px 20px', background: 'linear-gradient(135deg,#d97706,#b45309)', color: '#fff', border: 'none', borderRadius: 10, fontSize: 13, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit', display: 'flex', alignItems: 'center', gap: 6, opacity: uploadLoading ? 0.7 : 1 }}>
+                     {uploadLoading ? <><span className="spin" /> Processing…</> : <><span>📎</span> Choose File</>}
+                   </button>
+                   <span style={{ fontSize: '11px', color: '#64748b' }}>PDF, DOCX, TXT, MD supported</span>
+                 </div>
+                 <input ref={uploadRef} type="file" accept=".pdf,.docx,.txt,.md"
+                   style={{ display: 'none' }} onChange={handleDocUpload} />
+                 {sourceMeta && sourceMode === 'upload' && (
+                   <div style={{ marginTop: 12, padding: '10px 14px', background: '#ecfdf5', border: '1px solid #86efac', borderRadius: 8, fontSize: 13, color: '#065f46', display: 'flex', alignItems: 'center', gap: 8 }}>
+                     <span>✅</span> <strong>{sourceMeta.name}</strong> — ready for practice
+                   </div>
+                 )}
+               </div>
+             )}
           </div>
 
           {selectedSyl && sourceMeta && (

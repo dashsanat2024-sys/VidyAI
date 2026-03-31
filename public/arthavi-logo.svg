@@ -1,0 +1,68 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 430 120">
+  <defs>
+    <!-- Icon badge gradient: top-left Indigo → bottom-right Sky Blue -->
+    <linearGradient id="ig" x1="5" y1="5" x2="115" y2="115" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#4F46E5"/>
+      <stop offset="100%" stop-color="#0EA5E9"/>
+    </linearGradient>
+    <!-- Tagline / divider gradient: horizontal across text area -->
+    <linearGradient id="tg" x1="134" y1="0" x2="415" y2="0" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#4F46E5"/>
+      <stop offset="55%" stop-color="#6366F1"/>
+      <stop offset="100%" stop-color="#0EA5E9"/>
+    </linearGradient>
+    <!-- Top shine on badge -->
+    <linearGradient id="sh" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="white" stop-opacity="0.18"/>
+      <stop offset="60%" stop-color="white" stop-opacity="0"/>
+    </linearGradient>
+    <!-- Drop shadow for badge -->
+    <filter id="f" x="-15%" y="-15%" width="130%" height="130%" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="5" stdDeviation="7" flood-color="#4F46E5" flood-opacity="0.32"/>
+    </filter>
+    <clipPath id="c">
+      <rect x="5" y="5" width="110" height="110" rx="26"/>
+    </clipPath>
+  </defs>
+
+  <!-- ══════════ ICON BADGE (scaled 1.1× from the 100-px icon, offset +5) ══════════ -->
+  <rect x="5" y="5" width="110" height="110" rx="26" fill="url(#ig)" filter="url(#f)"/>
+  <!-- Shine overlay -->
+  <rect x="5" y="5" width="110" height="110" rx="26" fill="url(#sh)"/>
+
+  <!-- A letterform — scaled coordinates: x′ = x×1.1 + 5,  y′ = y×1.1 + 5 -->
+  <!--   Original feet (20,82)(80,82) apex (50,18) → scaled (27,95)(93,95)(60,25) -->
+  <polyline
+    points="27,95 60,25 93,95"
+    stroke="white" stroke-width="10" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  <!--   Original crossbar (31,57)→(69,57) → scaled (39,68)→(81,68) -->
+  <line x1="39" y1="68" x2="81" y2="68" stroke="white" stroke-width="8.5" stroke-linecap="round"/>
+
+  <!-- 4-point sparkle at apex (scaled from icon star, center 60,19) -->
+  <!--   Original M50,7.5 L51.4,10.5 L54.5,12 L51.4,13.5 L50,16.5 … scaled: -->
+  <path d="M60,13 L61.5,16.5 L65,18 L61.5,19.5 L60,23 L58.5,19.5 L55,18 L58.5,16.5 Z"
+        fill="white" opacity="0.95"/>
+
+  <!-- ══════════ WORDMARK ══════════ -->
+
+  <!-- Primary: Arthavi — serif, strong, dark -->
+  <text
+    x="134" y="69"
+    font-family="Georgia, 'Book Antiqua', Palatino, 'Times New Roman', serif"
+    font-size="50"
+    font-weight="bold"
+    fill="#1E293B"
+    letter-spacing="-1.5">Arthavi</text>
+
+  <!-- Thin accent line separating name from tagline -->
+  <rect x="134" y="77" width="258" height="1.5" rx="0.75" fill="url(#tg)" opacity="0.55"/>
+
+  <!-- Tagline: SMART LEARNING — clean all-caps, gradient fill -->
+  <text
+    x="136" y="100"
+    font-family="'Trebuchet MS', 'Gill Sans MT', 'Gill Sans', Arial, Helvetica, sans-serif"
+    font-size="14"
+    font-weight="700"
+    letter-spacing="4.5"
+    fill="url(#tg)">SMART LEARNING</text>
+</svg>

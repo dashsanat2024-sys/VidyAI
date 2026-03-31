@@ -40,8 +40,7 @@ export default function UKCurriculumPanel({ showToast }) {
   const loadTopics = async () => {
     setLoading(true); setTopics([]); setResult(null)
     try {
-      const res = await apiPost('/uk-curriculum/topics', { year, subject }, token)
-      const data = await res.json()
+      const data = await apiPost('/uk-curriculum/topics', { year, subject }, token)
       const ts = data.topics || []
       setTopics(ts)
       setSelTopics(ts)
@@ -57,9 +56,7 @@ export default function UKCurriculumPanel({ showToast }) {
     if (!topics.length) { showToast('Load topics first', 'warning'); return }
     setMode(toolMode); setLoading(true); setResult(null)
     try {
-      const res = await apiPost(`/uk-curriculum/${toolMode}`, { year, subject, topics: selTopics }, token)
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.error || `${toolMode} failed`)
+      const data = await apiPost(`/uk-curriculum/${toolMode}`, { year, subject, topics: selTopics }, token)
       setResult({ type: toolMode, data })
     } catch (e) { showToast(e.message, 'error') }
     setLoading(false)

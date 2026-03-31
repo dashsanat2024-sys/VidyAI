@@ -14,6 +14,7 @@ import InteractivePracticePanel from '../components/panels/InteractivePracticePa
 import CurriculumPanel from '../components/panels/CurriculumPanel'
 import { QMasterPanel } from '../components/panels/QMasterPanel'
 import { InstitutePanel, AnalyticsPanel, AdminSettingsPanel, VisitorLogPanel } from '../components/panels/OtherPanels'
+import AdminPanel from '../components/panels/AdminPanel'
 import ReportPanel from '../components/panels/ReportPanel'
 
 // ── Panel slot: fills the full content area, scrolls independently ────────
@@ -43,6 +44,17 @@ export default function AppPage() {
 
   useEffect(() => { refreshData() }, [])
 
+  // Global quota-exceeded handler — fires when any apiFetch call hits 429
+  useEffect(() => {
+    const handler = (e) => {
+      const { feature_label, error } = e.detail || {}
+      const label = feature_label ? `${feature_label}: ` : ''
+      showToast(`🚫 ${label}${error || 'Daily quota reached'}`, 'warning')
+    }
+    window.addEventListener('quota:exceeded', handler)
+    return () => window.removeEventListener('quota:exceeded', handler)
+  }, [showToast])
+
   const p = { showToast }
 
   return (
@@ -67,6 +79,7 @@ export default function AppPage() {
           <PanelSlot active={activePanel === 'visitor-log'         }><VisitorLogPanel          {...p} /></PanelSlot>
           <PanelSlot active={activePanel === 'reports'             }><ReportPanel              {...p} /></PanelSlot>
           <PanelSlot active={activePanel === 'settings'            }><AdminSettingsPanel       {...p} /></PanelSlot>
+          <PanelSlot active={activePanel === 'quota'              }><AdminPanel               {...p} /></PanelSlot>
         </div>
       </div>
 

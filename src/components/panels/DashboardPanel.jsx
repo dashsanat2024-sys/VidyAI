@@ -3,7 +3,7 @@ import { useAuth } from '../../context/AuthContext'
 import { useApp } from '../../context/AppContext'
 import { apiGet, apiPost } from '../../utils/api'
 
-const APP_NAME = 'Parvidya'
+const APP_NAME = 'Arthavi'
 
 function StatCard({ label, value, color, sub }) {
   return (
@@ -196,8 +196,7 @@ function SchoolAdminDashboard({ me, adminStats, navigate, token, showToast }) {
   const loadDocs = async () => {
     setLoadingDocs(true)
     try {
-      const res = await apiGet('/documents', token)
-      const data = await res.json()
+      const data = await apiGet('/documents', token)
       setDocs(data.documents || [])
     } catch { }
     setLoadingDocs(false)
@@ -207,7 +206,7 @@ function SchoolAdminDashboard({ me, adminStats, navigate, token, showToast }) {
     if (!window.confirm(`Delete "${dname}"? This cannot be undone.`)) return
     setDeleting(did)
     try {
-      const res = await apiGet(`/documents`, token)    // list first (already have)
+      await apiGet(`/documents`, token)    // list first (already have)
       const del = await fetch(`/api/documents/${did}`, {
         method: 'DELETE',
         headers: { Authorization: `Bearer ${token}` }
@@ -224,8 +223,7 @@ function SchoolAdminDashboard({ me, adminStats, navigate, token, showToast }) {
 
   const loadSettings = async () => {
     try {
-      const res = await apiGet('/admin/settings', token)
-      const data = await res.json()
+      const data = await apiGet('/admin/settings', token)
       setSettings(data.settings || {})
     } catch { }
   }
@@ -378,6 +376,217 @@ function SchoolAdminDashboard({ me, adminStats, navigate, token, showToast }) {
   )
 }
 
+// ── Platform Admin Dashboard ───────────────────────────────────────────────────
+function PlatformAdminDashboard({ me, adminStats, navigate, token, showToast }) {
+  const stats = adminStats || {}
+  const [institutions, setInstitutions] = useState([])
+  const [loadingInst, setLoadingInst] = useState(false)
+  const [showInst, setShowInst] = useState(false)
+  const [settings, setSettings] = useState(null)
+  const [savingSettings, setSavingSettings] = useState(false)
+  const [showSettings, setShowSettings] = useState(false)
+  const [docs, setDocs] = useState([])
+  const [loadingDocs, setLoadingDocs] = useState(false)
+  const [showDocs, setShowDocs] = useState(false)
+  const [deleting, setDeleting] = useState(null)
+
+  const loadInstitutions = async () => {
+    setLoadingInst(true)
+    try {
+      const data = await apiGet('/admin/institutions', token)
+      setInstitutions(data.institutions || [])
+    } catch { }
+    setLoadingInst(false)
+  }
+
+  const loadSettings = async () => {
+    try { const data = await apiGet('/admin/settings', token); setSettings(data.settings || {}) } catch { }
+  }
+
+  const saveSettings = async () => {
+    if (!settings) return
+    setSavingSettings(true)
+    try {
+      const res = await fetch('/api/admin/settings', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify(settings)
+      })
+      const data = await res.json()
+      if (res.ok) { setSettings(data.settings); showToast && showToast('Settings saved!', 'success') }
+    } catch { }
+    setSavingSettings(false)
+  }
+
+  const loadDocs = async () => {
+    setLoadingDocs(true)
+    try { const data = await apiGet('/documents', token); setDocs(data.documents || []) } catch { }
+    setLoadingDocs(false)
+  }
+
+  const deleteDoc = async (did, dname) => {
+    if (!window.confirm(`Delete "${dname}"? This cannot be undone.`)) return
+    setDeleting(did)
+    try {
+      const del = await fetch(`/api/documents/${did}`, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } })
+      if (del.ok) { setDocs(prev => prev.filter(d => d.id !== did)); showToast && showToast('Document deleted', 'success') }
+      else showToast && showToast('Failed to delete', 'error')
+    } catch { }
+    setDeleting(null)
+  }
+
+  useEffect(() => { loadSettings() }, [])
+
+  const CONFIG_FIELDS = [
+    { key: 'max_uploads_per_user',      label: 'Max uploads per user',             type: 'number', min: 1,  max: 100 },
+    { key: 'max_uploads_student',       label: 'Max uploads — Student',            type: 'number', min: 0,  max: 50  },
+    { key: 'max_uploads_teacher',       label: 'Max uploads — Teacher',            type: 'number', min: 0,  max: 100 },
+    { key: 'max_flashcards_default',    label: 'Default flashcard count',          type: 'number', min: 5,  max: 30  },
+    { key: 'max_questions_per_paper',   label: 'Max questions per exam paper',     type: 'number', min: 5,  max: 100 },
+    { key: 'student_self_register',     label: 'Allow student self-registration',  type: 'bool' },
+    { key: 'show_answer_explanations',  label: 'Show answer explanations',         type: 'bool' },
+    { key: 'otp_required_for_signup',   label: 'Require OTP for sign-up',          type: 'bool' },
+    { key: 'email_reports_enabled',     label: 'Enable parent email reports',      type: 'bool' },
+  ]
+
+  return (
+    <>
+      <div style={{ marginBottom: 24 }}>
+        <h3 style={{ fontFamily: 'var(--serif)', fontSize: 22, color: 'var(--indigo)', marginBottom: 4 }}>
+          Platform Overview 🔐
+        </h3>
+        <p style={{ color: 'var(--muted)', fontSize: 14 }}>
+          Global admin — all institutions, all users, platform settings.
+        </p>
+      </div>
+
+      <div className="stats-grid">
+        <StatCard label="Institutions"   value={stats.institute_count ?? 0} color="var(--saffron)" />
+        <StatCard label="Teachers"       value={stats.teacher_count ?? 0} />
+        <StatCard label="Students"       value={stats.student_count ?? 0} />
+        <StatCard label="Parents"        value={stats.parent_count ?? 0} />
+        <StatCard label="Exams Created"  value={stats.exam_count ?? 0} color="var(--indigo)" />
+        <StatCard label="Evaluations"    value={stats.eval_count ?? 0} />
+        <StatCard label="Visitors"       value={stats.visitor_count ?? 0} />
+        <StatCard label="Storage Used"   value={`${stats.storage_gb ?? '0.0'} GB`} />
+      </div>
+
+      <h3 style={{ marginBottom: 14, fontFamily: 'var(--serif)' }}>Quick Access</h3>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: 14, marginBottom: 24 }}>
+        <QuickCard icon="🏢" title="All Users"           desc="Manage every user across all institutions." onClick={() => navigate('institute')} badge="Global" />
+        <QuickCard icon="📈" title="Platform Analytics"  desc="Platform-wide performance and usage trends." onClick={() => navigate('analytics')} />
+        <QuickCard icon="🖋️" title="Question Master"     desc="Create and manage exam papers." onClick={() => navigate('qmaster')} />
+        <QuickCard icon="📋" title="Evaluation Central"  desc="AI grading and parent reports." onClick={() => navigate('eval')} />
+      </div>
+
+      {/* ── Institutions List ──────────────────────────────────────────── */}
+      <div className="card" style={{ padding: 22, marginBottom: 16 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: showInst ? 16 : 0 }}>
+          <div style={{ fontWeight: 700, fontSize: 15, color: 'var(--indigo)' }}>🏫 Registered Institutions</div>
+          <button className="btn-outline" style={{ padding: '7px 16px', fontSize: 12 }}
+            onClick={() => { setShowInst(v => !v); if (!showInst) loadInstitutions() }}>
+            {showInst ? '▲ Hide' : '▼ View All'}
+          </button>
+        </div>
+        {showInst && (
+          <>
+            {loadingInst && <div style={{ padding: 20, textAlign: 'center' }}><span className="spinner" /></div>}
+            {!loadingInst && institutions.length === 0 && (
+              <p style={{ color: 'var(--muted)', fontSize: 13, padding: '12px 0' }}>No institutions registered yet.</p>
+            )}
+            {!loadingInst && institutions.map((inst, i) => (
+              <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 0', borderBottom: '1px solid #f1f5f9' }}>
+                <div>
+                  <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--indigo)' }}>🏫 {inst.name}</div>
+                  <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 2 }}>
+                    {inst.teacher_count} teachers · {inst.student_count} students · {inst.parent_count} parents
+                    {inst.admins?.length ? ` · Admin: ${inst.admins.map(a => a.name).join(', ')}` : ''}
+                  </div>
+                </div>
+                <div style={{ fontSize: 20, fontWeight: 800, color: 'var(--saffron)' }}>
+                  {(inst.teacher_count || 0) + (inst.student_count || 0) + (inst.parent_count || 0)}
+                  <span style={{ fontSize: 11, fontWeight: 400, color: 'var(--muted)', marginLeft: 4 }}>users</span>
+                </div>
+              </div>
+            ))}
+          </>
+        )}
+      </div>
+
+      {/* ── Platform Settings ──────────────────────────────────────────── */}
+      <div className="card" style={{ padding: 22, marginBottom: 16 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: showSettings ? 16 : 0 }}>
+          <div style={{ fontWeight: 700, fontSize: 15, color: 'var(--indigo)' }}>⚙️ Platform Settings</div>
+          <div style={{ display: 'flex', gap: 10 }}>
+            {showSettings && (
+              <button className="btn-saffron" style={{ padding: '7px 18px', fontSize: 12 }}
+                onClick={saveSettings} disabled={savingSettings}>
+                {savingSettings ? 'Saving…' : '✓ Save Settings'}
+              </button>
+            )}
+            <button className="btn-outline" style={{ padding: '7px 16px', fontSize: 12 }}
+              onClick={() => setShowSettings(v => !v)}>
+              {showSettings ? '▲ Hide' : '▼ Configure'}
+            </button>
+          </div>
+        </div>
+        {showSettings && settings && (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 12 }}>
+            {CONFIG_FIELDS.map(f => (
+              <div key={f.key} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 14px', background: 'var(--paper)', borderRadius: 8, border: '1px solid #e8e0d0' }}>
+                <label style={{ fontSize: 13, color: 'var(--text)', fontWeight: 600 }}>{f.label}</label>
+                {f.type === 'bool' ? (
+                  <button onClick={() => setSettings(s => ({ ...s, [f.key]: !s[f.key] }))}
+                    style={{ padding: '4px 14px', borderRadius: 50, border: 'none', cursor: 'pointer', fontWeight: 700, fontSize: 11, fontFamily: 'var(--sans)',
+                      background: settings[f.key] ? '#d1fae5' : '#fee2e2',
+                      color: settings[f.key] ? '#065f46' : '#991b1b' }}>
+                    {settings[f.key] ? 'ON' : 'OFF'}
+                  </button>
+                ) : (
+                  <input type="number" min={f.min} max={f.max} value={settings[f.key] ?? ''}
+                    onChange={e => setSettings(s => ({ ...s, [f.key]: parseInt(e.target.value) || 0 }))}
+                    style={{ width: 72, padding: '5px 8px', borderRadius: 7, border: '1.5px solid var(--warm)', fontFamily: 'var(--sans)', fontSize: 13, textAlign: 'center' }} />
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* ── Uploaded Documents ─────────────────────────────────────────── */}
+      <div className="card" style={{ padding: 22 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: showDocs ? 14 : 0 }}>
+          <div style={{ fontWeight: 700, fontSize: 15, color: 'var(--indigo)' }}>📚 Uploaded Books & Documents</div>
+          <button className="btn-outline" style={{ padding: '7px 16px', fontSize: 12 }}
+            onClick={() => { setShowDocs(v => !v); if (!showDocs) loadDocs() }}>
+            {showDocs ? '▲ Hide' : '▼ Manage Uploads'}
+          </button>
+        </div>
+        {showDocs && (
+          <>
+            {loadingDocs && <div style={{ padding: 20, textAlign: 'center' }}><span className="spinner" /></div>}
+            {!loadingDocs && docs.length === 0 && (
+              <p style={{ color: 'var(--muted)', fontSize: 13, padding: '12px 0' }}>No uploaded documents found.</p>
+            )}
+            {!loadingDocs && docs.map(d => (
+              <div key={d.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 0', borderBottom: '1px solid #f1f5f9' }}>
+                <div>
+                  <div style={{ fontWeight: 600, fontSize: 13 }}>📄 {d.name}</div>
+                  <div style={{ fontSize: 11, color: 'var(--muted)' }}>{d.type} · {Math.round((d.size || 0) / 1024)} KB · {d.uploaded_at?.slice(0, 10)}</div>
+                </div>
+                <button onClick={() => deleteDoc(d.id, d.name)} disabled={deleting === d.id}
+                  style={{ padding: '5px 14px', background: '#fee2e2', border: '1px solid #fca5a5', borderRadius: 7, color: '#991b1b', fontSize: 12, fontWeight: 700, cursor: 'pointer', fontFamily: 'var(--sans)' }}>
+                  {deleting === d.id ? '…' : '🗑 Delete'}
+                </button>
+              </div>
+            ))}
+          </>
+        )}
+      </div>
+    </>
+  )
+}
+
 // ── Main DashboardPanel ────────────────────────────────────────────────────────
 export default function DashboardPanel({ showToast }) {
   const { me, token } = useAuth()
@@ -390,14 +599,17 @@ export default function DashboardPanel({ showToast }) {
         {role === 'student' && (
           <StudentDashboard me={me} syllabi={syllabi} docs={docs} navigate={setActivePanel} />
         )}
-        {(role === 'teacher' || role === 'tutor') && (
+        {role === 'teacher' && (
           <TeacherDashboard me={me} syllabi={syllabi} docs={docs} navigate={setActivePanel} />
         )}
         {role === 'parent' && (
           <ParentDashboard me={me} navigate={setActivePanel} />
         )}
-        {(role === 'school_admin' || role === 'school' || role === 'admin') && (
+        {role === 'institute_admin' && (
           <SchoolAdminDashboard me={me} adminStats={adminStats} navigate={setActivePanel} token={token} showToast={showToast} />
+        )}
+        {role === 'admin' && (
+          <PlatformAdminDashboard me={me} adminStats={adminStats} navigate={setActivePanel} token={token} showToast={showToast} />
         )}
       </div>
     </div>

@@ -3,19 +3,21 @@ import { useAuth } from '../../context/AuthContext'
 import { apiPost } from '../../utils/api'
 import Logo from '../shared/Logo'
 
-const APP_NAME = 'Parvidya'
+const APP_NAME = 'Arthavi'
 
 const ROLES = [
-  { key: 'student', label: '🎒 Student', color: 'saffron', reqRoll: true },
-  { key: 'teacher', label: '👩‍🏫 Teacher', color: 'green', reqRoll: false },
-  { key: 'tutor', label: '📚 Tutor', color: 'green', reqRoll: false },
-  { key: 'parent', label: '👨‍👩‍👧 Parent', color: 'indigo', reqRoll: false },
+  { key: 'student',   label: '🎒 Student',   color: 'saffron', reqRoll: true  },
+  { key: 'teacher',   label: '👩‍🏫 Teacher',   color: 'green',   reqRoll: false },
+  { key: 'parent',    label: '👨‍👩‍👧 Parent',    color: 'indigo',  reqRoll: false },
+  { key: 'institute', label: '🏫 Institute',  color: 'green',   reqRoll: false },
 ]
 
 const LOGIN_TABS = [
-  { key: 'student', label: '🎒 Student' },
-  { key: 'teacher', label: '👩‍🏫 Teacher' },
-  { key: 'parent', label: '👨‍👩‍👧 Parent' },
+  { key: 'student',          label: '🎒 Student'   },
+  { key: 'teacher',          label: '👩‍🏫 Teacher'   },
+  { key: 'parent',           label: '👨‍👩‍👧 Parent'    },
+  { key: 'institute_admin',  label: '🏫 Institute'  },
+  { key: 'admin',            label: '🔐 Admin'      },
 ]
 
 // ── Accessible OTP Input component ───────────────────────────────────────────
@@ -161,7 +163,8 @@ export default function AuthModal({ isOpen, onClose, defaultForm = 'login', defa
   // ── Step 1 → Step 2 validation ───────────────────────────────────────────
   const goStep2 = () => {
     if (!rFn.trim()) { showAlert('First name is required'); return }
-    if (role !== 'parent' && !rInst.trim()) { showAlert('School / Institution name is required'); return }
+    if (role === 'institute' && !rInst.trim()) { showAlert('Institution name is required — this will be your unique institution identifier'); return }
+    if (role !== 'parent' && role !== 'institute' && !rInst.trim()) { showAlert('School / Institution name is required'); return }
     if (rPhone && !/^\d{10}$/.test(rPhone)) { showAlert('Enter a valid 10-digit mobile number'); return }
     clearAlert()
     setRegStep(2)
@@ -177,9 +180,7 @@ export default function AuthModal({ isOpen, onClose, defaultForm = 'login', defa
     if (rPw !== rPwC) { showAlert('Passwords do not match'); return }
     setOtpSending(true); clearAlert()
     try {
-      const res = await apiPost('/auth/send-otp', { email, role, form: 'register' })
-      const data = await res.json()
-      if (!res.ok) { showAlert(data.error || 'Could not send OTP'); setOtpSending(false); return }
+      const data = await apiPost('/auth/send-otp', { email, role, form: 'register' })
       setRegStep(3)
       startTimer()
       setOtp('')
@@ -188,7 +189,7 @@ export default function AuthModal({ isOpen, onClose, defaultForm = 'login', defa
       } else {
         setAlert({ msg: `OTP sent to ${email}. Check your inbox.`, type: 'ok' })
       }
-    } catch { showAlert('Cannot reach server') }
+    } catch (e) { showAlert(e.data?.error || e.message || 'Cannot reach server') }
     setOtpSending(false)
   }
 
@@ -198,7 +199,8 @@ export default function AuthModal({ isOpen, onClose, defaultForm = 'login', defa
     if (clean.length < 6) { showAlert('Enter the complete 6-digit OTP'); return }
     setOtpVerifying(true); clearAlert()
     try {
-      const res = await apiPost('/auth/signup', {
+      const endpoint = role === 'institute' ? '/auth/register-institute' : '/auth/signup'
+      const data = await apiPost(endpoint, {
         name: `${rFn} ${rLn}`.trim(),
         email: rEmail.trim().toLowerCase(),
         phone: rPhone.trim(),
@@ -208,11 +210,9 @@ export default function AuthModal({ isOpen, onClose, defaultForm = 'login', defa
         roll_number: rRoll.trim(),
         otp: clean,
       })
-      const data = await res.json()
-      if (!res.ok) { showAlert(data.error || 'Registration failed'); setOtpVerifying(false); return }
       login(data.token, data.user)
       handleClose()
-    } catch { showAlert('Cannot reach server') }
+    } catch (e) { showAlert(e.data?.error || e.message || 'Cannot reach server') }
     setOtpVerifying(false)
   }
 
@@ -221,12 +221,10 @@ export default function AuthModal({ isOpen, onClose, defaultForm = 'login', defa
     if (!lEmail || !lPw) { showAlert('Enter email and password'); return }
     setLoading(true); clearAlert()
     try {
-      const res = await apiPost('/auth/login', { email: lEmail.trim().toLowerCase(), password: lPw, role })
-      const data = await res.json()
-      if (!res.ok) { showAlert(data.error || 'Login failed'); setLoading(false); return }
+      const data = await apiPost('/auth/login', { email: lEmail.trim().toLowerCase(), password: lPw, role })
       login(data.token, data.user)
       handleClose()
-    } catch { showAlert('Cannot reach server') }
+    } catch (e) { showAlert(e.data?.error || e.message || 'Cannot reach server') }
     setLoading(false)
   }
 
@@ -248,7 +246,7 @@ export default function AuthModal({ isOpen, onClose, defaultForm = 'login', defa
         <div className="pv-modal-head">
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             {/* Parvidya mini-logo */}
-            <Logo size={32} />
+            <Logo size={56} />
             <div>
               <div style={{ fontFamily: 'var(--serif)', fontSize: 18, color: 'var(--indigo)', fontWeight: 800 }}>
                 {APP_NAME}
@@ -348,8 +346,21 @@ export default function AuthModal({ isOpen, onClose, defaultForm = 'login', defa
 
               {role !== 'parent' && (
                 <div className="fg">
-                  <label>{role === 'student' ? 'School Name *' : 'School / Institution *'}</label>
-                  <input className="fi" placeholder="e.g. Delhi Public School" value={rInst} onChange={e => setRInst(e.target.value)} />
+                  <label>
+                    {role === 'institute'
+                      ? 'Institution Name *'
+                      : role === 'student'
+                      ? 'School Name *'
+                      : 'School / Institution *'}
+                  </label>
+                  <input className="fi"
+                    placeholder={role === 'institute' ? 'e.g. Delhi Public School — must be unique' : 'e.g. Delhi Public School'}
+                    value={rInst} onChange={e => setRInst(e.target.value)} />
+                  {role === 'institute' && (
+                    <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 4 }}>
+                      This will be your unique institution identifier. All staff and students who register with this exact name will be linked to your portal.
+                    </div>
+                  )}
                 </div>
               )}
               {role === 'student' && (
