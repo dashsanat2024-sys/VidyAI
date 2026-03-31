@@ -4560,6 +4560,36 @@ def get_curriculum_chapters():
         chapters     = CHAPTERS_DB.get((class_key, subj_key))
         pdf_url      = NCERT_PDF_URLS.get((class_key, subj_key), "")
         supp_pdf_url = NCERT_SUPP_PDF_URLS.get((class_key, subj_key), "")
+
+        # Classes 6–8: NEP new-curriculum rollout — the textbook.php portal lists
+        # multiple editions (English/Hindi/Urdu/old vs new), confusing students.
+        # Query DIKSHA so the frontend can show a specific book picker instead
+        # of a confusing portal page.  Clear the portal URL so the frontend never
+        # opens the portal when multiple books are available.
+        _new_curriculum_classes = {"class6", "class7", "class8"}
+        if class_key in _new_curriculum_classes:
+            try:
+                dk_books = _diksha_find_textbooks(board, class_n, subject, medium)
+                # Only surface actual textbooks (not comic books / question sets)
+                textbook_books = [
+                    b for b in dk_books
+                    if b.get("leafNodesCount", 0) >= 5
+                    and len(b.get("subject", [])) <= 2
+                ]
+                if textbook_books:
+                    available_books = [
+                        {"identifier": b.get("identifier", ""),
+                         "name":       b.get("name", ""),
+                         "leaves":     b.get("leafNodesCount", 0),
+                         "medium":     b.get("medium", [])}
+                        for b in textbook_books
+                    ]
+                    # Clear the portal URL — frontend will get the direct PDF
+                    # by selecting a book from the picker via /diksha/chapters
+                    pdf_url = ""
+                    print(f"[DIKSHA-NCERT] {len(available_books)} books for {board} {class_n} {subject}")
+            except Exception as e:
+                print(f"[DIKSHA-NCERT] Error: {e}")
     else:
         chapters     = None
         pdf_url      = ""

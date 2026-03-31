@@ -241,17 +241,21 @@ export default function CurriculumPanel({ showToast }) {
         medium: 'English'
       }, token)
       if (data.syllabus_id) {
+        const serverAvBooks = data.available_books || []
+        // For NCERT boards on Classes 6–8 (new curriculum), the backend clears the
+        // portal URL and returns a DIKSHA book picker instead.  In that case, do NOT
+        // override with localPdf — the portal URL would just confuse students with
+        // multiple editions. Let pdf_url be empty so the picker drives everything.
+        const isNewCurriculumClass = [6, 7, 8].includes(parseInt(classNum))
+        const useLocalPdf = isNcertBoard && !(isNewCurriculumClass && serverAvBooks.length > 0)
         serverSyl = {
           id:             data.syllabus_id,
           name:           data.name || `${board.shortName} Class ${classNum} — ${subject}`,
           chapters:       data.chapters || localChapters || [],
-          // For NCERT boards: prefer the direct /textbook/pdf/ URL (localPdf) over
-          // the textbook.php portal that the backend returns. For state boards: use
-          // only the DIKSHA PDF the backend found; never fall back to NCERT PDFs.
-          pdf_url:        isNcertBoard ? (localPdf || data.pdf_url || null)
-                                       : (data.pdf_url || null),
+          pdf_url:        useLocalPdf ? (localPdf || data.pdf_url || null)
+                                      : (data.pdf_url || null),
           supp_pdf_url:   isNcertBoard ? (localSuppPdf || data.supp_pdf_url || null) : null,
-          available_books: data.available_books || [],
+          available_books: serverAvBooks,
           source:         data.source || 'local',
         }
       }
@@ -693,11 +697,12 @@ export default function CurriculumPanel({ showToast }) {
             )}
           </div>
 
-          {/* ── DIKSHA Multi-Book Picker ── shown when state board returns multiple textbooks */}
+          {/* ── DIKSHA Multi-Book Picker ── shown when state board returns multiple textbooks
+                OR for NCERT boards on Classes 6–8 (new curriculum with multiple editions) */}
           {hasMultipleBooks && (
             <div style={{ marginTop: 16, padding: '14px 16px', background: '#f0f9ff', borderRadius: 10, border: '1.5px solid #bae6fd' }}>
               <div style={{ fontSize: 12, fontWeight: 700, color: '#0369a1', marginBottom: 10 }}>
-                📚 Multiple textbooks found — select one to load its chapters:
+                📚 Multiple editions available — select the one you want to read:
               </div>
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                 {availableBooks.map(bk => (
