@@ -514,8 +514,12 @@ export default function CurriculumPanel({ showToast }) {
   // Direct PDFs (not textbook.php portal pages) support inline open + download
   const isDirectPdf = !!(pdfUrl && !pdfUrl.includes('textbook.php'))
   const isCisceBoard = board?.shortName === 'ICSE' || board?.shortName === 'ISC' || chapSource === 'cisce'
-  // Show textbook button whenever chapters are loaded (openPdf falls back to board website or Google if no pdfUrl)
+  // When the DIKSHA multi-book picker is visible, hide "Read Textbook" until the user
+  // explicitly selects a specific book (syllabus id becomes 'diksha_<identifier>').
+  // This avoids opening an ambiguous portal page when multiple editions are available.
+  const specificDikshaBookSelected = !!(syllabus?.id?.startsWith('diksha_'))
   const canOpenTextbook = chapters.length > 0 && sourceMode === 'curriculum'
+    && (!hasMultipleBooks || specificDikshaBookSelected)
   const canDownloadTextbook = !!(isDirectPdf || isCisceBoard)
   const downloadButtonLabel = isDirectPdf ? 'Download PDF' : 'Download Chapter List'
   // Supplementary reader label
