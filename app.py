@@ -4563,18 +4563,19 @@ def get_curriculum_chapters():
 
         # Classes 6–8: NEP new-curriculum rollout — the textbook.php portal lists
         # multiple editions (English/Hindi/Urdu/old vs new), confusing students.
-        # Query DIKSHA so the frontend can show a specific book picker instead
-        # of a confusing portal page.  Clear the portal URL so the frontend never
-        # opens the portal when multiple books are available.
+        # Query DIKSHA WITHOUT medium filter so we get ALL language editions.
+        # The frontend then shows a specific book picker instead of the portal page.
+        # Clear the portal URL so the frontend never opens the confusing portal.
         _new_curriculum_classes = {"class6", "class7", "class8"}
         if class_key in _new_curriculum_classes:
             try:
-                dk_books = _diksha_find_textbooks(board, class_n, subject, medium)
+                # Pass empty string for medium to get all editions (English, Hindi, Urdu)
+                dk_books = _diksha_find_textbooks(board, class_n, subject, "")
                 # Only surface actual textbooks (not comic books / question sets)
                 textbook_books = [
                     b for b in dk_books
                     if b.get("leafNodesCount", 0) >= 5
-                    and len(b.get("subject", [])) <= 2
+                    and len(b.get("subject", [])) == 1  # single-subject only
                 ]
                 if textbook_books:
                     available_books = [

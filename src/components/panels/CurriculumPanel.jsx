@@ -560,8 +560,13 @@ export default function CurriculumPanel({ showToast }) {
     ? (ssSubBooks.find(b => b.id === ssSubBook)?.pdf || pdfUrl)
     : pdfUrl
 
-  // Multi-book picker available (DIKSHA state boards with >1 textbook)
-  const hasMultipleBooks = availableBooks.length > 1
+  // For new curriculum classes (6-8) on NCERT boards, the backend returns available_books
+  // with all language editions from DIKSHA — show the picker for ANY number of editions
+  // (even just 1) so the student gets a direct PDF link instead of the confusing portal.
+  // For all other cases, keep the original ">1" threshold.
+  const hasMultipleBooks = isNewCurriculumClass && isNcertLike
+    ? availableBooks.length >= 1
+    : availableBooks.length > 1
 
   return (
     <div className="panel active">
