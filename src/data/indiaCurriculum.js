@@ -320,12 +320,13 @@ export const OFFICIAL_PDF_URLS = {
   'class10_hindi':                 'https://ncert.nic.in/textbook.php?jhks1=',    // Kshitij 2
   'class11_hindi':                 'https://ncert.nic.in/textbook.php?lehn1=',
   'class12_hindi':                 'https://ncert.nic.in/textbook.php?lehn2=',    // Antra / Vitan
-  // NCERT Social Science
-  'class6_social science':         'https://ncert.nic.in/textbook.php?hess1=',
-  'class7_social science':         'https://ncert.nic.in/textbook.php?hess2=',
-  'class8_social science':         'https://ncert.nic.in/textbook.php?hess3=',
-  'class9_social science':         'https://ncert.nic.in/textbook.php?iess1=',
-  'class10_social science':        'https://ncert.nic.in/textbook.php?jess1=',
+  // NCERT Social Science — each class has 3–4 separate textbooks.
+  // These primary URLs are kept for fallback; sub-book selector provides individual links.
+  'class6_social science':         'https://ncert.nic.in/textbook.php?hess1=',    // Our Pasts (Class 6 history bundle)
+  'class7_social science':         'https://ncert.nic.in/textbook.php?hess2=',    // Our Pasts (Class 7 history bundle)
+  'class8_social science':         'https://ncert.nic.in/textbook.php?hess3=',    // Social & Political Life (Class 8)
+  'class9_social science':         'https://ncert.nic.in/textbook.php?iess3=',    // India & Cont. World-I (History)
+  'class10_social science':        'https://ncert.nic.in/textbook.php?jess3=',    // India & Cont. World-II (History),
   // NCERT Class 11-12 Humanities
   'class11_history':               'https://ncert.nic.in/textbook.php?lehs1=',
   'class12_history':               'https://ncert.nic.in/textbook.php?lehs2=',
@@ -367,6 +368,54 @@ export const SUPPLEMENTARY_PDF_URLS = {
 
 export function getSuppPdfUrl(classNum, subject) {
   return SUPPLEMENTARY_PDF_URLS[`class${classNum}_${subject.toLowerCase()}`] || null
+}
+
+// ── Social Science sub-books ──────────────────────────────────────────────────
+// NCERT Social Science has 3–4 separate textbooks per class.
+// Chapter prefixes in CHAPTERS_DB: "History Ch", "Geography Ch", "Civics Ch",
+// "Political Science Ch", "Economics Ch"
+// PDF codes verified via ncert.nic.in/textbook.php
+export const SOCIAL_SCIENCE_SUB_BOOKS = {
+  6: [
+    { id: 'history',   label: '📜 History',   title: 'Our Pasts-I',                  pdf: null },
+    { id: 'geography', label: '🌍 Geography', title: 'The Earth Our Habitat',         pdf: null },
+    { id: 'civics',    label: '⚖️ Civics',    title: 'Social & Political Life-I',     pdf: null },
+  ],
+  7: [
+    { id: 'history',   label: '📜 History',   title: 'Our Pasts-II',                 pdf: null },
+    { id: 'geography', label: '🌍 Geography', title: 'Our Environment',              pdf: null },
+    { id: 'civics',    label: '⚖️ Civics',    title: 'Social & Political Life-II',   pdf: null },
+  ],
+  8: [
+    { id: 'history',   label: '📜 History',   title: 'Our Pasts-III',                pdf: null },
+    { id: 'geography', label: '🌍 Geography', title: 'Resources & Development',      pdf: null },
+    { id: 'civics',    label: '⚖️ Civics',    title: 'Social & Political Life-III',  pdf: null },
+  ],
+  9: [
+    { id: 'geography', label: '🌍 Geography', title: 'Contemporary India-I',           pdf: 'https://ncert.nic.in/textbook.php?iess1=' },
+    { id: 'history',   label: '📜 History',   title: 'India & Cont. World-I',          pdf: 'https://ncert.nic.in/textbook.php?iess3=' },
+    { id: 'civics',    label: '⚖️ Civics',    title: 'Democratic Politics-I',          pdf: 'https://ncert.nic.in/textbook.php?iess4=' },
+    { id: 'economics', label: '💰 Economics', title: 'Economics',                      pdf: 'https://ncert.nic.in/textbook.php?iess2=' },
+  ],
+  10: [
+    { id: 'geography', label: '🌍 Geography', title: 'Contemporary India-II',          pdf: 'https://ncert.nic.in/textbook.php?jess1=' },
+    { id: 'history',   label: '📜 History',   title: 'India & Cont. World-II',         pdf: 'https://ncert.nic.in/textbook.php?jess3=' },
+    { id: 'civics',    label: '⚖️ Civics',    title: 'Democratic Politics-II',         pdf: 'https://ncert.nic.in/textbook.php?jess4=' },
+    { id: 'economics', label: '💰 Economics', title: 'Understanding Eco. Development', pdf: 'https://ncert.nic.in/textbook.php?jess2=' },
+  ],
+}
+
+// Which chapter prefix maps to which sub-book id
+export const SS_CHAPTER_PREFIX_MAP = {
+  'history':           'history',
+  'geography':         'geography',
+  'civics':            'civics',
+  'political science': 'civics',
+  'economics':         'economics',
+}
+
+export function getSocialScienceSubBooks(classNum) {
+  return SOCIAL_SCIENCE_SUB_BOOKS[parseInt(classNum)] || null
 }
 
 // ── Hardcoded chapter database ─────────────────────────────────────────────

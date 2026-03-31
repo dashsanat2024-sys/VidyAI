@@ -3525,11 +3525,13 @@ NCERT_PDF_URLS: Dict[tuple, str] = {
     ("class9","hindi"):         "https://ncert.nic.in/textbook.php?ihks1=",   # Kshitij 1
     ("class10","hindi"):        "https://ncert.nic.in/textbook.php?jhks1=",   # Kshitij 2
     # ── Social Science ───────────────────────────────────
-    ("class6","social science"):"https://ncert.nic.in/textbook.php?hess1=",
-    ("class7","social science"):"https://ncert.nic.in/textbook.php?hess2=",
-    ("class8","social science"):"https://ncert.nic.in/textbook.php?hess3=",
-    ("class9","social science"):"https://ncert.nic.in/textbook.php?iess1=",
-    ("class10","social science"):"https://ncert.nic.in/textbook.php?jess1=",
+    # Each class has 3-4 sub-books; these URLs are fallbacks.
+    # Sub-book picker in frontend provides individual links.
+    ("class6","social science"): "https://ncert.nic.in/textbook.php?hess1=",   # Our Pasts bundle
+    ("class7","social science"): "https://ncert.nic.in/textbook.php?hess2=",   # Our Pasts bundle
+    ("class8","social science"): "https://ncert.nic.in/textbook.php?hess3=",   # Social & Political Life
+    ("class9","social science"): "https://ncert.nic.in/textbook.php?iess3=",   # India & Cont. World-I (History) ✓
+    ("class10","social science"):"https://ncert.nic.in/textbook.php?jess3=",   # India & Cont. World-II (History) ✓
     # ── Senior subjects ──────────────────────────────────
     ("class11","economics"):    "https://ncert.nic.in/textbook.php?leec1=",
     ("class12","economics"):    "https://ncert.nic.in/textbook.php?leec2=",
@@ -4551,7 +4553,9 @@ def get_curriculum_chapters():
     # State boards must always go through DIKSHA so they get their own textbooks.
     _NCERT_BOARDS = {"CBSE", "NIOS", "NCERT", "DoE", "IB", "CBSE-AP"}
 
-    source = "local"
+    source        = "local"
+    available_books: list = []   # List of alternative textbooks from DIKSHA
+
     if board in _NCERT_BOARDS:
         chapters     = CHAPTERS_DB.get((class_key, subj_key))
         pdf_url      = NCERT_PDF_URLS.get((class_key, subj_key), "")
@@ -4566,6 +4570,18 @@ def get_curriculum_chapters():
     if not chapters and not _is_cisce:
         # Try DIKSHA for state boards and any unknown combo
         try:
+            # Get all available books from DIKSHA first, then pick best
+            dk_books = _diksha_find_textbooks(board, class_n, subject, medium)
+            if dk_books:
+                # Expose all options to the frontend for book-picker UI
+                available_books = [
+                    {"identifier": b.get("identifier",""),
+                     "name":       b.get("name",""),
+                     "leaves":     b.get("leafNodesCount", 0),
+                     "medium":     b.get("medium", [])}
+                    for b in dk_books
+                    if len(b.get("subject",[])) <= 2   # exclude multi-subject bundles
+                ]
             dk_chapters, dk_pdf, dk_name = _diksha_get_chapters_and_pdf(
                 board, class_n, subject, medium
             )
@@ -4627,6 +4643,7 @@ def get_curriculum_chapters():
         "chapters": chapters,
         "pdf_url": pdf_url,
         "supp_pdf_url": supp_pdf_url,
+        "available_books": available_books,
         "source": source
     })
 

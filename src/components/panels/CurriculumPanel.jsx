@@ -9,6 +9,8 @@ import {
   getChapters,
   getPdfUrl,
   getSuppPdfUrl,
+  getSocialScienceSubBooks,
+  SS_CHAPTER_PREFIX_MAP,
   hasDikshaSupport,
   isICSE,
 } from '../../data/indiaCurriculum'
@@ -73,6 +75,9 @@ export default function CurriculumPanel({ showToast }) {
   const [selChapters, setSelChapters] = useState([])
   const [pdfUrl,      setPdfUrl]      = useState(null)
   const [suppPdfUrl,  setSuppPdfUrl]  = useState(null)
+  // Multi-textbook support
+  const [availableBooks, setAvailableBooks] = useState([])  // DIKSHA books for state boards
+  const [ssSubBook,      setSsSubBook]      = useState(null) // Social Science sub-book filter
   const [syllabus,    setSyllabus]    = useState(null)
   const [chapLoading, setChapLoading] = useState(false)
   const [chapSource,  setChapSource]  = useState('')   // 'local' | 'diksha' | 'llm' | 'fallback'
@@ -126,6 +131,7 @@ export default function CurriculumPanel({ showToast }) {
   const resetChapters = () => {
     setChapters([]); setSelChapters([]); setPdfUrl(null); setSuppPdfUrl(null); setSyllabus(null)
     setResult(null); setActiveMode(''); stopSpeechAll(); setChapSource('')
+    setAvailableBooks([]); setSsSubBook(null)
   }
 
   const handleDocUpload = async (e) => {
@@ -236,16 +242,17 @@ export default function CurriculumPanel({ showToast }) {
       }, token)
       if (data.syllabus_id) {
         serverSyl = {
-          id:           data.syllabus_id,
-          name:         data.name || `${board.shortName} Class ${classNum} — ${subject}`,
-          chapters:     data.chapters || localChapters || [],
+          id:             data.syllabus_id,
+          name:           data.name || `${board.shortName} Class ${classNum} — ${subject}`,
+          chapters:       data.chapters || localChapters || [],
           // For NCERT boards: prefer the direct /textbook/pdf/ URL (localPdf) over
           // the textbook.php portal that the backend returns. For state boards: use
           // only the DIKSHA PDF the backend found; never fall back to NCERT PDFs.
-          pdf_url:      isNcertBoard ? (localPdf || data.pdf_url || null)
-                                     : (data.pdf_url || null),
-          supp_pdf_url: isNcertBoard ? (localSuppPdf || data.supp_pdf_url || null) : null,
-          source:       data.source || 'local',
+          pdf_url:        isNcertBoard ? (localPdf || data.pdf_url || null)
+                                       : (data.pdf_url || null),
+          supp_pdf_url:   isNcertBoard ? (localSuppPdf || data.supp_pdf_url || null) : null,
+          available_books: data.available_books || [],
+          source:         data.source || 'local',
         }
       }
     } catch (e) {
@@ -255,6 +262,7 @@ export default function CurriculumPanel({ showToast }) {
     const chapters  = serverSyl?.chapters  || localChapters || []
     const pdf        = serverSyl?.pdf_url   || (isNcertBoard ? localPdf : null)     || null
     const suppPdf    = serverSyl?.supp_pdf_url || (isNcertBoard ? localSuppPdf : null) || null
+    const avBooks    = serverSyl?.available_books || []
     const source     = serverSyl?.source    || (localChapters ? 'local' : '')
 
     // Build final syl — prefer server id (user-scoped) over static local id
@@ -274,6 +282,7 @@ export default function CurriculumPanel({ showToast }) {
     setSelChapters([...chapters])
     setPdfUrl(pdf)
     setSuppPdfUrl(suppPdf)
+    setAvailableBooks(avBooks)
     setChapSource(source)
 
     if (chapters.length > 0) {
@@ -286,6 +295,37 @@ export default function CurriculumPanel({ showToast }) {
   }
 
   const toggleChapter = c => setSelChapters(prev => prev.includes(c) ? prev.filter(x => x !== c) : [...prev, c])
+
+  // Load chapters from a specific DIKSHA textbook identifier (for the book picker)
+  const loadDikshaBook = async (identifier, bookName) => {
+    if (!identifier) return
+    setChapLoading(true)
+    try {
+      const data = await apiPost('/diksha/chapters', { identifier }, token)
+      if (data.chapters?.length) {
+        const syl = {
+          id:      `diksha_${identifier}`,
+          name:    bookName || data.name || `${board?.shortName} Class ${classNum} — ${subject}`,
+          chapters: data.chapters,
+          pdf_url: data.pdf_url || null,
+        }
+        addSyllabus(syl)
+        setSyllabus(syl)
+        setChapters(data.chapters)
+        setSelChapters([...data.chapters])
+        setPdfUrl(data.pdf_url || null)
+        setSuppPdfUrl(null)
+        setSsSubBook(null)
+        setChapSource('diksha')
+        showToast(`${data.chapters.length} chapters loaded from "${bookName}"`, 'success')
+      } else {
+        showToast('No chapters found in this textbook', 'warning')
+      }
+    } catch (e) {
+      showToast('Failed to load textbook chapters', 'error')
+    }
+    setChapLoading(false)
+  }
 
   // Helper: distribute N points across M chapters as evenly as possible
   // Returns { [chapter]: pointCount }
@@ -400,7 +440,8 @@ export default function CurriculumPanel({ showToast }) {
 
   const openPdf = () => {
     const isCisce = board?.shortName === 'ICSE' || board?.shortName === 'ISC' || chapSource === 'cisce'
-    const url = pdfUrl || (isCisce ? board?.govUrl : null) || board?.govUrl || null
+    // activePdfUrl respects SS sub-book selection; falls back to pdfUrl
+    const url = activePdfUrl || pdfUrl || (isCisce ? board?.govUrl : null) || board?.govUrl || null
     if (!url) {
       // Fallback: Google search for the textbook
       const q = encodeURIComponent(`${board?.shortName || ''} Class ${classNum} ${subject} textbook PDF`)
@@ -483,6 +524,29 @@ export default function CurriculumPanel({ showToast }) {
     : (classNum === 9  && subject === 'Hindi')    ? 'Read Kritika (Supplementary)'
     : (classNum === 10 && subject === 'Hindi')    ? 'Read Kritika (Supplementary)'
     : 'Read Supplementary Reader'
+
+  // ── Social Science sub-book definitions ──────────────────────────────────
+  const isNcertLike = ['CBSE','NIOS','DoE','IB','CBSE-AP','NCERT'].includes(board?.shortName)
+  const ssSubBooks   = (subject === 'Social Science' && chapters.length > 0)
+    ? getSocialScienceSubBooks(classNum) : null
+
+  // When a sub-book tab is selected, filter chapters to matching prefix
+  const displayChapters = ssSubBook && ssSubBooks
+    ? chapters.filter(ch => {
+        const prefix = ch.split(' Ch ')[0].toLowerCase()
+        // "Political Science" → civics bucket
+        const mapped = SS_CHAPTER_PREFIX_MAP[prefix] || prefix
+        return mapped === ssSubBook
+      })
+    : chapters
+
+  // PDF URL to use for "Read Textbook" button (respects SS sub-book selection)
+  const activePdfUrl = ssSubBook && ssSubBooks
+    ? (ssSubBooks.find(b => b.id === ssSubBook)?.pdf || pdfUrl)
+    : pdfUrl
+
+  // Multi-book picker available (DIKSHA state boards with >1 textbook)
+  const hasMultipleBooks = availableBooks.length > 1
 
   return (
     <div className="panel active">
@@ -617,6 +681,28 @@ export default function CurriculumPanel({ showToast }) {
               )
             )}
           </div>
+
+          {/* ── DIKSHA Multi-Book Picker ── shown when state board returns multiple textbooks */}
+          {hasMultipleBooks && (
+            <div style={{ marginTop: 16, padding: '14px 16px', background: '#f0f9ff', borderRadius: 10, border: '1.5px solid #bae6fd' }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: '#0369a1', marginBottom: 10 }}>
+                📚 Multiple textbooks found — select one to load its chapters:
+              </div>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                {availableBooks.map(bk => (
+                  <button key={bk.identifier}
+                    onClick={() => loadDikshaBook(bk.identifier, bk.name)}
+                    disabled={chapLoading}
+                    style={{ padding: '7px 14px', borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'var(--sans)', transition: '.15s',
+                      background: syllabus?.id === `diksha_${bk.identifier}` ? '#0369a1' : '#fff',
+                      color: syllabus?.id === `diksha_${bk.identifier}` ? '#fff' : '#0369a1',
+                      border: '1.5px solid #0369a1' }}>
+                    {bk.name} {bk.leaves > 0 ? `(${bk.leaves} topics)` : ''}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
           </>)} {/* end sourceMode === 'curriculum' */}
 
           {/* ── Upload Document mode ── */}
@@ -705,13 +791,52 @@ export default function CurriculumPanel({ showToast }) {
                   {chapSource === 'ncert_fallback' && <span style={{ marginLeft:8, padding:'2px 8px', background:'#fff7ed', borderRadius:8, fontSize:10, fontWeight:700, color:'#c2410c' }}>NCERT fallback</span>}
                 </div>
               </div>
-              <div style={{ display:'flex', gap:8 }}>
+            <div style={{ display:'flex', gap:8 }}>
                 <button className="btn-outline" style={{ padding:'5px 14px', fontSize:11 }} onClick={() => setSelChapters([...chapters])}>All</button>
                 <button className="btn-outline" style={{ padding:'5px 14px', fontSize:11 }} onClick={() => setSelChapters([])}>None</button>
               </div>
             </div>
+
+            {/* Social Science sub-book tabs */}
+            {ssSubBooks && (
+              <div style={{ display:'flex', gap:8, flexWrap:'wrap', marginBottom:14, paddingBottom:12, borderBottom:'1px solid var(--warm)' }}>
+                <button
+                  onClick={() => setSsSubBook(null)}
+                  style={{ padding:'5px 14px', borderRadius:20, fontSize:12, fontWeight:700, cursor:'pointer', fontFamily:'var(--sans)', transition:'.15s', border:'1.5px solid var(--indigo)',
+                    background: !ssSubBook ? 'var(--indigo)' : '#fff', color: !ssSubBook ? '#fff' : 'var(--indigo)' }}>
+                  📚 All ({chapters.length})
+                </button>
+                {ssSubBooks.map(sb => {
+                  const count = chapters.filter(ch => {
+                    const prefix = ch.split(' Ch ')[0].toLowerCase()
+                    return (SS_CHAPTER_PREFIX_MAP[prefix] || prefix) === sb.id
+                  }).length
+                  if (!count) return null
+                  return (
+                    <button key={sb.id}
+                      onClick={() => setSsSubBook(sb.id === ssSubBook ? null : sb.id)}
+                      title={sb.title}
+                      style={{ padding:'5px 14px', borderRadius:20, fontSize:12, fontWeight:700, cursor:'pointer', fontFamily:'var(--sans)', transition:'.15s', border:'1.5px solid #6366f1',
+                        background: ssSubBook === sb.id ? '#6366f1' : '#fff', color: ssSubBook === sb.id ? '#fff' : '#6366f1' }}>
+                      {sb.label} ({count})
+                    </button>
+                  )
+                })}
+                {ssSubBook && (
+                  <span style={{ fontSize:12, color:'var(--muted)', alignSelf:'center', marginLeft:4 }}>
+                    Showing {displayChapters.length} chapters from {ssSubBooks.find(b=>b.id===ssSubBook)?.title}
+                    {ssSubBooks.find(b=>b.id===ssSubBook)?.pdf &&
+                      <a href={ssSubBooks.find(b=>b.id===ssSubBook).pdf} target="_blank" rel="noopener noreferrer"
+                        style={{ marginLeft:8, color:'var(--indigo)', fontWeight:700, textDecoration:'none' }}>
+                        📄 Read this textbook ↗
+                      </a>}
+                  </span>
+                )}
+              </div>
+            )}
+
             <div className="chips-wrap" style={{ maxHeight:180, overflowY:'auto' }}>
-              {chapters.map(c => (
+              {displayChapters.map(c => (
                 <div key={c} className={`chip ${selChapters.includes(c) ? 'selected' : ''}`} onClick={() => toggleChapter(c)} style={{ fontSize:12 }}>{c}</div>
               ))}
             </div>
