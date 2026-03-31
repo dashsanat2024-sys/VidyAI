@@ -518,8 +518,16 @@ export default function CurriculumPanel({ showToast }) {
   // explicitly selects a specific book (syllabus id becomes 'diksha_<identifier>').
   // This avoids opening an ambiguous portal page when multiple editions are available.
   const specificDikshaBookSelected = !!(syllabus?.id?.startsWith('diksha_'))
+  // Classes 6–8 have a rolling NEP curriculum rollout — the NCERT textbook.php portal
+  // lists both old and new editions for these classes, causing confusion. Hide the button
+  // for NCERT-type boards on these classes unless we have a direct (non-portal) PDF link.
+  const isNewCurriculumClass = [6, 7, 8].includes(parseInt(classNum))
+  const isPortalUrl = !!(pdfUrl?.includes('textbook.php'))
+  // ── Social Science sub-book definitions ──────────────────────────────────
+  const isNcertLike = ['CBSE','NIOS','DoE','IB','CBSE-AP','NCERT'].includes(board?.shortName)
   const canOpenTextbook = chapters.length > 0 && sourceMode === 'curriculum'
     && (!hasMultipleBooks || specificDikshaBookSelected)
+    && !(isNcertLike && isNewCurriculumClass && isPortalUrl)
   const canDownloadTextbook = !!(isDirectPdf || isCisceBoard)
   const downloadButtonLabel = isDirectPdf ? 'Download PDF' : 'Download Chapter List'
   // Supplementary reader label
@@ -530,7 +538,6 @@ export default function CurriculumPanel({ showToast }) {
     : 'Read Supplementary Reader'
 
   // ── Social Science sub-book definitions ──────────────────────────────────
-  const isNcertLike = ['CBSE','NIOS','DoE','IB','CBSE-AP','NCERT'].includes(board?.shortName)
   const ssSubBooks   = (subject === 'Social Science' && chapters.length > 0)
     ? getSocialScienceSubBooks(classNum) : null
 
