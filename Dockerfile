@@ -24,18 +24,13 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # ── Application code ───────────────────────────────────────────────────────────
-COPY app.py celery_worker.py ./
-
-# Copy React build if it exists (for SPA serving)
-COPY vidyai-react/dist/ ./dist/ 2>/dev/null || true
+COPY app.py ./
 
 # ── Runtime config ─────────────────────────────────────────────────────────────
+# PORT=7860 for Hugging Face Spaces; override with -e PORT=5001 for local use.
 ENV PYTHONUNBUFFERED=1 \
-    PORT=5001
+    PORT=7860
 
-EXPOSE 5001
+EXPOSE 7860
 
-# Default: run the Flask API
-# Override for Celery worker:
-#   docker run ... parvidya celery -A celery_worker worker --loglevel=info
-CMD ["python", "app.py"]
+CMD ["sh", "-c", "gunicorn app:app --bind 0.0.0.0:${PORT} --timeout 300 --workers 1"]

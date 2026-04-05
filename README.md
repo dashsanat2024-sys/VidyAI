@@ -1,3 +1,12 @@
+---
+title: Arthavi API
+emoji: 📚
+colorFrom: indigo
+colorTo: blue
+sdk: docker
+pinned: false
+---
+
 # VidyAI — React Frontend
 
 Migrated from Vanilla JS/HTML5/CSS3 to React 18 + Vite.
