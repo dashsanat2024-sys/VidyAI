@@ -2427,11 +2427,19 @@ def _diff_and_ocr_answers(scanned_pdf_path: str, exam: dict) -> Dict[int, str]:
         import fitz as _fitz
         # Blank PDF from bytes
         _bdoc = _fitz.open(stream=blank_pdf_bytes, filetype="pdf")
-        blank_pages = [Image.frombytes("RGB", [p.get_pixmap(dpi=DPI).width, p.get_pixmap(dpi=DPI).height], p.get_pixmap(dpi=DPI).samples) for p in _bdoc]
+        blank_pages = []
+        for p in _bdoc:
+            _pix = p.get_pixmap(dpi=DPI)
+            blank_pages.append(Image.frombytes("RGB", [_pix.width, _pix.height], _pix.samples))
+            del _pix
         _bdoc.close()
         # Scanned PDF from path
         _sdoc = _fitz.open(scanned_pdf_path)
-        scanned_pages = [Image.frombytes("RGB", [p.get_pixmap(dpi=DPI).width, p.get_pixmap(dpi=DPI).height], p.get_pixmap(dpi=DPI).samples) for p in _sdoc]
+        scanned_pages = []
+        for p in _sdoc:
+            _pix = p.get_pixmap(dpi=DPI)
+            scanned_pages.append(Image.frombytes("RGB", [_pix.width, _pix.height], _pix.samples))
+            del _pix
         _sdoc.close()
     except Exception as e:
         print(f"[DIFF-OCR] PDF→image failed: {e}")
@@ -2549,6 +2557,8 @@ def _ocr_page_parallel(images: list, exam_questions: list, exam: dict,
             buf_full = _io.BytesIO()
             img.save(buf_full, format="PNG", optimize=False)
             b64_full = base64.b64encode(buf_full.getvalue()).decode()
+            buf_full.close()
+            del buf_full
 
             # Questions on this page (heuristic: split evenly across pages)
             n_pages = max(len(images), 1)
@@ -2903,15 +2913,16 @@ def _extract_answers(path: str, exam_questions: list = None, exam: dict = None):
             import fitz as _fitz
             doc = _fitz.open(path)
             for page in doc:
-                pix = page.get_pixmap(dpi=400)
+                pix = page.get_pixmap(dpi=200)
                 images.append(Image.frombytes("RGB", [pix.width, pix.height], pix.samples))
+                del pix
             doc.close()
-            log.info(f"[OCR] PDF → {len(images)} page images at 400 DPI")
+            log.info(f"[OCR] PDF → {len(images)} page images at 200 DPI")
         except Exception as e:
             log.warning(f"[OCR] PyMuPDF failed, trying pdf2image: {e}")
             try:
                 from pdf2image import convert_from_path
-                images = convert_from_path(path, dpi=400)
+                images = convert_from_path(path, dpi=200)
                 log.info(f"[OCR] pdf2image → {len(images)} pages")
             except Exception as e2:
                 log.error(f"[OCR] All PDF converters failed: {e2}")
