@@ -2812,6 +2812,70 @@ def _ocr_page_parallel(images: list, exam_questions: list, exam: dict,
 
     return combined
 
+def _extract_header_info(path: str) -> dict:
+    """
+    Quick Vision pass on the first page of an answer sheet to read the student
+    info boxes printed in the header: Student Name, Roll Number, Class/Section.
+    Returns {"student_name": "...", "roll_no": "...", "class_section": "..."}.
+    Empty strings if a field is blank or unreadable.
+    """
+    import io as _io
+    try:
+        images = []
+        ext = Path(path).suffix.lower()
+        if ext == ".pdf":
+            try:
+                import fitz as _fitz
+                doc = _fitz.open(path)
+                pix = doc[0].get_pixmap(dpi=300)
+                from PIL import Image
+                images = [Image.frombytes("RGB", [pix.width, pix.height], pix.samples)]
+                doc.close()
+            except Exception:
+                return {}
+        elif ext in {".png", ".jpg", ".jpeg", ".webp"}:
+            from PIL import Image
+            images = [Image.open(path).convert("RGB")]
+        else:
+            return {}
+
+        if not images:
+            return {}
+
+        # Crop to top ~20% of first page (where header boxes live)
+        img = images[0]
+        crop_h = int(img.height * 0.22)
+        img = img.crop((0, 0, img.width, crop_h))
+
+        buf = _io.BytesIO()
+        img.save(buf, format="PNG")
+        b64 = base64.b64encode(buf.getvalue()).decode()
+
+        prompt = (
+            "This is the TOP HEADER section of a student answer sheet. "
+            "There are printed box fields where the student hand-wrote their information.\n"
+            "Extract exactly:\n"
+            "  - STUDENT NAME field\n"
+            "  - ROLL NUMBER field\n"
+            "  - CLASS / SECTION field\n"
+            "Return ONLY valid JSON with exactly these keys. Use empty string if blank:\n"
+            '{"student_name": "...", "roll_no": "...", "class_section": "..."}'
+        )
+
+        client = _oai.OpenAI(api_key=OPENAI_API_KEY)
+        resp = client.chat.completions.create(
+            model=OPENAI_MINI, temperature=0, max_tokens=200,
+            response_format={"type": "json_object"},
+            messages=[{"role": "user", "content": [
+                {"type": "text", "text": prompt},
+                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}", "detail": "high"}}
+            ]}]
+        )
+        return json.loads(resp.choices[0].message.content)
+    except Exception as e:
+        log.warning(f"[OCR] Header extraction failed: {e}")
+        return {}
+
 def _extract_answers(path: str, exam_questions: list = None, exam: dict = None):
     """
     Extract student answers from a scanned answer sheet (PDF or image).
@@ -5853,6 +5917,17 @@ def evaluate_sheet():
     # ── Sync path (fallback) ──────────────────────────────────────────────────
     log.info(f"[EVAL] Sync evaluation: {fn}")
     _openai_limiter.wait()
+
+    # Auto-read header if student info not provided by user
+    if not student_name or not roll_no:
+        header = _extract_header_info(str(path))
+        if not student_name:
+            student_name = header.get("student_name", "").strip()
+        if not roll_no:
+            roll_no = header.get("roll_no", "").strip()
+        if header.get("class_section"):
+            log.info(f"[EVAL] Header OCR: name={student_name!r} roll={roll_no!r} class={header.get('class_section')!r}")
+
     answers, mode = _extract_answers(str(path), exam_questions=e.get("questions", []), exam=e)
 
     # Exam ID mismatch — scanned sheet belongs to a different exam
