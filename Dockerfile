@@ -1,9 +1,8 @@
 # ── VidyAI / Parvidya — Production Dockerfile ─────────────────────────────────
-# Includes: Flask API + Celery workers + poppler (for pdf2image OCR pipeline)
+# Supports: Google Cloud Run (PORT=8080), HF Spaces (PORT=7860), local (PORT=5001)
 #
 # Build:   docker build -t parvidya .
-# Run API: docker run -p 5001:5001 --env-file .env parvidya
-# Workers: docker run --env-file .env parvidya celery -A celery_worker worker --loglevel=info
+# Run:     docker run -p 8080:8080 --env-file .env parvidya
 
 FROM python:3.11-slim
 
@@ -27,10 +26,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY app.py ./
 
 # ── Runtime config ─────────────────────────────────────────────────────────────
-# PORT=7860 for Hugging Face Spaces; override with -e PORT=5001 for local use.
+# Cloud Run injects PORT=8080; HF Spaces uses 7860; local can override.
 ENV PYTHONUNBUFFERED=1 \
-    PORT=7860
+    PORT=8080 \
+    RENDER=true
 
-EXPOSE 7860
+EXPOSE 8080
 
 CMD ["sh", "-c", "gunicorn app:app --bind 0.0.0.0:${PORT} --timeout 300 --workers 1"]
