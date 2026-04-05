@@ -2542,8 +2542,12 @@ def _ocr_page_parallel(images: list, exam_questions: list, exam: dict,
             page_answers: Dict[int, str] = {}
 
             # ── Step 1: Upscale + colour-safe contrast boost ──────────────────
-            MAX_W = 2480
+            # On Render free tier (512 MB RAM) keep images smaller to avoid OOM.
+            MAX_W = 1600 if IS_RENDER else 2480
             if img.width < MAX_W:
+                scale = MAX_W / img.width
+                img   = img.resize((MAX_W, int(img.height * scale)), Image.LANCZOS)
+            elif img.width > MAX_W:
                 scale = MAX_W / img.width
                 img   = img.resize((MAX_W, int(img.height * scale)), Image.LANCZOS)
             img = _IE.Contrast(_IE.Sharpness(img.convert("RGB")).enhance(1.8)).enhance(1.5)
@@ -2554,8 +2558,10 @@ def _ocr_page_parallel(images: list, exam_questions: list, exam: dict,
             # This lets GPT identify which questions are on this page and roughly
             # where each answer area is, returning a best-effort JSON.
             # We use this as a baseline then verify per-question crops.
+            # Use JPEG (not PNG) for base64: PNG of 2480px A4 is ~13 MB as b64;
+            # JPEG quality=88 is ~3 MB — 4× smaller, no loss in OCR accuracy.
             buf_full = _io.BytesIO()
-            img.save(buf_full, format="PNG", optimize=False)
+            img.save(buf_full, format="JPEG", quality=88, optimize=True)
             b64_full = base64.b64encode(buf_full.getvalue()).decode()
             buf_full.close()
             del buf_full
@@ -2613,6 +2619,7 @@ def _ocr_page_parallel(images: list, exam_questions: list, exam: dict,
             log.info(f"[PAGE-OCR] page {page_idx+1} full-page raw: {raw_content[:400]}")
             raw_full = json.loads(raw_content)
             page_answers = _validate_ocr_answers(raw_full.get("answers", {}), exam_questions)
+            del b64_full  # free ~3 MB string before crop loop
 
             # ── Step 3: Per-question crop verification for MCQ only ───────────
             # Send each MCQ question as an individual crop to eliminate the
@@ -2648,8 +2655,11 @@ def _ocr_page_parallel(images: list, exam_questions: list, exam: dict,
                     crop = _IE.Contrast(crop).enhance(1.5)
 
                     cbuf = _io.BytesIO()
-                    crop.save(cbuf, format="PNG", optimize=False)
+                    crop.save(cbuf, format="JPEG", quality=88, optimize=True)
                     cb64 = base64.b64encode(cbuf.getvalue()).decode()
+                    del crop
+                    cbuf.close()
+                    del cbuf
 
                     # Build option text reference for this question
                     q_options = q.get("options", {})
@@ -2709,6 +2719,8 @@ def _ocr_page_parallel(images: list, exam_questions: list, exam: dict,
                             log.info(f"[CROP-OCR] Q{qid} no clear answer in crop: {val!r}")
                     except Exception as ce:
                         log.warning(f"[CROP-OCR] Q{qid} crop failed: {ce}")
+                    finally:
+                        del cb64
 
                 # Merge: crop answers override full-page answers for MCQ
                 if verified:
@@ -2759,8 +2771,11 @@ def _ocr_page_parallel(images: list, exam_questions: list, exam: dict,
                     from PIL import ImageEnhance as _IE2
                     crop = _IE2.Contrast(crop).enhance(1.4)
                     sbuf = _io.BytesIO()
-                    crop.save(sbuf, format="PNG", optimize=False)
+                    crop.save(sbuf, format="JPEG", quality=88, optimize=True)
                     sb64 = base64.b64encode(sbuf.getvalue()).decode()
+                    del crop
+                    sbuf.close()
+                    del sbuf
 
                     subj_crop_prompt = f"""
                     This image shows ONLY question Q{qid} (a written/subjective question) from a student answer sheet.
@@ -2807,7 +2822,10 @@ def _ocr_page_parallel(images: list, exam_questions: list, exam: dict,
                             log.info(f"[SUBJ-CROP] Q{qid} empty or too short: {subj_val!r}")
                     except Exception as se:
                         log.warning(f"[SUBJ-CROP] Q{qid} failed: {se}")
+                    finally:
+                        del sb64
 
+            del img  # free upscaled page image before returning
             log.info(f"[PAGE-OCR] page {page_idx+1} final: {page_answers}")
             return page_answers
 
@@ -2815,8 +2833,9 @@ def _ocr_page_parallel(images: list, exam_questions: list, exam: dict,
             log.error(f"[OCR-PAGE] page {page_idx} failed: {e}", exc_info=True)
             return {}
 
-    # Run pages in parallel — max 4 workers
-    max_w = min(4, len(images))
+    # On Render free tier (512 MB RAM), process pages sequentially to avoid
+    # multiple threads each holding 26 MB image + b64 simultaneously.
+    max_w = 1 if IS_RENDER else min(4, len(images))
     with ThreadPoolExecutor(max_workers=max_w) as pool:
         futures = {pool.submit(_process_one_page, (i, img)): i
                    for i, img in enumerate(images)}
