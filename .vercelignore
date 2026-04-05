@@ -1,0 +1,6 @@
+app.py
+requirements.txt
+render.yaml
+__pycache__/
+*.pyc
+.env
