@@ -364,6 +364,23 @@ def _grade(p: float)-> str:
     return "A+" if p>=90 else "A" if p>=80 else "B" if p>=70 else "C" if p>=60 else "D" if p>=50 else "F"
 def _normalize(t)   -> str: return re.sub(r"\s+", " ", str(t or "").strip().lower())
 
+def _normalize_subject_name(subject: str) -> str:
+    """Canonicalize common subject aliases/misspellings for reliable lookups."""
+    s = _normalize(subject)
+    aliases = {
+        "math": "mathematics",
+        "maths": "mathematics",
+        "mathmatics": "mathematics",
+        "mathematic": "mathematics",
+        "evs": "environmental studies",
+        "env studies": "environmental studies",
+        "social studies": "social science",
+        "social": "social science",
+        "cs": "computer science",
+        "comp science": "computer science",
+    }
+    return aliases.get(s, s)
+
 def _strip_answer_prefix(text: str) -> str:
     return re.sub(r"^(?:ans(?:wer)?|response|student\s*ans(?:wer)?)\s*[:\-]\s*", "", str(text or "").strip(), flags=re.IGNORECASE).strip()
 
@@ -1160,15 +1177,18 @@ def _build_ocr_prompt_v2(exam_questions: list) -> str:
         "⚠️  IGNORE the dark tab when identifying bubbles.\n\n"
 
         "MCQ LAYOUT (questions: " + obj_ids + "):\n"
-        "After the dark Q-number tab, there are EXACTLY 4 circles left-to-right:\n"
-        "  1st circle after tab = option A\n"
-        "  2nd circle after tab = option B\n"
-        "  3rd circle after tab = option C\n"
-        "  4th circle after tab = option D\n\n"
-        "The student FILLED or SCRIBBLED inside exactly one circle.\n"
-        "The circle with the most ink / darkest fill / scribble marks = the answer.\n"
-        "An empty/clean circle = NOT selected.\n"
-        "Count circles strictly: skip the dark tab, then 1st=A, 2nd=B, 3rd=C, 4th=D.\n"
+        "Each MCQ box has TWO ways for the student to answer:\n"
+        "  METHOD 1 — Bubbles: 4 circles labelled A / B / C / D from left to right.\n"
+        "    The letter label appears ABOVE each circle (not inside it).\n"
+        "    The student FILLED or CIRCLED exactly one bubble.\n"
+        "  METHOD 2 — Write box: a square box on the RIGHT end of the MCQ row.\n"
+        "    The student may have written a single letter (A/B/C/D) inside this box.\n\n"
+        "PRIORITY: Check the WRITE BOX on the right FIRST.\n"
+        "  If it contains a handwritten letter A/B/C/D → use that as the answer.\n"
+        "  If the write box is empty → check which bubble is filled/circled.\n"
+        "    Count bubbles strictly left-to-right AFTER the dark tab:\n"
+        "    1st circle = A,  2nd circle = B,  3rd circle = C,  4th circle = D.\n"
+        "    The bubble with the most ink / darkest fill / scribble marks = selected.\n"
         "❌ NEVER return \"- A\" or \"A)\" — return ONLY the single letter e.g. \"A\".\n\n"
 
         "WRITTEN LAYOUT (questions: " + subj_ids + "):\n"
@@ -1595,7 +1615,7 @@ def _draw_answer_sheet_page_header(c, exam, page_num, W, H, mm, colors):
     c.setFillColor(colors.HexColor('#0369a1'))
     c.setFont("Helvetica-Bold", 7)
     c.drawString(M + 4*mm, INSTR_Y - 4*mm,
-        'INSTRUCTIONS:  Section A — Circle ONE bubble (A/B/C/D) per question  '
+        'INSTRUCTIONS:  Section A — Circle ONE bubble (A/B/C/D) OR write the letter in the box on the right  '
         '·  Section B — Write your answer on the ruled lines in the box  '
         '·  Write ONLY inside the boxes')
 
@@ -1649,22 +1669,24 @@ def _generate_answer_sheet_pdf(exam: dict) -> bytes:
         if obj_qs:
             _pdf_section_bar(c, M, y, BOX_W, 8*mm,
                 '#eef2ff', f'SECTION A — OBJECTIVE  ({len(obj_qs)} questions)  '
-                '·  Circle the correct bubble (A / B / C / D)',
+                '·  Circle ONE bubble  OR  write the letter in the box on the right',
                 '#3730a3', font_size=8.5, mm=mm)
             y -= 10*mm
 
-            # MCQ box geometry — verified non-overlapping:
-            #   BOX_H=28mm | Tab=18mm wide
-            #   Instruction baseline: 7mm from box top
-            #   Bubble centre: 20mm from box top (13mm from instruction, 8mm from bottom)
-            #   Bubble radius: 7mm → top=13mm from box top → 6mm gap from instruction ✓
-            BOX_H   = 28 * mm
-            TAB_W   = 18 * mm
-            BUBBLE_R = 7 * mm
-            # Bubble centre Y from box top
-            BUBBLE_FROM_TOP = 20 * mm
-            # Content area starts at M + TAB_W + separator
-            CONTENT_X = M + TAB_W + 3*mm
+            # MCQ box geometry:
+            #   BOX_H=36mm | TAB=18mm | BUBBLE_R=7mm
+            #   Label row: 9mm from box top, Bubble centre: 24mm from box top
+            #   Write-box: rightmost 32mm of content area (large blank square)
+            BOX_H         = 36 * mm
+            TAB_W         = 18 * mm
+            BUBBLE_R      = 7  * mm
+            BUBBLE_FROM_TOP = 24 * mm   # centre of bubble from box top
+            BUBBLE_GAP    = 29 * mm     # centre-to-centre spacing (wider for clarity)
+            WRITE_BOX_W   = 32 * mm     # "Write answer" box width
+            CONTENT_X     = M + TAB_W + 3*mm
+            CONTENT_W     = BOX_W - TAB_W - 3*mm
+            BUBBLES_END   = CONTENT_X + BUBBLE_R + 3 * BUBBLE_GAP + BUBBLE_R
+            WRITE_BOX_X   = CONTENT_X + CONTENT_W - WRITE_BOX_W  # flush right
 
             for q in obj_qs:
                 if y - BOX_H < 15*mm:
@@ -1681,19 +1703,16 @@ def _generate_answer_sheet_pdf(exam: dict) -> bytes:
                 # ── Q-number tab ─────────────────────────────────────────────
                 c.setFillColor(rl_colors.HexColor('#4f46e5'))
                 c.roundRect(M, y - BOX_H, TAB_W, BOX_H, 3, fill=1, stroke=0)
-                # Mask right-side rounding of tab
                 c.setFillColor(rl_colors.HexColor('#4f46e5'))
                 c.rect(M + TAB_W - 4, y - BOX_H, 4, BOX_H, fill=1, stroke=0)
 
-                # Q number — top-centre of tab
                 c.setFillColor(rl_colors.white)
                 c.setFont("Helvetica-Bold", 13)
-                c.drawCentredString(M + TAB_W/2, y - 9*mm, f'Q{q["id"]}')
-                # Marks — bottom-centre of tab
+                c.drawCentredString(M + TAB_W/2, y - 10*mm, f'Q{q["id"]}')
                 c.setFont("Helvetica", 7)
                 c.drawCentredString(M + TAB_W/2, y - BOX_H + 3.5*mm, f'[{m_str}]')
 
-                # Thin separator line between tab and content
+                # Separator between tab and content
                 c.setStrokeColor(rl_colors.HexColor('#e2e8f0'))
                 c.setLineWidth(0.5)
                 c.line(M + TAB_W, y - BOX_H + 2, M + TAB_W, y - 2)
@@ -1701,29 +1720,44 @@ def _generate_answer_sheet_pdf(exam: dict) -> bytes:
                 # ── Instruction text ─────────────────────────────────────────
                 c.setFillColor(rl_colors.HexColor('#64748b'))
                 c.setFont("Helvetica", 7.5)
-                c.drawString(CONTENT_X, y - 7*mm, 'Mark ONE correct answer:')
+                c.drawString(CONTENT_X, y - 7*mm, 'Circle ONE bubble:')
 
-                # ── Bubbles ──────────────────────────────────────────────────
-                # Centre Y of bubble = box_top - BUBBLE_FROM_TOP
-                BUBBLE_Y   = y - BUBBLE_FROM_TOP
-                BUBBLE_GAP = 28 * mm   # centre-to-centre spacing
+                # ── Bubbles with labels ABOVE (so label stays visible when filled) ─
+                BUBBLE_Y = y - BUBBLE_FROM_TOP  # centre Y of bubbles
+                LABEL_Y  = y - BUBBLE_FROM_TOP + BUBBLE_R + 4*mm  # label above bubble
 
                 for i, label in enumerate(['A', 'B', 'C', 'D']):
                     bx = CONTENT_X + BUBBLE_R + i * BUBBLE_GAP
-                    by = BUBBLE_Y
 
-                    # Circle (white fill, dark border)
+                    # Option letter label ABOVE the circle (stays visible when bubble is filled)
+                    c.setFillColor(rl_colors.HexColor('#1e293b'))
+                    c.setFont("Helvetica-Bold", 11)
+                    c.drawCentredString(bx, LABEL_Y, label)
+
+                    # Circle (white fill, dark border) — student fills/circles this
                     c.setStrokeColor(rl_colors.HexColor('#1e293b'))
                     c.setFillColor(rl_colors.white)
                     c.setLineWidth(1.5)
-                    c.circle(bx, by, BUBBLE_R, fill=1, stroke=1)
+                    c.circle(bx, BUBBLE_Y, BUBBLE_R, fill=1, stroke=1)
 
-                    # Letter — centred inside circle
-                    # drawCentredString baseline ≈ y - cap_height/2
-                    # For Helvetica-Bold 12pt: cap_height ≈ 8pt ≈ 2.8mm
-                    c.setFillColor(rl_colors.HexColor('#1e293b'))
-                    c.setFont("Helvetica-Bold", 12)
-                    c.drawCentredString(bx, by - 1.5*mm, label)
+                # ── Vertical divider before write-box ────────────────────────
+                c.setStrokeColor(rl_colors.HexColor('#e2e8f0'))
+                c.setLineWidth(0.8)
+                c.line(WRITE_BOX_X - 3*mm, y - 3*mm, WRITE_BOX_X - 3*mm, y - BOX_H + 3*mm)
+
+                # ── "Write answer" box (right side) ──────────────────────────
+                c.setFillColor(rl_colors.HexColor('#64748b'))
+                c.setFont("Helvetica", 7)
+                c.drawCentredString(WRITE_BOX_X + WRITE_BOX_W/2, y - 7*mm, 'OR write:')
+
+                # Square for writing the letter (bold border, generous size)
+                SQ = 18 * mm
+                sq_x = WRITE_BOX_X + (WRITE_BOX_W - SQ) / 2
+                sq_y = y - BUBBLE_FROM_TOP - SQ/2
+                c.setStrokeColor(rl_colors.HexColor('#64748b'))
+                c.setFillColor(rl_colors.white)
+                c.setLineWidth(1.8)
+                c.roundRect(sq_x, sq_y, SQ, SQ, 2, fill=1, stroke=1)
 
                 y -= BOX_H + 4*mm
 
@@ -2877,9 +2911,15 @@ def _extract_answers(path: str, exam_questions: list = None, exam: dict = None):
         "Extract the student's answer for each question.\n\n"
         "QUESTIONS ON THIS EXAM:\n" + q_block + "\n\n"
         "RULES:\n"
-        "- For MCQ questions: Look carefully at the answer area. The student may have filled a bubble, "
-        "circled a letter, ticked/checked an option, or written a letter by hand. "
-        "Return ONLY a single uppercase letter (A, B, C, or D) based on what you physically see.\n"
+        "- For MCQ questions: Each MCQ box has TWO answer methods:\n"
+        "    (a) Bubbles — 4 circles with labels A/B/C/D printed ABOVE each circle. "
+        "Student filled or circled one bubble.\n"
+        "    (b) Write box — a square box on the RIGHT end of the MCQ row. "
+        "Student may have written a single letter A/B/C/D inside.\n"
+        "  CHECK THE WRITE BOX FIRST. If it contains a handwritten letter → use that.\n"
+        "  If write box is empty → identify which bubble is filled/circled; "
+        "count left-to-right: 1st=A, 2nd=B, 3rd=C, 4th=D.\n"
+        "  Return ONLY a single uppercase letter (A, B, C, or D).\n"
         "- For Written questions: return the COMPLETE handwritten answer.\n"
         "  Read ALL lines top-to-bottom. Do NOT stop after the first line.\n"
         "  Join all lines into one string separated by spaces.\n"
@@ -2923,16 +2963,19 @@ def _extract_answers(path: str, exam_questions: list = None, exam: dict = None):
         mcq_qlist = ", ".join(f"Q{qid}" for qid in sorted(mcq_ids))
         mcq_prompt = (
             "You are a handwriting recognition expert reading a scanned student answer sheet.\n\n"
-            "This sheet has multiple-choice questions where the student marked their answer "
-            "by filling a bubble, circling a letter, ticking an option, or writing a letter.\n\n"
+            "Each MCQ box has TWO answer methods:\n"
+            "  (a) Bubbles — 4 empty circles. Letters A/B/C/D appear ABOVE each circle (not inside).\n"
+            "      Student filled or circled one bubble. Count left-to-right: 1st=A, 2nd=B, 3rd=C, 4th=D.\n"
+            "  (b) Write box — a square box at the RIGHT END of each MCQ row.\n"
+            "      Student may have written a single letter A/B/C/D inside.\n\n"
+            "PRIORITY: Check the WRITE BOX first. If it has a handwritten letter → use it.\n"
+            "If write box is empty → identify which bubble is filled/circled.\n\n"
             f"MCQ question numbers on this sheet: {mcq_qlist}\n\n"
             "CRITICAL INSTRUCTIONS:\n"
-            "1. For EACH question, look at the answer area and describe what you PHYSICALLY SEE "
-            "(which bubble is darkened, which letter is circled or written, where marks appear).\n"
-            "2. Report ONLY the letter (A, B, C, or D) that the student has marked.\n"
-            "3. You are ONLY reading physical marks on paper. Do NOT try to determine which "
-            "answer is mathematically or factually correct — that is irrelevant.\n"
-            "4. If a mark is ambiguous, describe what you see and pick the most likely letter.\n\n"
+            "1. For EACH question, look at BOTH the write box and the bubbles.\n"
+            "2. Describe what you PHYSICALLY SEE then report ONLY A, B, C, or D.\n"
+            "3. You are ONLY reading physical marks. Do NOT guess from question content.\n"
+            "4. If ambiguous, describe what you see and pick the most likely letter.\n\n"
             "Return JSON with description and answer for each question:\n"
             '{"answers": {"1": {"seen": "bubble A is filled/darkened", "answer": "A"}, '
             '"2": {"seen": "letter C is circled", "answer": "C"}}}\n'
@@ -3648,10 +3691,27 @@ def _diksha_extract_pdf(hierarchy_content: dict) -> str:
     # 3. Fallback: look for any PDF in the tree
     return _find_pdf(hierarchy_content)
 
+def _is_probable_textbook_name(name: str) -> bool:
+    """Heuristic gate to exclude comics/question sets and keep textbook titles."""
+    n = _normalize(name)
+    if not n:
+        return False
+    bad = [
+        "comic book", "question set", "question bank", "practice", "worksheet",
+        "activity", "workbook", "sample paper", "assessment"
+    ]
+    if any(tok in n for tok in bad):
+        return False
+    good = [
+        "textbook", "ganita", "curiosity", "honey", "vasant", "math", "mathematics"
+    ]
+    return any(tok in n for tok in good)
+
 def _diksha_find_textbooks(board_short: str, class_n: str, subject: str, medium: str = "English") -> list:
     """Find textbooks from DIKSHA for a given board/class/subject.
     Returns list of dicts: [{name, identifier, leafNodesCount}]
     """
+    subject = _normalize_subject_name(subject)
     cache_key = f"books_{board_short}_{class_n}_{subject}_{medium}"
     if cache_key in _diksha_cache:
         return _diksha_cache[cache_key]
@@ -3676,14 +3736,14 @@ def _diksha_find_textbooks(board_short: str, class_n: str, subject: str, medium:
     if subject:
         filters["subject"] = [subject]
 
-    data = _diksha_search(filters, limit=10,
+    data = _diksha_search(filters, limit=50,
                           fields=["name", "identifier", "leafNodesCount", "subject", "medium"])
     books = data.get("result", {}).get("content", []) or []
 
     # If no results with subject filter, try without it
     if not books and subject:
         del filters["subject"]
-        data = _diksha_search(filters, limit=20,
+        data = _diksha_search(filters, limit=80,
                               fields=["name", "identifier", "leafNodesCount", "subject", "medium"])
         all_books = data.get("result", {}).get("content", []) or []
         # Fuzzy match subject — also try reverse containment and first-word match.
@@ -3711,6 +3771,7 @@ def _diksha_get_chapters_and_pdf(board_short: str, class_n: str, subject: str, m
     """Full DIKSHA lookup: find textbook → get hierarchy → extract chapters + PDF.
     Returns (chapters_list, pdf_url, textbook_name) or (None, None, None).
     """
+    subject = _normalize_subject_name(subject)
     books = _diksha_find_textbooks(board_short, class_n, subject, medium)
     if not books:
         return None, None, None
@@ -3777,7 +3838,7 @@ def diksha_textbooks():
     b = request.json or {}
     board = b.get("board", "CBSE")
     grade = b.get("class", "Class 10")
-    subject = b.get("subject", "")
+    subject = _normalize_subject_name(b.get("subject", ""))
     medium = b.get("medium", "English")
 
     books = _diksha_find_textbooks(board, grade, subject, medium)
@@ -3805,7 +3866,7 @@ def diksha_chapters():
     # Fallback: search by board/class/subject
     board = b.get("board", "CBSE")
     grade = b.get("class", "Class 10")
-    subject = b.get("subject", "")
+    subject = _normalize_subject_name(b.get("subject", ""))
     medium = b.get("medium", "English")
     chapters, pdf_url, name = _diksha_get_chapters_and_pdf(board, grade, subject, medium)
     return jsonify({
@@ -4464,6 +4525,7 @@ def load_curriculum_book():
     board   = b.get("board")
     class_n = b.get("class") or b.get("year")
     subject = b.get("subject")
+    subject_canon = _normalize_subject_name(subject)
     u       = request.user
 
     if not all([state, board, class_n, subject]):
@@ -4474,10 +4536,10 @@ def load_curriculum_book():
     did = (
         f"gov_{u['id'][:6]}_"
         f"{board.lower().replace(' ','_')}_{class_n.replace(' ','').lower()}_"
-        f"{subject.lower().replace(' ','_')}"
+        f"{subject_canon.replace(' ','_')}"
     )
     class_key = class_n.lower().replace(" ", "")
-    subj_key  = subject.lower().strip()
+    subj_key  = subject_canon
 
     chapters = CHAPTERS_DB.get((class_key, subj_key))
 
@@ -4499,8 +4561,8 @@ def load_curriculum_book():
 
     syllabi_registry[did] = {
         "id": did,
-        "name": f"{board} {class_n} — {subject}",
-        "files": [f"{subject}_textbook.pdf"],
+        "name": f"{board} {class_n} — {subject_canon.title()}",
+        "files": [f"{subject_canon}_textbook.pdf"],
         "chunks": 100, "chapters": chapters,
         "owner_id": u["id"],        # ← always scoped to this user
         "created_at": _now(),
@@ -4533,6 +4595,7 @@ def get_curriculum_chapters():
     board   = b.get("board", "CBSE")
     class_n = b.get("class", "Class 10")
     subject = b.get("subject", "Mathematics")
+    subject_canon = _normalize_subject_name(subject)
     medium  = b.get("medium", "English")
     u       = request.user
 
@@ -4540,10 +4603,10 @@ def get_curriculum_chapters():
     did = (
         f"gov_{u['id'][:6]}_"
         f"{board.lower().replace(' ','_')}_{class_n.replace(' ','').lower()}_"
-        f"{subject.lower().replace(' ','_')}"
+        f"{subject_canon.replace(' ','_')}"
     )
     class_key = class_n.lower().replace(" ", "")
-    subj_key  = subject.lower().strip()
+    subj_key  = subject_canon
 
     # CISCE boards (ICSE/ISC) are private — not on DIKSHA
     _is_cisce  = board in ("ICSE", "ISC")
@@ -4570,12 +4633,13 @@ def get_curriculum_chapters():
         if class_key in _new_curriculum_classes:
             try:
                 # Pass empty string for medium to get all editions (English, Hindi, Urdu)
-                dk_books = _diksha_find_textbooks(board, class_n, subject, "")
+                dk_books = _diksha_find_textbooks(board, class_n, subject_canon, "")
                 # Only surface actual textbooks (not comic books / question sets)
                 textbook_books = [
                     b for b in dk_books
                     if b.get("leafNodesCount", 0) >= 5
                     and len(b.get("subject", [])) == 1  # single-subject only
+                    and _is_probable_textbook_name(b.get("name", ""))
                 ]
                 if textbook_books:
                     available_books = [
@@ -4602,7 +4666,7 @@ def get_curriculum_chapters():
         # Try DIKSHA for state boards and any unknown combo
         try:
             # Get all available books from DIKSHA first, then pick best
-            dk_books = _diksha_find_textbooks(board, class_n, subject, medium)
+            dk_books = _diksha_find_textbooks(board, class_n, subject_canon, medium)
             if dk_books:
                 # Expose all options to the frontend for book-picker UI
                 available_books = [
@@ -4614,7 +4678,7 @@ def get_curriculum_chapters():
                     if len(b.get("subject",[])) <= 2   # exclude multi-subject bundles
                 ]
             dk_chapters, dk_pdf, dk_name = _diksha_get_chapters_and_pdf(
-                board, class_n, subject, medium
+                board, class_n, subject_canon, medium
             )
             if dk_chapters:
                 chapters = dk_chapters
@@ -4645,7 +4709,7 @@ def get_curriculum_chapters():
         try:
             board_ctx = "CISCE (ICSE/ISC board)" if _is_cisce else board
             result = _llm_json(
-                f"List exact chapters for '{board_ctx}' '{subject}' {class_n} India. JSON array only.",
+                f"List exact chapters for '{board_ctx}' '{subject_canon}' {class_n} India. JSON array only.",
                 temperature=0.1, mini=True
             )
             if isinstance(result, list):
@@ -4658,14 +4722,14 @@ def get_curriculum_chapters():
     # Create or update in registry — always with this user as owner
     syllabi_registry[did] = {
         "id": did,
-        "name": f"{board} {class_n} — {subject}",
+        "name": f"{board} {class_n} — {subject_canon.title()}",
         "chunks": 100, "chapters": chapters,
         "owner_id": u["id"], "created_at": _now(), "pdf_url": pdf_url,
         "supp_pdf_url": supp_pdf_url,
         # Stored explicitly so question-gen endpoints can enforce class-level accuracy
         "board": board,
         "class_name": class_n,
-        "subject": subject,
+        "subject": subject_canon.title(),
     }
     _save_syllabi()
     return jsonify({
@@ -5824,6 +5888,8 @@ def evaluate_sheet():
     if not IS_VERCEL:
         _save_json(EVAL_DIR / f"{eval_id}.json", payload)
     _save_evals()
+    # Dual-write: also insert as individual doc so Vercel serverless instances can retrieve it
+    _mongo_insert("eval_items", {**payload, "evaluation_id": eval_id})
     _cache_set(fhash, exam_id, payload)
     log.info(f"[EVAL] Sync complete: eval_id={eval_id} score={result.get('percentage',0):.1f}%")
     return jsonify(payload)
@@ -5887,6 +5953,8 @@ def evaluate_text():
     if not IS_VERCEL:
         _save_json(EVAL_DIR / f"{eval_id}.json", payload)
     _save_evals()
+    # Dual-write: individual doc for reliable cross-instance lookup
+    _mongo_insert("eval_items", {**payload, "evaluation_id": eval_id})
     log.info(f"[EVAL-TEXT] Complete: eval_id={eval_id} score={result.get('percentage',0):.1f}%")
     return jsonify(payload)
 
@@ -6152,6 +6220,11 @@ def get_evaluation(eval_id):
     ev = evaluations_registry.get(eval_id)
     if not ev and not IS_VERCEL:
         ev = _load_json(EVAL_DIR / f"{eval_id}.json")
+        if ev:
+            evaluations_registry[eval_id] = ev
+    # Vercel: in-memory registry is per-instance; fall back to individual MongoDB doc
+    if not ev:
+        ev = _mongo_find_one("eval_items", {"evaluation_id": eval_id})
         if ev:
             evaluations_registry[eval_id] = ev
     if not ev:
@@ -6791,6 +6864,9 @@ def download_evaluation_report(eval_id):
     ev = evaluations_registry.get(eval_id)
     if not ev and not IS_VERCEL:
         ev = _load_json(EVAL_DIR / f"{eval_id}.json")
+    # Vercel serverless: in-memory registry is per-instance, so look up individual doc
+    if not ev:
+        ev = _mongo_find_one("eval_items", {"evaluation_id": eval_id})
     if not ev:
         return jsonify({"error": "Evaluation not found"}), 404
 
