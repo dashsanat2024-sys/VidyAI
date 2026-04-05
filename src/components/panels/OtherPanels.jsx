@@ -1,6 +1,3 @@
-// ── QMaster Panel is now in QMasterPanel.jsx — re-export for compat ──────
-export { QMasterPanel } from './QMasterPanel'
-
 import { useState, useEffect } from 'react'
 import { useAuth } from '../../context/AuthContext'
 import { useApp } from '../../context/AppContext'

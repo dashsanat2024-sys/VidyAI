@@ -52,7 +52,7 @@ export function AppProvider({ children }) {
 
       // Fire all fetches in parallel instead of sequentially
       const [data1, data2, data3, data4] = await Promise.all([
-        apiGet('/curriculum', token),
+        apiGet('/syllabi', token),
         apiGet('/documents', token),
         isAdmin ? apiGet('/admin/stats', token) : Promise.resolve({}),
         apiGet('/settings', token),
