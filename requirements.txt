@@ -20,12 +20,13 @@ langchain-community>=0.2.0      # PyPDFLoader (text extraction from digital PDFs
 # ── PDF Processing ────────────────────────────────────────────────────────────
 pypdf>=4.0.0                    # Extract text layer from digital PDFs
 python-docx>=1.1.0             # Parse .docx Word documents (text extraction)
-pdf2image>=1.17.0               # Convert scanned PDF pages → PIL images for OCR
-                                # IMPORTANT: requires system package 'poppler-utils':
+pymupdf>=1.24.0                 # PDF → PIL images for OCR (no system deps — works on Vercel)
+pdf2image>=1.17.0               # Local fallback PDF converter (requires poppler locally)
+                                # IMPORTANT: pdf2image requires system package 'poppler-utils':
                                 #   Ubuntu/Debian: apt-get install -y poppler-utils
                                 #   macOS:         brew install poppler
                                 #   Alpine:        apk add poppler-utils
-                                #   Vercel/Docker: see deployment notes below
+                                #   Vercel: NOT supported — use pymupdf instead (installed above)
 
 # ── Image Processing (handwriting OCR pipeline) ───────────────────────────────
 Pillow>=10.0.0                  # PIL — image manipulation, contrast enhancement
