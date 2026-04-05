@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useAuth } from '../../context/AuthContext'
 import { useApp } from '../../context/AppContext'
-import { apiGet, apiPost } from '../../utils/api'
+import { apiGet, apiPost, API_BASE } from '../../utils/api'
 
 const APP_NAME = 'Arthavi'
 
@@ -207,7 +207,7 @@ function SchoolAdminDashboard({ me, adminStats, navigate, token, showToast }) {
     setDeleting(did)
     try {
       await apiGet(`/documents`, token)    // list first (already have)
-      const del = await fetch(`/api/documents/${did}`, {
+      const del = await fetch(`${API_BASE}/documents/${did}`, {
         method: 'DELETE',
         headers: { Authorization: `Bearer ${token}` }
       })
@@ -232,7 +232,7 @@ function SchoolAdminDashboard({ me, adminStats, navigate, token, showToast }) {
     if (!settings) return
     setSavingSettings(true)
     try {
-      const res = await fetch('/api/admin/settings', {
+      const res = await fetch(`${API_BASE}/admin/settings`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify(settings)
@@ -407,7 +407,7 @@ function PlatformAdminDashboard({ me, adminStats, navigate, token, showToast }) 
     if (!settings) return
     setSavingSettings(true)
     try {
-      const res = await fetch('/api/admin/settings', {
+      const res = await fetch(`${API_BASE}/admin/settings`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify(settings)
@@ -428,7 +428,7 @@ function PlatformAdminDashboard({ me, adminStats, navigate, token, showToast }) 
     if (!window.confirm(`Delete "${dname}"? This cannot be undone.`)) return
     setDeleting(did)
     try {
-      const del = await fetch(`/api/documents/${did}`, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } })
+      const del = await fetch(`${API_BASE}/documents/${did}`, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } })
       if (del.ok) { setDocs(prev => prev.filter(d => d.id !== did)); showToast && showToast('Document deleted', 'success') }
       else showToast && showToast('Failed to delete', 'error')
     } catch { }

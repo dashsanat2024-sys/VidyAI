@@ -4,7 +4,7 @@ export { QMasterPanel } from './QMasterPanel'
 import { useState, useEffect } from 'react'
 import { useAuth } from '../../context/AuthContext'
 import { useApp } from '../../context/AppContext'
-import { apiGet, apiPost } from '../../utils/api'
+import { apiGet, apiPost, API_BASE } from '../../utils/api'
 
 // ── Role badge colours ─────────────────────────────────────────────────────
 const ROLE_STYLE = {
@@ -46,7 +46,7 @@ export function InstitutePanel({ showToast }) {
   const saveEdit = async (uid) => {
     setSaving(true)
     try {
-      const res = await fetch(`/api/admin/users/${uid}`, {
+      const res = await fetch(`${API_BASE}/admin/users/${uid}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify(editData)
@@ -67,7 +67,7 @@ export function InstitutePanel({ showToast }) {
   const toggleStatus = async (u) => {
     const newStatus = u.status === 'suspended' ? 'active' : 'suspended'
     try {
-      const res = await fetch(`/api/admin/users/${u.id}`, {
+      const res = await fetch(`${API_BASE}/admin/users/${u.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({ status: newStatus })
@@ -494,7 +494,7 @@ export function AdminSettingsPanel({ showToast }) {
     
     setSaving(true)
     try {
-      const res = await fetch('/api/admin/settings', {
+      const res = await fetch(`${API_BASE}/admin/settings`, {
         method: 'PATCH',
         headers: {
           'Content-Type': 'application/json',

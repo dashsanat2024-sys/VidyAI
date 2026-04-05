@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
 import { useAuth } from '../../context/AuthContext'
 import { useApp } from '../../context/AppContext'
-import { apiPost, apiPostForm, speakText, stopSpeech } from '../../utils/api'
+import { apiPost, apiPostForm, speakText, stopSpeech, API_BASE } from '../../utils/api'
 
 function Message({ role, text, sources }) {
   return (
@@ -95,7 +95,7 @@ export default function ChatPanel({ showToast }) {
         const did = data.syllabus_id
         const poll = setInterval(async () => {
           try {
-            const resp = await fetch(`/api/documents/${did}/ocr-status`, {
+            const resp = await fetch(`${API_BASE}/documents/${did}/ocr-status`, {
               headers: { Authorization: `Bearer ${token}` }
             })
             const st = await resp.json()
@@ -137,7 +137,7 @@ export default function ChatPanel({ showToast }) {
     if (!window.confirm('Remove this syllabus from your list? This cannot be undone.')) return
     setDeleting(true)
     try {
-      const res = await fetch(`/api/syllabi/${selectedSyl}`, {
+      const res = await fetch(`${API_BASE}/syllabi/${selectedSyl}`, {
         method: 'DELETE',
         headers: { Authorization: `Bearer ${token}` }
       })

@@ -61,13 +61,15 @@ OPENAI_MODEL   = os.getenv("OPENAI_MODEL", "gpt-4o")
 OPENAI_MINI    = os.getenv("OPENAI_MINI_MODEL", "gpt-4o-mini")
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
-BASE      = Path(__file__).parent.parent
-IS_VERCEL = os.environ.get("VERCEL") == "1"
+BASE         = Path(__file__).parent.parent
+IS_VERCEL    = os.environ.get("VERCEL") == "1"
+IS_RENDER    = os.environ.get("RENDER") == "true"
+IS_SERVERLESS = IS_VERCEL or IS_RENDER
 
-TMP_ROOT  = Path("/tmp") if IS_VERCEL else BASE
-DATA_F    = (TMP_ROOT / "platform_data.json") if IS_VERCEL else (BASE / "data" / "platform_data.json")
-UPL_DIR   = (TMP_ROOT / "uploads")            if IS_VERCEL else (BASE / "uploads")
-DB_DIR    = (TMP_ROOT / "study_db")           if IS_VERCEL else (BASE / "study_db")
+TMP_ROOT  = Path("/tmp") if IS_SERVERLESS else BASE
+DATA_F    = (TMP_ROOT / "platform_data.json") if IS_SERVERLESS else (BASE / "data" / "platform_data.json")
+UPL_DIR   = (TMP_ROOT / "uploads")            if IS_SERVERLESS else (BASE / "uploads")
+DB_DIR    = (TMP_ROOT / "study_db")           if IS_SERVERLESS else (BASE / "study_db")
 
 EXAMS_DIR = DB_DIR / "exams"
 EVAL_DIR  = DB_DIR / "evaluations"

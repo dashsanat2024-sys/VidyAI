@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { useAuth } from '../../context/AuthContext'
 import { useApp } from '../../context/AppContext'
-import { apiPost, apiPostForm } from '../../utils/api'
+import { apiPost, apiPostForm, API_BASE } from '../../utils/api'
 
 import CurriculumSelector from '../shared/CurriculumSelector'
 
@@ -65,7 +65,7 @@ export default function InteractivePracticePanel({ showToast }) {
     if (!window.confirm('Remove this syllabus from your list?')) return
     setDeleting(true)
     try {
-      const res = await fetch(`/api/syllabi/${selectedSyl}`, {
+      const res = await fetch(`${API_BASE}/syllabi/${selectedSyl}`, {
         method: 'DELETE', headers: { Authorization: `Bearer ${token}` }
       })
       if (res.ok) { 

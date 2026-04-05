@@ -242,12 +242,11 @@ export default function CurriculumPanel({ showToast }) {
       }, token)
       if (data.syllabus_id) {
         const serverAvBooks = data.available_books || []
-        // For NCERT boards on Classes 6–8 (new curriculum), the backend clears the
-        // portal URL and returns a DIKSHA book picker instead.  In that case, do NOT
-        // override with localPdf — the portal URL would just confuse students with
-        // multiple editions. Let pdf_url be empty so the picker drives everything.
+        // For NCERT boards on Classes 6–8 (new curriculum), backend may return
+        // DIKSHA alternatives. Keep the NCERT portal URL when only one option is
+        // available so students can still access all portal editions.
         const isNewCurriculumClass = [6, 7, 8].includes(parseInt(classNum))
-        const useLocalPdf = isNcertBoard && !(isNewCurriculumClass && serverAvBooks.length > 0)
+        const useLocalPdf = isNcertBoard && !(isNewCurriculumClass && serverAvBooks.length > 1)
         serverSyl = {
           id:             data.syllabus_id,
           name:           data.name || `${board.shortName} Class ${classNum} — ${subject}`,
@@ -560,13 +559,9 @@ export default function CurriculumPanel({ showToast }) {
     ? (ssSubBooks.find(b => b.id === ssSubBook)?.pdf || pdfUrl)
     : pdfUrl
 
-  // For new curriculum classes (6-8) on NCERT boards, the backend returns available_books
-  // with all language editions from DIKSHA — show the picker for ANY number of editions
-  // (even just 1) so the student gets a direct PDF link instead of the confusing portal.
-  // For all other cases, keep the original ">1" threshold.
-  const hasMultipleBooks = isNewCurriculumClass && isNcertLike
-    ? availableBooks.length >= 1
-    : availableBooks.length > 1
+  // Show picker only when multiple distinct textbook choices exist.
+  // If only one DIKSHA option is present, keep NCERT portal access visible.
+  const hasMultipleBooks = availableBooks.length > 1
 
   return (
     <div className="panel active">

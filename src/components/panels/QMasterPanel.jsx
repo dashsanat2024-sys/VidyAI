@@ -168,7 +168,7 @@ function CurriculumSelector({ token, onComplete }) {
       const fd = new FormData()
       fd.append('file', file)
       fd.append('syllabus_name', file.name.replace(/\.[^/.]+$/, ''))
-      const res = await fetch(`/api/upload`, {
+      const res = await fetch(`${API}/api/upload`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}` },
         body: fd,
