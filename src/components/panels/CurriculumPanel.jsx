@@ -528,6 +528,7 @@ export default function CurriculumPanel({ showToast }) {
   const isPortalUrl = !!(pdfUrl?.includes('textbook.php'))
   // ── Social Science sub-book definitions ──────────────────────────────────
   const isNcertLike = ['CBSE','NIOS','DoE','IB','CBSE-AP','NCERT'].includes(board?.shortName)
+  const hasMultipleBooks = availableBooks.length > 1
   const canOpenTextbook = chapters.length > 0 && sourceMode === 'curriculum'
     && (!hasMultipleBooks || specificDikshaBookSelected)
     && !(isNcertLike && isNewCurriculumClass && isPortalUrl)
@@ -561,7 +562,7 @@ export default function CurriculumPanel({ showToast }) {
 
   // Show picker only when multiple distinct textbook choices exist.
   // If only one DIKSHA option is present, keep NCERT portal access visible.
-  const hasMultipleBooks = availableBooks.length > 1
+  // (hasMultipleBooks moved above canOpenTextbook to avoid TDZ)
 
   return (
     <div className="panel active">
