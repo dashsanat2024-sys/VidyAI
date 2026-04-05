@@ -1090,12 +1090,18 @@ def _evaluate_answers(exam: dict, submitted: Dict[int, str], roll_no: str = "") 
         else:
             # Clean subjective answer before grading
             student_cleaned = _clean_subjective_answer(student)
-            
+
+            # Build valid_answers list: use explicit model_answer + answer field, fall back to valid_answers list
+            model_ans_str = str(q.get("model_answer", q.get("answer", ""))).strip()
+            valid_ans_list = q.get("valid_answers", [])
+            if model_ans_str and model_ans_str not in ("(Teacher-defined)", ""):
+                valid_ans_list = [model_ans_str] + [v for v in valid_ans_list if v != model_ans_str]
+
             prompt = SUBJECTIVE_GRADING_PROMPT.format(
                 question=q.get("question", ""), max_marks=max_m,
-                valid_answers=json.dumps(q.get("valid_answers", [])),
+                valid_answers=json.dumps(valid_ans_list),
                 key_points=json.dumps(q.get("answer_key_points", [])),
-                rubric=q.get("evaluation_rubric", ""), 
+                rubric=q.get("evaluation_rubric", q.get("evaluation_criteria", "")),
                 student_answer=student_cleaned
             )
             try:

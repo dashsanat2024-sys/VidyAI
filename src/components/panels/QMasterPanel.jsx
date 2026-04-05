@@ -710,12 +710,13 @@ function QuestionCard({ q, onDelete, onMarksChange, onCriteriaChange }) {
 
 // ── Custom Question Form ────────────────────────────────────────────────────────
 function CustomQuestionForm({ onAdd, onCancel }) {
-  const [qType,    setQType]    = useState('objective')
-  const [question, setQuestion] = useState('')
-  const [opts,     setOpts]     = useState({ A: '', B: '', C: '', D: '' })
-  const [answer,   setAnswer]   = useState('A')
-  const [marks,    setMarks]    = useState(1)
-  const [criteria, setCriteria] = useState('')
+  const [qType,       setQType]       = useState('objective')
+  const [question,    setQuestion]    = useState('')
+  const [opts,        setOpts]        = useState({ A: '', B: '', C: '', D: '' })
+  const [answer,      setAnswer]      = useState('A')
+  const [marks,       setMarks]       = useState(1)
+  const [modelAnswer, setModelAnswer] = useState('')
+  const [criteria,    setCriteria]    = useState('')
 
   const valid = question.trim() && (qType === 'subjective' || (opts.A.trim() && opts.B.trim()))
 
@@ -726,8 +727,9 @@ function CustomQuestionForm({ onAdd, onCancel }) {
       q.options = Object.fromEntries(Object.entries(opts).filter(([, v]) => v.trim()))
       q.answer  = answer
     } else {
+      q.answer              = modelAnswer.trim() || '(Teacher-defined)'
+      q.model_answer        = modelAnswer.trim()
       q.evaluation_criteria = criteria
-      q.answer = criteria || '(Teacher-defined)'
     }
     onAdd(q)
   }
@@ -790,18 +792,30 @@ function CustomQuestionForm({ onAdd, onCancel }) {
         </>
       )}
 
-      {/* Subjective marking criteria */}
+      {/* Subjective model answer + marking criteria */}
       {qType === 'subjective' && (
-        <div style={{ marginBottom: '12px' }}>
-          <label style={{ ...S.label, color: C.amber }}>Marking Criteria / Rubric</label>
-          <textarea rows={3} value={criteria}
-            placeholder="e.g. 1m: Correct definition · 2m: Explanation with example · 1m: Diagram"
-            style={{ ...S.input, resize: 'vertical', lineHeight: 1.5, fontSize: '13px' }}
-            onChange={e => setCriteria(e.target.value)} />
-          <div style={{ fontSize: '11px', color: C.slate, marginTop: '3px' }}>
-            Used by AI evaluator and printed on the answer key.
+        <>
+          <div style={{ marginBottom: '12px' }}>
+            <label style={{ ...S.label, color: C.green }}>Model Answer</label>
+            <textarea rows={4} value={modelAnswer}
+              placeholder="Write the ideal/expected answer here. Used by the AI evaluator to grade student responses."
+              style={{ ...S.input, resize: 'vertical', lineHeight: 1.6, fontSize: '13px' }}
+              onChange={e => setModelAnswer(e.target.value)} />
+            <div style={{ fontSize: '11px', color: C.slate, marginTop: '3px' }}>
+              The AI uses this as the reference answer when evaluating student submissions.
+            </div>
           </div>
-        </div>
+          <div style={{ marginBottom: '12px' }}>
+            <label style={{ ...S.label, color: C.amber }}>Marking Criteria / Rubric</label>
+            <textarea rows={2} value={criteria}
+              placeholder="e.g. 1m: Correct definition · 2m: Explanation with example · 1m: Diagram"
+              style={{ ...S.input, resize: 'vertical', lineHeight: 1.5, fontSize: '13px' }}
+              onChange={e => setCriteria(e.target.value)} />
+            <div style={{ fontSize: '11px', color: C.slate, marginTop: '3px' }}>
+              Used by AI evaluator and printed on the answer key.
+            </div>
+          </div>
+        </>
       )}
 
       {/* Marks + submit */}

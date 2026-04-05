@@ -5,12 +5,13 @@ import { apiPost, apiGet } from '../../utils/api'
 
 // ── Add-custom-question form (used inside QGenPanel preview) ─────────────────────
 function QGenCustomForm({ onAdd, onCancel }) {
-  const [qType,    setQType]    = useState('obj')
-  const [question, setQuestion] = useState('')
-  const [opts,     setOpts]     = useState({ A: '', B: '', C: '', D: '' })
-  const [answer,   setAnswer]   = useState('A')
-  const [marks,    setMarks]    = useState(1)
-  const [criteria, setCriteria] = useState('')
+  const [qType,       setQType]       = useState('obj')
+  const [question,    setQuestion]    = useState('')
+  const [opts,        setOpts]        = useState({ A: '', B: '', C: '', D: '' })
+  const [answer,      setAnswer]      = useState('A')
+  const [marks,       setMarks]       = useState(1)
+  const [modelAnswer, setModelAnswer] = useState('')
+  const [criteria,    setCriteria]    = useState('')
 
   const valid = question.trim() && (qType === 'subj' || (opts.A.trim() && opts.B.trim()))
 
@@ -21,8 +22,9 @@ function QGenCustomForm({ onAdd, onCancel }) {
       q.options = Object.fromEntries(Object.entries(opts).filter(([, v]) => v.trim()))
       q.answer  = answer
     } else {
+      q.answer              = modelAnswer.trim() || '(Teacher-defined)'
+      q.model_answer        = modelAnswer.trim()
       q.evaluation_criteria = criteria
-      q.answer = criteria || '(Teacher-defined)'
     }
     onAdd(q)
   }
@@ -88,13 +90,23 @@ function QGenCustomForm({ onAdd, onCancel }) {
       )}
 
       {qType === 'subj' && (
-        <div className="fg" style={{ marginBottom: 10 }}>
-          <label>Marking Criteria / Rubric</label>
-          <textarea className="fi" rows={2} value={criteria}
-            placeholder="e.g. 1m: definition · 2m: explanation · 1m: example"
-            style={{ resize: 'vertical', lineHeight: 1.5 }}
-            onChange={e => setCriteria(e.target.value)} />
-        </div>
+        <>
+          <div className="fg" style={{ marginBottom: 10 }}>
+            <label style={{ color: '#059669' }}>Model Answer</label>
+            <textarea className="fi" rows={4} value={modelAnswer}
+              placeholder="Write the ideal/expected answer here. Used by the AI evaluator to grade student responses."
+              style={{ resize: 'vertical', lineHeight: 1.6 }}
+              onChange={e => setModelAnswer(e.target.value)} />
+            <div style={{ fontSize: 11, color: '#64748b', marginTop: 3 }}>The AI uses this as the reference answer when evaluating student submissions.</div>
+          </div>
+          <div className="fg" style={{ marginBottom: 10 }}>
+            <label style={{ color: '#d97706' }}>Marking Criteria / Rubric</label>
+            <textarea className="fi" rows={2} value={criteria}
+              placeholder="e.g. 1m: definition · 2m: explanation · 1m: example"
+              style={{ resize: 'vertical', lineHeight: 1.5 }}
+              onChange={e => setCriteria(e.target.value)} />
+          </div>
+        </>
       )}
 
       <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
