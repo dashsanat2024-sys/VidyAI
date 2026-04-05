@@ -21,7 +21,11 @@ import ReportPanel from '../components/panels/ReportPanel'
 // Using position:absolute + inset:0 is the most reliable cross-browser way
 // to make a panel fill its parent without causing double-scroll on mobile.
 // The parent container is position:relative + overflow:hidden.
+// Lazy-mounts: children are not rendered until the panel is first activated,
+// preventing non-admin panels from firing admin API calls on initial load.
 function PanelSlot({ active, children }) {
+  const [everActive, setEverActive] = useState(false)
+  if (active && !everActive) setEverActive(true)
   return (
     <div style={{
       position:   'absolute',
@@ -32,7 +36,7 @@ function PanelSlot({ active, children }) {
       WebkitOverflowScrolling: 'touch',
       display:    active ? 'block' : 'none',
     }}>
-      {children}
+      {everActive && children}
     </div>
   )
 }
