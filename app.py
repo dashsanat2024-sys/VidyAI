@@ -89,6 +89,10 @@ app.config["MAX_CONTENT_LENGTH"] = 200 * 1024 * 1024  # 200 MB
 def too_large(e):
     return jsonify({"error": "File too large. Maximum upload size is 200 MB. For audio files, keep under 25 MB for best results."}), 413
 
+@app.route("/api/health")
+def health():
+    return jsonify({"status": "ok"}), 200
+
 # ── Structured logging ────────────────────────────────────────────────────────
 logging.basicConfig(
     level=logging.INFO,

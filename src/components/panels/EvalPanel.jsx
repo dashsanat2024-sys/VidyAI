@@ -1022,6 +1022,10 @@ function SingleEvalTab({ token, showToast }) {
 ` +
           `• Select the correct exam from the "Select Exam" dropdown above`
         )
+      } else if (e.message === 'Failed to fetch' || e.name === 'TypeError') {
+        setError(
+          `⚠️ Could not reach the server. The backend may be warming up after inactivity.\n\nPlease wait 20–30 seconds and try submitting again.`
+        )
       } else {
         setError(e.message)
       }
