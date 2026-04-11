@@ -24,6 +24,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # ── Application code ───────────────────────────────────────────────────────────
 COPY app.py ./
+COPY dist ./dist
 
 # ── Runtime config ─────────────────────────────────────────────────────────────
 # Cloud Run injects PORT=8080; HF Spaces uses 7860; local can override.
