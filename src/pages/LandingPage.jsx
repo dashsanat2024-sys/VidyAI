@@ -29,6 +29,148 @@ const STEPS = [
   { n: '04', title: 'Learn & Evaluate', desc: 'Study, generate exam papers, evaluate answer sheets, and share reports.' },
 ]
 
+const INR_TO_USD = 0.012
+const ANNUAL_INCREASE_RATE = 0.1
+
+const PRICING_PLANS = [
+  {
+    id: 'free-student',
+    name: 'Free — Student',
+    price: 'INR 0 / month forever',
+    approxUsd: '$0 / month',
+    summary: 'For individual students discovering Arthavi and entering the paid funnel.',
+    includes: [
+      '3 chapter loads/month (any board)',
+      '5 AI summaries/month',
+      '10 flashcards/month',
+      '5 practice questions/month',
+      'AI Study Chat (3 sessions/month)',
+    ],
+    excludes: [
+      'Audio lessons',
+      'AI Video Teacher',
+      'Download or print summaries',
+      'Question Master access',
+    ],
+    cta: 'Start Free',
+    role: 'student',
+  },
+  {
+    id: 'student-pro',
+    name: 'Student Pro',
+    badge: 'MOST POPULAR',
+    price: 'INR 149 / month',
+    approxUsd: '~$1.79 / month',
+    annual: 'INR 1,499/year (2 months free)',
+    summary: 'Full access for Class 9–12 board and entrance preparation.',
+    includes: [
+      'Unlimited chapters across 35+ boards',
+      'Unlimited AI summaries (10-point format)',
+      'Unlimited flashcards (5–20 per chapter)',
+      'Unlimited practice with instant AI feedback',
+      'Unlimited AI Study Chat for any PDF/textbook',
+      'Audio lessons for all chapters',
+      'AI Video Teacher (Ms. Vidya, 7-scene lessons)',
+      'Download PDF summaries and flashcards',
+      'Priority WhatsApp support',
+    ],
+    excludes: [],
+    cta: 'Upgrade to Student Pro',
+    role: 'student',
+  },
+  {
+    id: 'school-starter',
+    name: 'School Starter',
+    price: 'INR 999 / month',
+    approxUsd: '~$11.99 / month',
+    annual: 'Schools up to 300 students',
+    summary: 'Entry institutional plan with core teacher + evaluation workflows.',
+    includes: [
+      '10 teacher/tutor accounts',
+      '300 student accounts',
+      'Question Master with unlimited paper generation',
+      'AI evaluation up to 200 answer sheets/month',
+      'Parent email reports after each evaluation',
+      'Exam ID system with answer key management',
+      'School admin dashboard + basic analytics',
+    ],
+    excludes: [
+      'Bulk ZIP evaluation upload',
+      'Multi-student single PDF evaluation',
+      'Custom school branding on reports',
+    ],
+    cta: 'Start School Starter',
+    role: 'school_admin',
+  },
+  {
+    id: 'school-growth',
+    name: 'School Growth',
+    badge: 'MOST POPULAR',
+    price: 'INR 2,499 / month',
+    approxUsd: '~$29.99 / month',
+    annual: 'Schools up to 800 students',
+    summary: 'Full-featured institutional plan with priority delivery and support.',
+    includes: [
+      'Unlimited teacher/tutor accounts',
+      '800 student accounts',
+      'Unlimited AI answer sheet evaluation',
+      'Bulk ZIP evaluation support',
+      'Multi-student single PDF evaluation',
+      'Business-hours phone support',
+      'Custom branding on printed reports',
+      'Quarterly performance review call',
+      'Priority bug fixes and feature requests',
+    ],
+    excludes: [],
+    cta: 'Book Growth Demo',
+    role: 'school_admin',
+  },
+  {
+    id: 'coaching',
+    name: 'Coaching Institute',
+    price: 'INR 99 / student / month',
+    approxUsd: '~$1.19 / student / month',
+    annual: 'Minimum 20 students (INR 1,980/month)',
+    summary: 'Scalable per-student pricing for JEE, NEET, and board coaching.',
+    includes: [
+      'Full Student Pro access for each enrolled student',
+      'Institute admin dashboard with all student data',
+      'Unlimited papers for tutors (Question Master)',
+      'Unlimited AI answer sheet evaluation',
+      'Batch leaderboard and student rankings',
+      'Branded question papers with institute logo',
+      'Parent email report after each evaluation',
+      'Dedicated WhatsApp support line',
+      'Monthly usage and performance report',
+    ],
+    excludes: [],
+    cta: 'Get Coaching Plan',
+    role: 'institute',
+  },
+  {
+    id: 'enterprise',
+    name: 'Enterprise & Government',
+    price: 'Custom pricing',
+    approxUsd: 'Contact sales',
+    annual: 'For 5+ schools, district deployments, and govt partnerships',
+    summary: 'MOU and tender compliant deployment for chains, districts, and agencies.',
+    includes: [
+      'Custom school, teacher, and student allocations',
+      'On-premise or private cloud data storage',
+      '99.9% uptime SLA guarantee',
+      'Dedicated account manager and onboarding team',
+      'Custom onboarding workshops and teacher training',
+      'Odia language UI (full translation on request)',
+      'Annual billing with GST invoice + PO acceptance',
+      'ERP integration with existing school systems',
+      'Custom AI model fine-tuning on school content',
+    ],
+    excludes: [],
+    cta: 'Contact Enterprise Team',
+    role: 'school_admin',
+  },
+]
+
 const TESTIMONIALS = [
   {
     quote: 'Arthavi cut my exam paper preparation from 3 hours to under 5 minutes. The AI-generated questions are better than what I was writing manually.',
@@ -581,6 +723,7 @@ export default function LandingPage() {
   const [modalRole, setModalRole] = useState('student')
   const [mobileMenu, setMobileMenu] = useState(false)
   const [scrolled, setScrolled] = useState(false)
+  const [coachingStudents, setCoachingStudents] = useState(20)
   const pageRef = useFadeIn()
 
   const openModal = (form = 'login', role = 'student') => {
@@ -607,6 +750,7 @@ export default function LandingPage() {
           <a href="#roles">For Schools</a>
           <a href="#features">Features</a>
           <a href="#how">How it Works</a>
+          <a href="#pricing">Pricing</a>
           <a href="#demo" style={{ color:'#6B52B0', fontWeight:700 }}>Try Demo ✨</a>
           <a href="#boards">Boards</a>
         </div>
@@ -628,10 +772,10 @@ export default function LandingPage() {
               <button className="lp-mobile-close" onClick={() => setMobileMenu(false)}>✕</button>
             </div>
             <nav className="lp-mobile-links">
-              {['#roles','#features','#how','#demo','#boards'].map((h, i) => (
+              {['#roles','#features','#how','#pricing','#demo','#boards'].map((h, i) => (
                 <a key={h} href={h} onClick={() => setMobileMenu(false)}
                   style={h === '#demo' ? { color:'#6B52B0', background:'#F0EAFF' } : {}}>
-                  {['For Schools','Features','How it Works','Try Demo ✨','Boards'][i]}
+                  {['For Schools','Features','How it Works','Pricing','Try Demo ✨','Boards'][i]}
                 </a>
               ))}
             </nav>
@@ -926,6 +1070,88 @@ export default function LandingPage() {
         </div>
       </section>
 
+      {/* ════════════════════ PRICING ════════════════════ */}
+      <section className="lp-section lp-bg-paper" id="pricing">
+        <div className="lp-section-inner">
+          <div className="lp-section-eyebrow">SECTION 5 — PRICING MODEL</div>
+          <h2 className="lp-h2">Simple, India-First Pricing<br/>for Students and Institutions</h2>
+          <p className="lp-section-sub" style={{ maxWidth: 820 }}>
+            All prices are in INR. At INR 1 = ${(1 * INR_TO_USD).toFixed(3)}, student plans sit around $1.20–$6/month per user globally while staying accessible locally.
+            Prices are reviewed quarterly and revised by {Math.round(ANNUAL_INCREASE_RATE * 100)}% annually as the brand compounds value.
+          </p>
+
+          <div className="lp-pricing-philosophy">
+            <strong>Pricing Philosophy:</strong> Free should be genuinely useful to drive word-of-mouth. Paid plans should feel like a no-brainer.
+            A school at INR 999/month pays less than one teacher&apos;s daily tutoring rate.
+          </div>
+
+          <div className="lp-pricing-grid">
+            {PRICING_PLANS.map((plan) => (
+              <article key={plan.id} className={`lp-price-card${plan.badge ? ' lp-price-card-popular' : ''}`}>
+                {plan.badge && <div className="lp-price-badge">★ {plan.badge}</div>}
+                <h3>{plan.name}</h3>
+                <p className="lp-price-main">{plan.price}</p>
+                <p className="lp-price-usd">{plan.approxUsd}</p>
+                {plan.annual && <p className="lp-price-note">{plan.annual}</p>}
+                <p className="lp-price-summary">{plan.summary}</p>
+
+                <div className="lp-price-list-wrap">
+                  <p className="lp-price-list-title">Included</p>
+                  <ul className="lp-price-list">
+                    {plan.includes.map((item) => <li key={item}>✓ {item}</li>)}
+                  </ul>
+                </div>
+
+                {plan.excludes.length > 0 && (
+                  <div className="lp-price-list-wrap lp-price-list-excl">
+                    <p className="lp-price-list-title">Not included</p>
+                    <ul className="lp-price-list">
+                      {plan.excludes.map((item) => <li key={item}>✗ {item}</li>)}
+                    </ul>
+                  </div>
+                )}
+
+                <button
+                  className={plan.badge ? 'lp-btn-primary' : 'lp-btn-ghost'}
+                  onClick={() => {
+                    if (plan.id === 'enterprise') {
+                      window.location.href = 'mailto:sales@arthavi.com?subject=Enterprise%20Pricing%20Inquiry'
+                      return
+                    }
+                    openModal('register', plan.role)
+                  }}
+                >
+                  {plan.cta}
+                </button>
+              </article>
+            ))}
+          </div>
+
+          <div className="lp-coaching-calc">
+            <div>
+              <h3>Coaching Institute Fee Estimator</h3>
+              <p>INR 99 per student per month, minimum 20 students.</p>
+            </div>
+            <div className="lp-coaching-controls">
+              <label htmlFor="coachingStudents">Students in your batch</label>
+              <input
+                id="coachingStudents"
+                type="number"
+                min="20"
+                value={coachingStudents}
+                onChange={(e) => setCoachingStudents(Math.max(20, Number(e.target.value) || 20))}
+              />
+            </div>
+            <div className="lp-coaching-output">
+              <p>Monthly Fee</p>
+              <strong>
+                INR {(Math.max(20, coachingStudents) * 99).toLocaleString('en-IN')} ({'$'}{(Math.max(20, coachingStudents) * 99 * INR_TO_USD).toFixed(2)})
+              </strong>
+            </div>
+          </div>
+        </div>
+      </section>
+
       {/* ════════════════════ WHY ARTHAVI ════════════════════ */}
       <section className="lp-section lp-bg-paper" id="why">
         <div className="lp-section-inner" style={{ textAlign:'center' }}>
@@ -1199,6 +1425,176 @@ export default function LandingPage() {
         .lp-feature-name { font-family:var(--serif,serif); font-size:17px; color:#1A1A1A; margin-bottom:8px; }
         .lp-feature-desc { font-size:13px; color:#6B7280; line-height:1.65; }
 
+        /* ── PRICING ── */
+        .lp-pricing-philosophy {
+          margin-top: 24px;
+          background: #fff;
+          border: 1px solid #d4d9e4;
+          border-left: 5px solid #6B52B0;
+          border-radius: 14px;
+          padding: 16px 18px;
+          font-size: 14px;
+          line-height: 1.7;
+          color: #374151;
+        }
+        .lp-pricing-grid {
+          display: grid;
+          grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+          gap: 16px;
+          margin-top: 28px;
+        }
+        .lp-price-card {
+          background: #fff;
+          border: 1.5px solid #d4d9e4;
+          border-radius: 16px;
+          padding: 18px;
+          display: flex;
+          flex-direction: column;
+          gap: 8px;
+          position: relative;
+          box-shadow: 0 2px 10px rgba(107,82,176,.08);
+        }
+        .lp-price-card-popular {
+          border-color: #6B52B0;
+          box-shadow: 0 12px 24px rgba(107,82,176,.18);
+        }
+        .lp-price-badge {
+          position: absolute;
+          top: -10px;
+          right: 14px;
+          background: linear-gradient(135deg,#6B52B0,#4A3890);
+          color: #fff;
+          font-size: 10px;
+          font-weight: 800;
+          letter-spacing: .08em;
+          border-radius: 100px;
+          padding: 4px 10px;
+        }
+        .lp-price-card h3 {
+          margin: 0;
+          font-family: var(--serif, serif);
+          font-size: 22px;
+          color: #1A1A1A;
+          line-height: 1.2;
+        }
+        .lp-price-main {
+          margin: 0;
+          font-size: 24px;
+          font-weight: 800;
+          color: #4A3890;
+        }
+        .lp-price-usd {
+          margin: 0;
+          font-size: 12px;
+          color: #6B7280;
+        }
+        .lp-price-note {
+          margin: 0;
+          font-size: 12px;
+          color: #475569;
+          font-weight: 600;
+        }
+        .lp-price-summary {
+          margin: 2px 0 6px;
+          font-size: 13px;
+          line-height: 1.6;
+          color: #6B7280;
+        }
+        .lp-price-list-wrap {
+          background: #f8fafc;
+          border: 1px solid #e2e8f0;
+          border-radius: 10px;
+          padding: 10px 12px;
+        }
+        .lp-price-list-excl {
+          background: #fff7f7;
+          border-color: #fee2e2;
+        }
+        .lp-price-list-title {
+          margin: 0 0 6px;
+          font-size: 11px;
+          text-transform: uppercase;
+          letter-spacing: .06em;
+          font-weight: 700;
+          color: #64748b;
+        }
+        .lp-price-list {
+          margin: 0;
+          padding: 0;
+          list-style: none;
+          display: grid;
+          gap: 6px;
+        }
+        .lp-price-list li {
+          font-size: 12.5px;
+          color: #334155;
+          line-height: 1.45;
+        }
+        .lp-coaching-calc {
+          margin-top: 20px;
+          background: linear-gradient(135deg,#fff,#F8F5FF);
+          border: 1px solid #d4d9e4;
+          border-radius: 16px;
+          padding: 18px;
+          display: grid;
+          grid-template-columns: 1.1fr .9fr .9fr;
+          gap: 16px;
+          align-items: center;
+        }
+        .lp-coaching-calc h3 {
+          margin: 0;
+          font-size: 21px;
+          font-family: var(--serif, serif);
+          color: #1A1A1A;
+        }
+        .lp-coaching-calc p {
+          margin: 4px 0 0;
+          font-size: 13px;
+          color: #6B7280;
+        }
+        .lp-coaching-controls {
+          display: flex;
+          flex-direction: column;
+          gap: 8px;
+        }
+        .lp-coaching-controls label {
+          font-size: 12px;
+          font-weight: 700;
+          color: #475569;
+          text-transform: uppercase;
+          letter-spacing: .05em;
+        }
+        .lp-coaching-controls input {
+          padding: 10px 12px;
+          border: 1.5px solid #cbd5e1;
+          border-radius: 10px;
+          font-size: 15px;
+          font-weight: 700;
+          color: #1A1A1A;
+        }
+        .lp-coaching-output {
+          background: #fff;
+          border-radius: 12px;
+          border: 1px solid #e2e8f0;
+          padding: 12px;
+          text-align: center;
+        }
+        .lp-coaching-output p {
+          margin: 0;
+          font-size: 12px;
+          color: #6B7280;
+          text-transform: uppercase;
+          letter-spacing: .06em;
+          font-weight: 700;
+        }
+        .lp-coaching-output strong {
+          display: block;
+          margin-top: 6px;
+          font-size: 20px;
+          color: #4A3890;
+          line-height: 1.3;
+        }
+
         /* ── HOW ── */
         .lp-how-section { background:linear-gradient(155deg,#1B1A3E 0%,#1B1A3E 50%,#2A2858 100%); position:relative; overflow:hidden; }
         .lp-how-section::before { content:''; position:absolute; inset:0; background:url("data:image/svg+xml,%3Csvg width='60' height='60' xmlns='http://www.w3.org/2000/svg'%3E%3Ccircle cx='30' cy='30' r='1' fill='rgba(255,255,255,.05)'/%3E%3C/svg%3E"); }
@@ -1431,6 +1827,7 @@ export default function LandingPage() {
           .lp-footer-top { grid-template-columns:1fr 1fr; gap:32px; }
           .lp-stats { gap:24px; }
           .lp-cta-banner { padding:60px 20px; }
+          .lp-coaching-calc { grid-template-columns: 1fr; }
         }
         @media(max-width:600px) {
           .lp-hero { padding:82px 16px 48px; }
@@ -1446,6 +1843,7 @@ export default function LandingPage() {
           .lp-qw-cols { grid-template-columns:1fr; }
           .lp-results-row { grid-template-columns:1fr; }
           .lp-btn-try-free { padding:14px 32px; font-size:16px; }
+          .lp-pricing-grid { grid-template-columns: 1fr; }
         }
       `}</style>
     </div>

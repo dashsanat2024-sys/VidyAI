@@ -555,6 +555,166 @@ _DEFAULT_ROLE_QUOTAS: dict[str, dict[str, int]] = {
     "admin":           {f: _UNLIMITED for f in QUOTA_FEATURES},
 }
 
+# Pricing-aligned quota presets for quick admin application.
+QUOTA_PRESETS: dict[str, dict] = {
+    "role_defaults": {
+        "free-student": {
+            "label": "Free - Student",
+            "summary": "Entry-level monthly usage for student trial users.",
+            "template": {
+                "curriculum_load": 3,
+                "curriculum_tool": 3,
+                "summarise": 5,
+                "flashcards": 10,
+                "video_explanation": 0,
+                "practice_generate": 5,
+                "practice_evaluate": 5,
+                "chat": 3,
+                "generate_questions": 0,
+                "evaluate": 0,
+                "uk_curriculum": 3,
+            },
+        },
+        "student-pro": {
+            "label": "Student Pro",
+            "summary": "High daily limits for paid individual students.",
+            "template": {
+                "curriculum_load": _UNLIMITED,
+                "curriculum_tool": _UNLIMITED,
+                "summarise": _UNLIMITED,
+                "flashcards": _UNLIMITED,
+                "video_explanation": _UNLIMITED,
+                "practice_generate": _UNLIMITED,
+                "practice_evaluate": _UNLIMITED,
+                "chat": _UNLIMITED,
+                "generate_questions": 20,
+                "evaluate": 20,
+                "uk_curriculum": _UNLIMITED,
+            },
+        },
+        "parent-lite": {
+            "label": "Parent Lite",
+            "summary": "Balanced parent access for supervision and basic support.",
+            "template": {
+                "curriculum_load": 10,
+                "curriculum_tool": 10,
+                "summarise": 6,
+                "flashcards": 6,
+                "video_explanation": 3,
+                "practice_generate": 10,
+                "practice_evaluate": 20,
+                "chat": 25,
+                "generate_questions": 0,
+                "evaluate": 0,
+                "uk_curriculum": 8,
+            },
+        },
+        "teacher-pro": {
+            "label": "Teacher Pro",
+            "summary": "Higher teacher limits for paper generation and evaluation.",
+            "template": {
+                "curriculum_load": 80,
+                "curriculum_tool": 60,
+                "summarise": 50,
+                "flashcards": 50,
+                "video_explanation": 25,
+                "practice_generate": 120,
+                "practice_evaluate": 200,
+                "chat": 200,
+                "generate_questions": 80,
+                "evaluate": 200,
+                "uk_curriculum": 80,
+            },
+        },
+    },
+    "institution": {
+        "school-starter": {
+            "label": "School Starter",
+            "summary": "Core school setup for smaller institutions.",
+            "user_daily": {
+                "curriculum_load": 30,
+                "curriculum_tool": 20,
+                "summarise": 15,
+                "flashcards": 15,
+                "video_explanation": 8,
+                "practice_generate": 40,
+                "practice_evaluate": 60,
+                "chat": 60,
+                "generate_questions": 20,
+                "evaluate": 80,
+                "uk_curriculum": 20,
+            },
+            "inst_daily": {
+                "generate_questions": 400,
+                "evaluate": 800,
+                "practice_evaluate": 1200,
+                "chat": 3000,
+            },
+        },
+        "school-growth": {
+            "label": "School Growth",
+            "summary": "Expanded school limits for larger student base.",
+            "user_daily": {
+                "curriculum_load": 60,
+                "curriculum_tool": 50,
+                "summarise": 40,
+                "flashcards": 40,
+                "video_explanation": 20,
+                "practice_generate": 100,
+                "practice_evaluate": 150,
+                "chat": 120,
+                "generate_questions": 60,
+                "evaluate": 180,
+                "uk_curriculum": 60,
+            },
+            "inst_daily": {
+                "generate_questions": 1500,
+                "evaluate": 4000,
+                "practice_evaluate": 5000,
+                "chat": 12000,
+            },
+        },
+        "coaching": {
+            "label": "Coaching Institute",
+            "summary": "High-throughput preset for test-prep batches.",
+            "user_daily": {
+                "curriculum_load": 80,
+                "curriculum_tool": 80,
+                "summarise": 60,
+                "flashcards": 60,
+                "video_explanation": 30,
+                "practice_generate": 150,
+                "practice_evaluate": 250,
+                "chat": 180,
+                "generate_questions": 100,
+                "evaluate": 250,
+                "uk_curriculum": 80,
+            },
+            "inst_daily": {
+                "generate_questions": 3000,
+                "evaluate": 10000,
+                "practice_evaluate": 12000,
+                "chat": 25000,
+            },
+        },
+        "enterprise": {
+            "label": "Enterprise & Government",
+            "summary": "Near-unlimited institutional capacity.",
+            "user_daily": {f: _UNLIMITED for f in QUOTA_FEATURES},
+            "inst_daily": {f: _UNLIMITED for f in QUOTA_FEATURES},
+        },
+    },
+}
+
+def _visible_quota_presets(caller_role: str) -> dict:
+    """Return presets the caller can apply."""
+    if caller_role == "admin":
+        return QUOTA_PRESETS
+    return {
+        "role_defaults": {},
+        "institution": {},
+    }
+
 # ── Default database seed ──────────────────────────────────────────────────────
 def _default_db() -> dict:
     return {
@@ -7665,6 +7825,7 @@ def get_quota_config():
             "user_overrides":       qc.get("user_overrides", {}),
             "features":             QUOTA_FEATURES,
             "can_edit_role_defaults": False,
+            "quota_presets":        _visible_quota_presets(caller["role"]),
         })
     return jsonify({
         "role_defaults":        qc.get("role_defaults", _DEFAULT_ROLE_QUOTAS),
@@ -7672,6 +7833,95 @@ def get_quota_config():
         "user_overrides":       qc.get("user_overrides", {}),
         "features":             QUOTA_FEATURES,
         "can_edit_role_defaults": True,
+        "quota_presets":        _visible_quota_presets(caller["role"]),
+    })
+
+@app.post("/api/admin/quota-presets/apply")
+@auth(roles=["admin"])
+def apply_quota_preset():
+    """
+    Apply a named quota preset.
+    Body:
+      {
+        "preset_id": "student-pro" | "school-starter" | ...,
+        "target": {
+          "type": "role_default" | "institution",
+          "role": "student" | ...,
+          "institution": "School Name"
+        }
+      }
+    """
+    caller = request.user
+    b = request.json or {}
+    preset_id = str(b.get("preset_id", "")).strip()
+    target = b.get("target") or {}
+    target_type = str(target.get("type", "")).strip()
+    if not preset_id or target_type not in ("role_default", "institution"):
+        return jsonify({"error": "preset_id and valid target.type are required"}), 400
+
+    qc = _qc_load()
+
+    if target_type == "role_default":
+        if caller["role"] != "admin":
+            return jsonify({"error": "Only admin can apply role-default presets"}), 403
+        preset = (QUOTA_PRESETS.get("role_defaults") or {}).get(preset_id)
+        if not preset:
+            return jsonify({"error": f"Unknown role preset: {preset_id}"}), 400
+        role = str(target.get("role", "")).strip()
+        if role not in ("student", "parent", "teacher", "institute_admin", "admin"):
+            return jsonify({"error": "Valid target.role is required"}), 400
+        qc.setdefault("role_defaults", {})
+        qc["role_defaults"].setdefault(role, {})
+        template = preset.get("template", {})
+        for feat in QUOTA_FEATURES:
+            if feat in template:
+                qc["role_defaults"][role][feat] = int(template[feat])
+        _qc_save(qc)
+        return jsonify({
+            "ok": True,
+            "applied": {
+                "preset_id": preset_id,
+                "target": {"type": "role_default", "role": role},
+            },
+            "role_defaults": qc.get("role_defaults", {}),
+        })
+
+    preset = (QUOTA_PRESETS.get("institution") or {}).get(preset_id)
+    if not preset:
+        return jsonify({"error": f"Unknown institution preset: {preset_id}"}), 400
+    inst_name = str(target.get("institution", "")).strip()
+    if caller["role"] == "institute_admin":
+        my_inst = (caller.get("institution") or "").strip()
+        if not my_inst:
+            return jsonify({"error": "Your account has no institution"}), 400
+        if inst_name and inst_name.lower() != my_inst.lower():
+            return jsonify({"error": "Forbidden - not your institution"}), 403
+        inst_name = my_inst
+    if not inst_name:
+        return jsonify({"error": "target.institution is required"}), 400
+
+    qc.setdefault("institution_overrides", {})
+    qc["institution_overrides"].setdefault(inst_name, {})
+    cfg = qc["institution_overrides"][inst_name]
+    cfg["user_daily"] = {
+        feat: int(limit)
+        for feat, limit in (preset.get("user_daily") or {}).items()
+        if feat in QUOTA_FEATURES
+    }
+    cfg["inst_daily"] = {
+        feat: int(limit)
+        for feat, limit in (preset.get("inst_daily") or {}).items()
+        if feat in QUOTA_FEATURES
+    }
+    _qc_save(qc)
+    return jsonify({
+        "ok": True,
+        "applied": {
+            "preset_id": preset_id,
+            "target": {"type": "institution", "institution": inst_name},
+        },
+        "institution": inst_name,
+        "config": cfg,
     })
 
 @app.patch("/api/admin/quota-config/role-defaults")

@@ -7,6 +7,12 @@ import { API_BASE } from './utils/api'
 
 function Root() {
   const { isLoggedIn } = useAuth()
+  const forceLanding =
+    typeof window !== 'undefined' &&
+    new URLSearchParams(window.location.search).get('landing') === '1'
+
+  if (forceLanding) return <LandingPage />
+
   return isLoggedIn
     ? <AppProvider><AppPage /></AppProvider>
     : <LandingPage />

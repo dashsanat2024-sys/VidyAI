@@ -4,7 +4,7 @@
  */
 import { useState, useEffect, useCallback } from 'react'
 import { useAuth }  from '../../context/AuthContext'
-import { apiGet }   from '../../utils/api'
+import { apiGet, API_BASE }   from '../../utils/api'
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 const ROLES = ['student', 'parent', 'teacher', 'institute_admin', 'admin']
@@ -30,12 +30,14 @@ const inputStyle = {
 }
 
 async function apiFetch(url, token, method = 'GET', body = null) {
-  const res = await fetch(url, {
+  // url is like '/api/admin/quota-config'; strip the /api prefix since API_BASE includes it
+  const fullUrl = API_BASE + url.replace(/^\/api/, '')
+  const res = await fetch(fullUrl, {
     method,
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
     body: body ? JSON.stringify(body) : undefined,
   })
-  const data = await res.json()
+  const data = await res.json().catch(() => ({}))
   if (!res.ok) throw new Error(data.error || 'Request failed')
   return data
 }
@@ -77,6 +79,136 @@ function SaveBtn({ saving, onClick, label = 'Save Changes' }) {
                opacity: saving ? .6 : 1 }}>
       {saving ? '⏳ Saving…' : label}
     </button>
+  )
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  TAB 0 — Plan Presets
+// ══════════════════════════════════════════════════════════════════════════════
+function PlanPresetsTab({ config, token, callerRole, callerInst, showToast, onSaved }) {
+  const [selectedRole, setSelectedRole] = useState('student')
+  const [selectedInst, setSelectedInst] = useState(callerRole === 'institute_admin' ? callerInst : '')
+  const [savingKey, setSavingKey] = useState('')
+
+  const rolePresets = config?.quota_presets?.role_defaults || {}
+  const instPresets = config?.quota_presets?.institution || {}
+  const instOptions = Object.keys(config?.institution_overrides || {})
+
+  const applyPreset = async (presetId, target) => {
+    setSavingKey(`${presetId}:${target.type}`)
+    try {
+      await apiFetch('/api/admin/quota-presets/apply', token, 'POST', {
+        preset_id: presetId,
+        target,
+      })
+      showToast?.('Preset applied. You can fine-tune values in manual tabs.', 'success')
+      onSaved?.()
+    } catch (e) {
+      showToast?.(e.message, 'error')
+    }
+    setSavingKey('')
+  }
+
+  return (
+    <div>
+      <p style={{ color: 'var(--muted)', fontSize: 13, marginBottom: 16 }}>
+        Apply pricing-linked quota presets in one click, then fine-tune in{' '}
+        <strong>Role Quotas</strong>, <strong>Institution Overrides</strong>, or{' '}
+        <strong>User Overrides</strong>.
+      </p>
+
+      {callerRole !== 'admin' && (
+        <div style={{ padding: '10px 14px', background: '#eff6ff', borderRadius: 8,
+                      fontSize: 13, color: '#1d4ed8', marginBottom: 16 }}>
+          You can apply institution presets for your own institution and still edit quotas manually.
+        </div>
+      )}
+
+      {callerRole === 'admin' && (
+        <Section title="Role-Based Presets">
+          <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap', alignItems: 'center' }}>
+            <label style={{ fontSize: 12, color: '#64748b', fontWeight: 600 }}>Apply to role</label>
+            <select
+              value={selectedRole}
+              onChange={(e) => setSelectedRole(e.target.value)}
+              style={{ ...inputStyle, width: 'auto', textAlign: 'left', padding: '5px 8px' }}
+            >
+              {ROLES.map((r) => <option key={r} value={r}>{ROLE_LABEL[r]}</option>)}
+            </select>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 12 }}>
+            {Object.entries(rolePresets).map(([id, preset]) => (
+              <div key={id} className="card" style={{ padding: 14 }}>
+                <div style={{ fontWeight: 700, color: 'var(--indigo)', marginBottom: 6 }}>{preset.label}</div>
+                <div style={{ fontSize: 12, color: '#64748b', marginBottom: 10 }}>{preset.summary}</div>
+                <button
+                  onClick={() => applyPreset(id, { type: 'role_default', role: selectedRole })}
+                  disabled={Boolean(savingKey)}
+                  style={{ padding: '6px 12px', borderRadius: 6, background: 'var(--indigo)', color: '#fff',
+                           border: 'none', fontWeight: 600, fontSize: 12, cursor: savingKey ? 'not-allowed' : 'pointer',
+                           fontFamily: 'inherit', opacity: savingKey ? 0.7 : 1 }}
+                >
+                  {savingKey === `${id}:role_default` ? 'Applying...' : `Apply to ${ROLE_LABEL[selectedRole]}`}
+                </button>
+              </div>
+            ))}
+            {Object.keys(rolePresets).length === 0 && (
+              <div style={{ color: '#94a3b8', fontSize: 13 }}>No role presets available.</div>
+            )}
+          </div>
+        </Section>
+      )}
+
+      <Section title="Institution Presets">
+        {callerRole === 'admin' ? (
+          <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap', alignItems: 'center' }}>
+            <label style={{ fontSize: 12, color: '#64748b', fontWeight: 600 }}>Institution</label>
+            <input
+              style={{ ...inputStyle, width: 240, textAlign: 'left' }}
+              value={selectedInst}
+              onChange={(e) => setSelectedInst(e.target.value)}
+              placeholder="Type institution name"
+              list="quota-inst-list"
+            />
+            <datalist id="quota-inst-list">
+              {instOptions.map(inst => <option key={inst} value={inst} />)}
+            </datalist>
+          </div>
+        ) : (
+          <div style={{ fontSize: 12, color: '#64748b', marginBottom: 12 }}>
+            Target institution: <strong>{callerInst || 'Not set'}</strong>
+          </div>
+        )}
+
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 12 }}>
+          {Object.entries(instPresets).map(([id, preset]) => (
+            <div key={id} className="card" style={{ padding: 14 }}>
+              <div style={{ fontWeight: 700, color: 'var(--indigo)', marginBottom: 6 }}>{preset.label}</div>
+              <div style={{ fontSize: 12, color: '#64748b', marginBottom: 10 }}>{preset.summary}</div>
+              <button
+                onClick={() => {
+                  const instTarget = callerRole === 'institute_admin' ? callerInst : selectedInst.trim()
+                  if (!instTarget) {
+                    showToast?.('Select an institution first', 'error')
+                    return
+                  }
+                  applyPreset(id, { type: 'institution', institution: instTarget })
+                }}
+                disabled={Boolean(savingKey)}
+                style={{ padding: '6px 12px', borderRadius: 6, background: '#0f766e', color: '#fff',
+                         border: 'none', fontWeight: 600, fontSize: 12, cursor: savingKey ? 'not-allowed' : 'pointer',
+                         fontFamily: 'inherit', opacity: savingKey ? 0.7 : 1 }}
+              >
+                {savingKey === `${id}:institution` ? 'Applying...' : 'Apply to Institution'}
+              </button>
+            </div>
+          ))}
+          {Object.keys(instPresets).length === 0 && (
+            <div style={{ color: '#94a3b8', fontSize: 13 }}>No institution presets available.</div>
+          )}
+        </div>
+      </Section>
+    </div>
   )
 }
 
@@ -757,6 +889,7 @@ export default function AdminPanel({ showToast }) {
   if (!canAccess) return null
 
   const TABS = [
+    ...(callerRole === 'admin' ? [{ id: 'presets', label: '💼 Plan Presets' }] : []),
     { id: 'roles',   label: '⚖ Role Quotas'         },
     { id: 'inst',    label: '🏫 Institution Overrides' },
     { id: 'users',   label: '👤 User Overrides'      },
@@ -781,6 +914,16 @@ export default function AdminPanel({ showToast }) {
 
         {loading && <div style={{ color: '#94a3b8', fontSize: 13 }}>Loading configuration…</div>}
 
+        {!loading && callerRole === 'admin' && tab === 'presets' && (
+          <PlanPresetsTab
+            config={config}
+            token={token}
+            callerRole={callerRole}
+            callerInst={callerInst}
+            showToast={showToast}
+            onSaved={fetchConfig}
+          />
+        )}
         {!loading && tab === 'roles' && (
           <RoleDefaultsTab
             config={config} features={features}
