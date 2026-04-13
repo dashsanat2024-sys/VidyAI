@@ -1,54 +1,116 @@
 /**
- * Sidebar.jsx — Paarthivi Smart Learning
- * Navigation sidebar matching the brand CSS (index.css).
- * Uses useApp() for panel switching, useAuth() for user info + role guards.
+ * Sidebar.jsx — Arthavi Smart Learning
+ * Role-based navigation: student / teacher / parent / institute_admin / admin
+ *
+ * ROLE JOURNEYS (by design):
+ *   Student       → Learn: Curriculum → AI Tutor → Practice → Goal → Grow → Plan
+ *   Teacher       → Create → Assign → Evaluate → Report  (tool dashboard feel)
+ *   Parent        → Reports → Progress → Alerts  (clarity + assurance)
+ *   Institute     → Manage teachers/students, bulk eval, analytics
+ *   Admin         → Full system control
  */
 import { useApp }  from '../../context/AppContext'
 import { useAuth } from '../../context/AuthContext'
 import Logo from '../shared/Logo'
 
-const NAV = [
-  {
-    group: 'Learn',
-    items: [
-      { id: 'dashboard',            icon: '🏠', label: 'Dashboard'            },
-      { id: 'chat',                 icon: '💬', label: 'AI Tutor'              },
-      { id: 'curriculum',           icon: '📚', label: 'Curriculum Hub'        },
-      { id: 'interactive-practice', icon: '🎯', label: 'Practice Mode'         },
-    ],
-  },
-  {
-    group: 'Teach',
-    roles: ['teacher', 'institute_admin', 'admin'],
-    items: [
-      { id: 'qmaster',  icon: '📋', label: 'Question Master' },
-      { id: 'qgen',     icon: '✨', label: 'Quick QGen'      },
-      { id: 'eval',     icon: '📊', label: 'Evaluate'        },
-      { id: 'reports',  icon: '📈', label: 'Reports'         },
-    ],
-  },
-  {
-    group: 'Manage',
-    roles: ['institute_admin', 'admin'],
-    items: [
-      { id: 'institute', icon: '🏫', label: 'Institute'  },
-      { id: 'analytics', icon: '📉', label: 'Analytics'  },
-      { id: 'visitor-log', icon: '👥', label: 'Visitor Log' },
-      { id: 'quota',     icon: '🛡', label: 'Quota Manager' },
-      { id: 'settings',  icon: '⚙️', label: 'Settings'   },
-    ],
-  },
-]
+// ─── Role→ which item IDs are visible (ordered) ────────────────────────────
+const ROLE_NAV = {
+  student: [
+    { group: 'Learn', items: [
+      { id: 'dashboard',            icon: '🏠', label: 'Dashboard'         },
+      { id: 'curriculum',           icon: '📚', label: 'Curriculum Hub',   badge: 'Start Here' },
+      { id: 'chat',                 icon: '💬', label: 'AI Tutor'          },
+      { id: 'interactive-practice', icon: '🎯', label: 'Practice Mode'     },
+    ]},
+    { group: 'Goal', items: [
+      { id: 'senior-prep',  icon: '🚀', label: 'Entrance Prep'  },
+      { id: 'degree-hub',   icon: '🏛️', label: 'Degree Hub'     },
+    ]},
+    { group: 'Grow', items: [
+      { id: 'free-courses', icon: '🎓', label: 'SkillUp Hub'    },
+      { id: 'career-path',  icon: '🧭', label: 'Career Compass' },
+    ]},
+  ],
 
-export default function Sidebar({ isOpen, onClose }) {
+  teacher: [
+    { group: 'Create', items: [
+      { id: 'dashboard', icon: '🏠', label: 'Dashboard'       },
+      { id: 'qgen',      icon: '✨', label: 'Quick QGen',     badge: 'Fast' },
+      { id: 'qmaster',   icon: '📋', label: 'Question Master' },
+    ]},
+    { group: 'Teach', items: [
+      { id: 'curriculum',           icon: '📚', label: 'Curriculum Hub'  },
+      { id: 'interactive-practice', icon: '🎯', label: 'Assign Practice' },
+    ]},
+    { group: 'Evaluate', items: [
+      { id: 'eval',    icon: '📊', label: 'Evaluate'  },
+      { id: 'reports', icon: '📈', label: 'Reports'   },
+    ]},
+  ],
+
+  parent: [
+    { group: 'My Child', items: [
+      { id: 'dashboard', icon: '🏠', label: 'Dashboard'           },
+      { id: 'reports',   icon: '📈', label: 'Progress Reports',   badge: 'Key' },
+      { id: 'analytics', icon: '📉', label: 'Performance Charts'  },
+    ]},
+    { group: 'Support', items: [
+      { id: 'chat', icon: '💬', label: 'AI Study Support' },
+    ]},
+  ],
+
+  institute_admin: [
+    { group: 'Overview', items: [
+      { id: 'dashboard',  icon: '🏠', label: 'Dashboard'        },
+      { id: 'institute',  icon: '🏫', label: 'Campus Directory' },
+      { id: 'analytics',  icon: '📉', label: 'School Analytics' },
+    ]},
+    { group: 'Academics', items: [
+      { id: 'qmaster',    icon: '📋', label: 'Question Master' },
+      { id: 'eval',       icon: '📊', label: 'Bulk Evaluate'   },
+      { id: 'reports',    icon: '📈', label: 'School Reports'  },
+    ]},
+    { group: 'Manage', items: [
+      { id: 'visitor-log', icon: '👥', label: 'Visitor Log'    },
+      { id: 'quota',       icon: '🛡',  label: 'Quota Manager' },
+      { id: 'settings',    icon: '⚙️', label: 'Settings'       },
+    ]},
+  ],
+
+  admin: [
+    { group: 'Overview', items: [
+      { id: 'dashboard',  icon: '🏠', label: 'Dashboard'        },
+      { id: 'analytics',  icon: '📉', label: 'Analytics'        },
+      { id: 'visitor-log',icon: '👥', label: 'Visitor Logs'     },
+    ]},
+    { group: 'Institutes', items: [
+      { id: 'institute',  icon: '🏫', label: 'Institute Manager' },
+      { id: 'quota',      icon: '🛡',  label: 'Quota Manager'    },
+    ]},
+    { group: 'Finance', items: [
+      { id: 'finance',    icon: '💹', label: 'Finance Manager',  badge: 'New' },
+    ]},
+    { group: 'System', items: [
+      { id: 'settings',   icon: '⚙️', label: 'Settings'          },
+      // Full access — teachers' tools also accessible
+      { id: 'qmaster',    icon: '📋', label: 'Question Master'   },
+      { id: 'eval',       icon: '📊', label: 'Evaluate'          },
+      { id: 'reports',    icon: '📈', label: 'Reports'           },
+    ]},
+  ],
+}
+
+export default function Sidebar({ isOpen, onClose, onUpgrade }) {
   const { activePanel, setActivePanel, platformSettings } = useApp()
   const { me: user, logout }           = useAuth()
   const role = user?.role || 'student'
 
   const navigate = (id) => {
     setActivePanel(id)
-    onClose?.()   // close mobile drawer
+    onClose?.()
   }
+
+  const groups = ROLE_NAV[role] || ROLE_NAV.student
 
   return (
     <>
@@ -72,24 +134,32 @@ export default function Sidebar({ isOpen, onClose }) {
           </div>
         </div>
 
+        {/* Role badge */}
+        <div style={{ padding: '6px 16px 2px', marginBottom: 2 }}>
+          <span style={{
+            display: 'inline-block', padding: '3px 10px', borderRadius: 100,
+            fontSize: 10, fontWeight: 700, letterSpacing: '.05em',
+            background: 'rgba(255,255,255,.12)', color: 'rgba(255,255,255,.7)',
+            textTransform: 'uppercase',
+          }}>
+            {{
+              student: '👨‍🎓 Student',
+              teacher: '🧑‍🏫 Teacher',
+              parent:  '👨‍👩‍👧 Parent',
+              institute_admin: '🏫 Institute',
+              admin: '⚙️ Admin',
+            }[role] || role}
+          </span>
+        </div>
+
         {/* Navigation */}
         <nav className="sb-nav">
-          {NAV.map(group => {
-            // Role-gate entire group
-            if (group.roles && !group.roles.includes(role)) return null
-            
-            // Check if ANY item in group is visible
+          {groups.map(group => {
             const visibleItems = group.items.filter(item => {
-              if (item.roles && !item.roles.includes(role)) return false
-              // Settings always visible for admin
-              if (item.id === 'settings' && (role === 'admin' || role === 'institute_admin')) return true
-              // Check platform visibility settings
               if (platformSettings?.sidebar?.[item.id] === false) return false
               return true
             })
-
             if (visibleItems.length === 0) return null
-
             return (
               <div key={group.group}>
                 <div className="nav-group-label">{group.group}</div>
@@ -129,6 +199,19 @@ export default function Sidebar({ isOpen, onClose }) {
               <div className="sb-role">{role}</div>
             </div>
           </div>
+          {role === 'student' && !user?.plan && onUpgrade && (
+            <button
+              onClick={() => onUpgrade({ id: 'student-pro' })}
+              style={{
+                width: '100%', padding: '9px', borderRadius: '8px', marginBottom: 8,
+                background: 'linear-gradient(135deg,#6366f1,#8b5cf6)',
+                border: 'none', color: '#fff', fontSize: '12px', fontWeight: '700',
+                cursor: 'pointer', fontFamily: 'inherit', letterSpacing: 0.3,
+              }}
+            >
+              ⚡ Upgrade to Pro — ₹149/mo
+            </button>
+          )}
           <button
             style={{
               width: '100%', padding: '8px', borderRadius: '8px',

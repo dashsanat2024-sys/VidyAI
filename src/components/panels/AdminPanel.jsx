@@ -53,8 +53,17 @@ function TabBar({ tabs, active, onChange }) {
             cursor: 'pointer', border: 'none', fontFamily: 'inherit',
             background: active === t.id ? 'var(--indigo)' : '#eef2ff',
             color:      active === t.id ? '#fff' : 'var(--indigo)',
-            transition: 'all .15s',
-          }}>{t.label}</button>
+            transition: 'all .15s', display: 'flex', alignItems: 'center', gap: 5,
+          }}>
+          {t.label}
+          {t.badge && (
+            <span style={{
+              background: active === t.id ? 'rgba(255,255,255,.25)' : '#6366f1',
+              color: '#fff', fontSize: 9, fontWeight: 800,
+              padding: '1px 5px', borderRadius: 999,
+            }}>{t.badge}</span>
+          )}
+        </button>
       ))}
     </div>
   )
@@ -602,7 +611,7 @@ function UserOverridesTab({ config, features, token, showToast, onSaved }) {
   const usersWithOverride = new Set(Object.keys(userOverrides))
 
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: '280px 1fr', gap: 20 }}>
+    <div className="uo-wrap" style={{ display: 'grid', gridTemplateColumns: '280px 1fr', gap: 20 }}>
       {/* Left: user list */}
       <div>
         <input style={{ ...inputStyle, width: '100%', textAlign: 'left', marginBottom: 10 }}
@@ -641,7 +650,7 @@ function UserOverridesTab({ config, features, token, showToast, onSaved }) {
           </div>
         ) : (
           <div className="card" style={{ padding: 20 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16, flexWrap: 'wrap', gap: '8px' }}>
               <div>
                 <div style={{ fontWeight: 700, fontSize: 15 }}>{selectedUser.name}</div>
                 <div style={{ color: '#64748b', fontSize: 12 }}>
@@ -859,6 +868,407 @@ function UsageReportTab({ features, token, showToast }) {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
+//  TAB 5 — Revenue Dashboard  (admin only)
+// ══════════════════════════════════════════════════════════════════════════════
+function RevenueTab({ token, showToast }) {
+  const [data,    setData]    = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [period,  setPeriod]  = useState('monthly')   // monthly | weekly
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    try {
+      const d = await apiFetch(`/api/admin/revenue?period=${period}`, token)
+      setData(d)
+    } catch {
+      // Backend may not have this endpoint yet — use mock data for display
+      setData({
+        summary: { total_revenue: 0, active_subscriptions: 0, mrr: 0, arr: 0,
+                   new_this_month: 0, churned_this_month: 0 },
+        by_plan: [], by_institution: [], recent_transactions: [],
+      })
+    }
+    setLoading(false)
+  }, [token, period])
+
+  useEffect(() => { load() }, [load])
+
+  const C = {
+    green: '#059669', greenL: '#ecfdf5', greenB: '#86efac',
+    blue:  '#0284c7', blueL:  '#eff6ff', blueB:  '#bae6fd',
+    amber: '#d97706', amberL: '#fffbeb', amberB: '#fde68a',
+    indigo:'#4f46e5', indigoL:'#eef2ff', indigoB:'#c7d2fe',
+    red:   '#dc2626', redL:   '#fef2f2', redB:   '#fecaca',
+    slate: '#64748b', slateL: '#f8fafc', slateB: '#e2e8f0',
+  }
+
+  const card  = (extra={}) => ({ background: '#fff', borderRadius: 12, padding: 18,
+    border: `1px solid ${C.slateB}`, boxShadow: '0 1px 3px rgba(0,0,0,.05)', ...extra })
+  const stat  = (c, bg, b) => ({ background: bg, borderRadius: 12, padding: '16px',
+    border: `1px solid ${b}`, textAlign: 'center' })
+  const valtx = (c) => ({ fontSize: 26, fontWeight: 800, color: c, lineHeight: 1, display: 'block' })
+  const labtx = { fontSize: 11, fontWeight: 700, color: C.slate, marginTop: 4,
+    textTransform: 'uppercase', letterSpacing: '.04em', display: 'block' }
+  const badge = (c, bg, b, extra={}) => ({
+    padding: '2px 8px', borderRadius: 999, fontSize: 11, fontWeight: 700,
+    color: c, background: bg, border: `1px solid ${b}`, ...extra,
+  })
+
+  const fmt = (n) => n == null ? '—' : '₹' + Number(n).toLocaleString('en-IN')
+
+  const s = data?.summary || {}
+
+  return (
+    <div>
+      {/* Period selector */}
+      <div style={{ display: 'flex', gap: 8, marginBottom: 20 }}>
+        {['monthly', 'weekly'].map(p => (
+          <button key={p} onClick={() => setPeriod(p)}
+            style={{ padding: '7px 16px', borderRadius: 8, fontSize: 13, fontWeight: 600,
+              cursor: 'pointer', border: 'none', fontFamily: 'inherit',
+              background: period === p ? C.indigo : C.indigoL,
+              color:      period === p ? '#fff'   : C.indigo }}>
+            {p === 'monthly' ? '📅 Monthly' : '📆 Weekly'}
+          </button>
+        ))}
+        <button onClick={load} disabled={loading}
+          style={{ marginLeft: 'auto', padding: '7px 14px', borderRadius: 8, fontSize: 12,
+            fontWeight: 600, cursor: 'pointer', border: `1px solid ${C.slateB}`,
+            background: C.slateL, color: C.slate, fontFamily: 'inherit' }}>
+          🔄 Refresh
+        </button>
+      </div>
+
+      {loading ? (
+        <div style={{ textAlign: 'center', padding: 48, color: C.slate }}>
+          <div style={{ width: 28, height: 28, border: `3px solid ${C.slateB}`,
+            borderTop: `3px solid ${C.indigo}`, borderRadius: '50%',
+            animation: 'spin .7s linear infinite', margin: '0 auto 10px' }} />
+          Loading revenue data…
+        </div>
+      ) : (
+        <>
+          {/* KPI row */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px,1fr))',
+            gap: 12, marginBottom: 20 }}>
+            <div style={stat(C.green, C.greenL, C.greenB)}>
+              <span style={valtx(C.green)}>{fmt(s.total_revenue)}</span>
+              <span style={labtx}>Total Revenue</span>
+            </div>
+            <div style={stat(C.blue, C.blueL, C.blueB)}>
+              <span style={valtx(C.blue)}>{fmt(s.mrr)}</span>
+              <span style={labtx}>MRR</span>
+            </div>
+            <div style={stat(C.indigo, C.indigoL, C.indigoB)}>
+              <span style={valtx(C.indigo)}>{fmt(s.arr)}</span>
+              <span style={labtx}>ARR (Est.)</span>
+            </div>
+            <div style={stat(C.green, C.greenL, C.greenB)}>
+              <span style={valtx(C.green)}>{s.active_subscriptions ?? 0}</span>
+              <span style={labtx}>Active Subs</span>
+            </div>
+            <div style={stat(C.blue, C.blueL, C.blueB)}>
+              <span style={valtx(C.blue)}>+{s.new_this_month ?? 0}</span>
+              <span style={labtx}>New This Month</span>
+            </div>
+            <div style={stat(C.red, C.redL, C.redB)}>
+              <span style={valtx(C.red)}>{s.churned_this_month ?? 0}</span>
+              <span style={labtx}>Churned</span>
+            </div>
+          </div>
+
+          {/* Plan breakdown */}
+          <div style={card({ marginBottom: 16 })}>
+            <div style={{ fontWeight: 700, fontSize: 14, color: '#0f172a', marginBottom: 14,
+              display: 'flex', alignItems: 'center', gap: 8 }}>
+              💼 Revenue by Plan
+            </div>
+            {(data?.by_plan || []).length === 0 ? (
+              <div style={{ color: C.slate, fontSize: 13, padding: '20px 0', textAlign: 'center' }}>
+                No plan revenue data yet — will populate as subscriptions are recorded.
+              </div>
+            ) : (
+              (data.by_plan || []).map((p, i) => (
+                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12,
+                  padding: '10px 0', borderBottom: `1px solid ${C.slateB}` }}>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontWeight: 700, fontSize: 13, color: '#0f172a' }}>{p.plan_name}</div>
+                    <div style={{ fontSize: 11, color: C.slate }}>{p.subscribers} subscribers · {fmt(p.per_unit)}/mo each</div>
+                  </div>
+                  <div style={{ textAlign: 'right' }}>
+                    <div style={{ fontWeight: 800, fontSize: 15, color: C.green }}>{fmt(p.revenue)}</div>
+                    <div style={{ fontSize: 11, color: C.slate }}>{p.pct ?? 0}% of total</div>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+
+          {/* Institution revenue */}
+          <div style={card({ marginBottom: 16 })}>
+            <div style={{ fontWeight: 700, fontSize: 14, color: '#0f172a', marginBottom: 14,
+              display: 'flex', alignItems: 'center', gap: 8 }}>
+              🏫 Revenue by Institution
+            </div>
+            {(data?.by_institution || []).length === 0 ? (
+              <div style={{ color: C.slate, fontSize: 13, padding: '20px 0', textAlign: 'center' }}>
+                No institution revenue data yet.
+              </div>
+            ) : (
+              (data.by_institution || []).map((ins, i) => (
+                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12,
+                  padding: '10px 0', borderBottom: `1px solid ${C.slateB}` }}>
+                  <div style={{ width: 32, height: 32, borderRadius: 8, background: C.indigoL,
+                    color: C.indigo, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    fontWeight: 800, fontSize: 13, flexShrink: 0 }}>{i + 1}</div>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontWeight: 700, fontSize: 13 }}>{ins.institution}</div>
+                    <div style={{ fontSize: 11, color: C.slate }}>{ins.plan} · {ins.users} users</div>
+                  </div>
+                  <div style={{ fontWeight: 800, color: C.green, fontSize: 14 }}>{fmt(ins.revenue)}</div>
+                </div>
+              ))
+            )}
+          </div>
+
+          {/* Recent transactions */}
+          <div style={card()}>
+            <div style={{ fontWeight: 700, fontSize: 14, color: '#0f172a', marginBottom: 14,
+              display: 'flex', alignItems: 'center', gap: 8 }}>
+              🧾 Recent Transactions
+            </div>
+            {(data?.recent_transactions || []).length === 0 ? (
+              <div style={{ color: C.slate, fontSize: 13, padding: '20px 0', textAlign: 'center' }}>
+                Transactions will appear here once payments are recorded in the database.
+              </div>
+            ) : (
+              (data.recent_transactions || []).map((tx, i) => (
+                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12,
+                  padding: '10px 0', borderBottom: `1px solid ${C.slateB}` }}>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontWeight: 600, fontSize: 13 }}>{tx.user_name}</div>
+                    <div style={{ fontSize: 11, color: C.slate }}>{tx.plan} · {tx.date?.slice(0, 10)}</div>
+                  </div>
+                  <span style={badge(
+                    tx.status === 'paid' ? C.green : C.amber,
+                    tx.status === 'paid' ? C.greenL : C.amberL,
+                    tx.status === 'paid' ? C.greenB : C.amberB,
+                  )}>{tx.status}</span>
+                  <div style={{ fontWeight: 800, fontSize: 14, color: C.green, minWidth: 80, textAlign: 'right' }}>
+                    {fmt(tx.amount)}
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  TAB 6 — Clean Slate  (admin only — dangerous, double-confirmed)
+//  Allows purging all uploaded content for a specific user / institution / global
+// ══════════════════════════════════════════════════════════════════════════════
+function CleanSlateTab({ token, showToast }) {
+  const [scope,    setScope]    = useState('user')       // user | institution | all
+  const [target,   setTarget]   = useState('')
+  const [confirm1, setConfirm1] = useState(false)
+  const [confirm2, setConfirm2] = useState('')
+  const [running,  setRunning]  = useState(false)
+  const [result,   setResult]   = useState(null)
+  const [users,    setUsers]    = useState([])
+  const [insts,    setInsts]    = useState([])
+
+  useEffect(() => {
+    apiFetch('/api/admin/users', token).then(d => setUsers(d.users || [])).catch(() => {})
+    apiFetch('/api/admin/institutions', token).then(d => setInsts(d.institutions || [])).catch(() => {})
+  }, [token])
+
+  const SCOPES = [
+    { id: 'user',        label: '👤 Single User',       desc: 'Purge all uploads, syllabus, and data for one user' },
+    { id: 'institution', label: '🏫 Entire Institution', desc: 'Purge all data for every user in a school/institute' },
+    { id: 'all',         label: '🌐 Full Platform Reset', desc: 'DANGER: Wipes ALL uploaded content platform-wide' },
+  ]
+
+  const TYPES = ['📄 Uploaded PDFs & Documents', '📚 Syllabus selections', '🖼 Uploaded images',
+    '🔊 Generated audio', '🎬 Videos', '💬 Chat history', '📝 Saved exams & evaluations']
+
+  const CONFIRM_PHRASE = scope === 'all'
+    ? 'DELETE EVERYTHING'
+    : scope === 'institution'
+    ? `DELETE ${(target || 'INSTITUTION').toUpperCase()}`
+    : `DELETE ${(target || 'USER').toUpperCase()}`
+
+  const isReady = confirm1 && confirm2.trim().toUpperCase() === CONFIRM_PHRASE
+
+  const runPurge = async () => {
+    if (!isReady || running) return
+    setRunning(true); setResult(null)
+    try {
+      const body = { scope, ...(scope !== 'all' ? { target } : {}) }
+      const d = await apiFetch('/api/admin/clean-slate', token, 'POST', body)
+      setResult({ ok: true, ...d })
+      showToast?.('Clean Slate completed', 'success')
+    } catch (e) {
+      setResult({ ok: false, error: e.message })
+      showToast?.(e.message, 'error')
+    }
+    setRunning(false)
+    setConfirm1(false); setConfirm2('')
+  }
+
+  return (
+    <div>
+      {/* Warning banner */}
+      <div style={{ background: '#fef2f2', border: '2px solid #fecaca', borderRadius: 12,
+        padding: '14px 18px', marginBottom: 20, display: 'flex', gap: 14, alignItems: 'flex-start' }}>
+        <span style={{ fontSize: 28, flexShrink: 0 }}>⚠️</span>
+        <div>
+          <div style={{ fontWeight: 800, color: '#991b1b', fontSize: 15, marginBottom: 4 }}>
+            Destructive Operation — Data Cannot Be Recovered
+          </div>
+          <div style={{ fontSize: 13, color: '#7f1d1d', lineHeight: 1.6 }}>
+            Clean Slate permanently deletes selected data. Use this only when a school, individual,
+            or account explicitly requests a full data reset. This cannot be undone.
+          </div>
+        </div>
+      </div>
+
+      {/* Scope selector */}
+      <div style={{ marginBottom: 20 }}>
+        <div style={{ fontWeight: 700, fontSize: 12, color: '#64748b', textTransform: 'uppercase',
+          letterSpacing: '.05em', marginBottom: 10 }}>1. Select Scope</div>
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+          {SCOPES.map(s => (
+            <div key={s.id} onClick={() => { setScope(s.id); setTarget(''); setConfirm1(false); setConfirm2('') }}
+              style={{ flex: '1 1 200px', padding: '14px 16px', borderRadius: 10, cursor: 'pointer',
+                border: `2px solid ${scope === s.id ? '#dc2626' : '#e2e8f0'}`,
+                background: scope === s.id ? '#fef2f2' : '#fff',
+                transition: 'all .15s' }}>
+              <div style={{ fontWeight: 700, fontSize: 13, color: scope === s.id ? '#991b1b' : '#0f172a',
+                marginBottom: 4 }}>{s.label}</div>
+              <div style={{ fontSize: 12, color: '#64748b' }}>{s.desc}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* What will be deleted */}
+      <div style={{ background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 10,
+        padding: '12px 16px', marginBottom: 20 }}>
+        <div style={{ fontWeight: 700, fontSize: 12, color: '#92400e', marginBottom: 8,
+          textTransform: 'uppercase', letterSpacing: '.04em' }}>What Gets Deleted</div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px 20px' }}>
+          {TYPES.map((t, i) => (
+            <div key={i} style={{ fontSize: 12, color: '#78350f' }}>{t}</div>
+          ))}
+        </div>
+      </div>
+
+      {/* Target selector */}
+      {scope !== 'all' && (
+        <div style={{ marginBottom: 20 }}>
+          <div style={{ fontWeight: 700, fontSize: 12, color: '#64748b', textTransform: 'uppercase',
+            letterSpacing: '.05em', marginBottom: 8 }}>
+            2. {scope === 'user' ? 'Select User' : 'Select Institution'}
+          </div>
+          {scope === 'user' ? (
+            <select
+              value={target} onChange={e => setTarget(e.target.value)}
+              style={{ padding: '9px 12px', border: '1.5px solid #e2e8f0', borderRadius: 8,
+                fontSize: 13, fontFamily: 'inherit', outline: 'none', minWidth: 280,
+                background: '#fff', cursor: 'pointer' }}>
+              <option value="">— Select a user —</option>
+              {users.map(u => (
+                <option key={u.id} value={u.id}>
+                  {u.name} ({u.email}) — {u.role}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <select
+              value={target} onChange={e => setTarget(e.target.value)}
+              style={{ padding: '9px 12px', border: '1.5px solid #e2e8f0', borderRadius: 8,
+                fontSize: 13, fontFamily: 'inherit', outline: 'none', minWidth: 280,
+                background: '#fff', cursor: 'pointer' }}>
+              <option value="">— Select an institution —</option>
+              {insts.map((inst, i) => (
+                <option key={i} value={inst.name || inst}>{inst.name || inst}</option>
+              ))}
+            </select>
+          )}
+        </div>
+      )}
+
+      {/* Double confirmation */}
+      {(scope === 'all' || target) && (
+        <div style={{ background: '#fef2f2', border: '1.5px solid #fca5a5', borderRadius: 12,
+          padding: '18px 20px', marginBottom: 20 }}>
+          <div style={{ fontWeight: 700, fontSize: 12, color: '#991b1b', textTransform: 'uppercase',
+            letterSpacing: '.05em', marginBottom: 14 }}>
+            {scope === 'all' ? '3.' : '3.'} Confirm Deletion
+          </div>
+
+          <label style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14,
+            cursor: 'pointer', fontSize: 13, color: '#7f1d1d', fontWeight: 600 }}>
+            <input type="checkbox" checked={confirm1} onChange={e => setConfirm1(e.target.checked)}
+              style={{ width: 16, height: 16, accentColor: '#dc2626', cursor: 'pointer' }} />
+            I understand this action is <strong>permanent and irreversible</strong>
+          </label>
+
+          <div style={{ marginBottom: 8 }}>
+            <div style={{ fontSize: 12, color: '#991b1b', fontWeight: 700, marginBottom: 6 }}>
+              Type exactly: <code style={{ background: '#fee2e2', padding: '2px 6px',
+                borderRadius: 4, fontSize: 12 }}>{CONFIRM_PHRASE}</code> to confirm
+            </div>
+            <input
+              value={confirm2}
+              onChange={e => setConfirm2(e.target.value)}
+              placeholder={`Type ${CONFIRM_PHRASE}`}
+              style={{ padding: '9px 12px', border: `1.5px solid ${confirm2.trim().toUpperCase() === CONFIRM_PHRASE ? '#16a34a' : '#fca5a5'}`,
+                borderRadius: 8, fontSize: 13, fontFamily: 'inherit', outline: 'none', width: '100%',
+                boxSizing: 'border-box', color: '#0f172a',
+                background: confirm2.trim().toUpperCase() === CONFIRM_PHRASE ? '#f0fdf4' : '#fff' }}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Execute button */}
+      <button
+        onClick={runPurge}
+        disabled={!isReady || running}
+        style={{ padding: '11px 28px', borderRadius: 10, border: 'none',
+          background: isReady ? 'linear-gradient(135deg,#dc2626,#991b1b)' : '#e2e8f0',
+          color: isReady ? '#fff' : '#94a3b8',
+          fontWeight: 800, fontSize: 14, cursor: isReady ? 'pointer' : 'not-allowed',
+          fontFamily: 'inherit', transition: 'all .2s' }}>
+        {running ? '⏳ Running Clean Slate…' : '🗑 Execute Clean Slate'}
+      </button>
+
+      {/* Result */}
+      {result && (
+        <div style={{ marginTop: 20, padding: '14px 18px', borderRadius: 12,
+          background: result.ok ? '#f0fdf4' : '#fef2f2',
+          border: `1.5px solid ${result.ok ? '#86efac' : '#fca5a5'}` }}>
+          <div style={{ fontWeight: 700, fontSize: 13,
+            color: result.ok ? '#166534' : '#991b1b', marginBottom: 6 }}>
+            {result.ok ? '✅ Clean Slate Complete' : '❌ Error'}
+          </div>
+          <div style={{ fontSize: 13, color: result.ok ? '#166534' : '#991b1b' }}>
+            {result.ok
+              ? `Deleted: ${result.documents_deleted ?? 0} documents, ${result.syllabi_deleted ?? 0} syllabi, ${result.chats_deleted ?? 0} chat sessions, ${result.evaluations_deleted ?? 0} evaluations.`
+              : result.error}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
 //  ROOT COMPONENT
 // ══════════════════════════════════════════════════════════════════════════════
 export default function AdminPanel({ showToast }) {
@@ -889,17 +1299,24 @@ export default function AdminPanel({ showToast }) {
   if (!canAccess) return null
 
   const TABS = [
-    ...(callerRole === 'admin' ? [{ id: 'presets', label: '💼 Plan Presets' }] : []),
-    { id: 'roles',   label: '⚖ Role Quotas'         },
-    { id: 'inst',    label: '🏫 Institution Overrides' },
-    { id: 'users',   label: '👤 User Overrides'      },
-    { id: 'report',  label: '📊 Usage Report'        },
+    ...(callerRole === 'admin' ? [{ id: 'presets',  label: '💼 Plan Presets'          }] : []),
+    { id: 'roles',    label: '⚖ Role Quotas'           },
+    { id: 'inst',     label: '🏫 Institution Overrides' },
+    { id: 'users',    label: '👤 User Overrides'        },
+    { id: 'report',   label: '📊 Usage Report'          },
+    ...(callerRole === 'admin' ? [{ id: 'revenue',  label: '💰 Revenue',   badge: 'New' }] : []),
+    ...(callerRole === 'admin' ? [{ id: 'cleanslate', label: '🗑 Clean Slate', badge: '⚠' }] : []),
   ]
 
   const features = config?.features || {}
 
   return (
     <div className="panel active">
+      <style>{`
+        @media (max-width: 768px) {
+          .uo-wrap { grid-template-columns: 1fr !important; }
+        }
+      `}</style>
       <div style={{ maxWidth: 1100, margin: '0 auto' }}>
         <div style={{ marginBottom: 20 }}>
           <h3 style={{ fontFamily: 'var(--serif)', color: 'var(--indigo)', margin: 0 }}>
@@ -946,6 +1363,12 @@ export default function AdminPanel({ showToast }) {
         )}
         {tab === 'report' && (
           <UsageReportTab features={features} token={token} showToast={showToast} />
+        )}
+        {tab === 'revenue' && (
+          <RevenueTab token={token} showToast={showToast} />
+        )}
+        {tab === 'cleanslate' && (
+          <CleanSlateTab token={token} showToast={showToast} />
         )}
       </div>
     </div>

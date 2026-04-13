@@ -15,7 +15,12 @@ import CurriculumPanel from '../components/panels/CurriculumPanel'
 import { QMasterPanel } from '../components/panels/QMasterPanel'
 import { InstitutePanel, AnalyticsPanel, AdminSettingsPanel, VisitorLogPanel } from '../components/panels/OtherPanels'
 import AdminPanel from '../components/panels/AdminPanel'
+import FinancePanel from '../components/panels/FinancePanel'
 import ReportPanel from '../components/panels/ReportPanel'
+import FreeCoursesPanel from '../components/panels/FreeCoursesPanel'
+import CareerPathPanel from '../components/panels/CareerPathPanel'
+import DegreeHubPanel from '../components/panels/DegreeHubPanel'
+import SeniorPrepPanel from '../components/panels/SeniorPrepPanel'
 
 // ── Panel slot: fills the full content area, scrolls independently ────────
 // Using position:absolute + inset:0 is the most reliable cross-browser way
@@ -41,8 +46,9 @@ function PanelSlot({ active, children }) {
   )
 }
 
-export default function AppPage() {
+export default function AppPage({ onUpgrade }) {
   const { activePanel, refreshData } = useApp()
+  const { token } = useAuth()
   const { toast, showToast } = useToast()
   const [sidebarOpen, setSidebarOpen] = useState(false)
 
@@ -59,11 +65,11 @@ export default function AppPage() {
     return () => window.removeEventListener('quota:exceeded', handler)
   }, [showToast])
 
-  const p = { showToast }
+  const p = { showToast, token }
 
   return (
     <div className="app-layout">
-      <Sidebar isOpen={sidebarOpen} onClose={() => setSidebarOpen(false)} />
+      <Sidebar isOpen={sidebarOpen} onClose={() => setSidebarOpen(false)} onUpgrade={onUpgrade} />
 
       {/* Main content column */}
       <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column', minWidth: 0 }}>
@@ -84,6 +90,11 @@ export default function AppPage() {
           <PanelSlot active={activePanel === 'reports'             }><ReportPanel              {...p} /></PanelSlot>
           <PanelSlot active={activePanel === 'settings'            }><AdminSettingsPanel       {...p} /></PanelSlot>
           <PanelSlot active={activePanel === 'quota'              }><AdminPanel               {...p} /></PanelSlot>
+          <PanelSlot active={activePanel === 'free-courses'       }><FreeCoursesPanel         {...p} /></PanelSlot>
+          <PanelSlot active={activePanel === 'career-path'        }><CareerPathPanel          {...p} /></PanelSlot>
+          <PanelSlot active={activePanel === 'degree-hub'         }><DegreeHubPanel           {...p} /></PanelSlot>
+          <PanelSlot active={activePanel === 'senior-prep'        }><SeniorPrepPanel          {...p} /></PanelSlot>
+          <PanelSlot active={activePanel === 'finance'             }><FinancePanel              {...p} /></PanelSlot>
         </div>
       </div>
 

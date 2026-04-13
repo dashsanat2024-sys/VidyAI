@@ -60,6 +60,26 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 OPENAI_MODEL   = os.getenv("OPENAI_MODEL", "gpt-4o")
 OPENAI_MINI    = os.getenv("OPENAI_MINI_MODEL", "gpt-4o-mini")
 
+# ── Razorpay (Payment Gateway) ─────────────────────────────────────────────────
+RAZORPAY_KEY_ID     = os.getenv("RAZORPAY_KEY_ID", "")
+RAZORPAY_KEY_SECRET = os.getenv("RAZORPAY_KEY_SECRET", "")
+
+# Plan prices in paise (INR × 100). coaching is per-10-students unit.
+PLAN_PRICES = {
+    "student-pro":    14900,   # ₹149/month
+    "school-starter":  99900,  # ₹999/month
+    "school-growth":  249900,  # ₹2,499/month
+    "coaching":        99000,  # ₹990 base (≈10 students @ ₹99)
+}
+
+# Map plan_id → QUOTA_PRESETS key for auto-applying after payment
+PLAN_TO_PRESET = {
+    "student-pro":   {"type": "role_default", "preset": "student-pro",   "role": "student"},
+    "school-starter":{"type": "institution",   "preset": "school-starter"},
+    "school-growth": {"type": "institution",   "preset": "school-growth"},
+    "coaching":      {"type": "institution",   "preset": "coaching"},
+}
+
 # ── Paths ─────────────────────────────────────────────────────────────────────
 BASE         = Path(__file__).parent.parent
 IS_VERCEL    = os.environ.get("VERCEL") == "1"
@@ -1003,6 +1023,21 @@ def _llm_text(prompt: str, temperature: float = 0.3, mini: bool = False) -> str:
     if not LANGCHAIN_OK or not OPENAI_API_KEY:
         return "(AI unavailable — check OPENAI_API_KEY)"
     return _get_llm(temperature=temperature, mini=mini).invoke(prompt).content
+
+def _study_fallback_answer(question: str, role: str = "student") -> str:
+    q = (question or "").strip()
+    if not q:
+        return "Please share your exact question, chapter, and what you have tried so far."
+    return (
+        "AI backend is temporarily busy, so here is a guided exam-style approach:\n\n"
+        f"Question: {q}\n\n"
+        "1. Identify chapter and concept\n"
+        "2. List all given values with units\n"
+        "3. Write the governing formula/reaction/principle\n"
+        "4. Solve step-by-step and keep unit consistency\n"
+        "5. Check reasonableness using option elimination\n\n"
+        "Share the full problem statement if you want a strict line-by-line final solution."
+    )
 
 def _llm_json(prompt: str, temperature: float = 0.2, mini: bool = False):
     raw = _llm_text(prompt, temperature=temperature, mini=mini)
@@ -3092,11 +3127,11 @@ def _extract_answers(path: str, exam_questions: list = None, exam: dict = None):
             import fitz as _fitz
             doc = _fitz.open(path)
             for page in doc:
-                pix = page.get_pixmap(dpi=200)
+                pix = page.get_pixmap(dpi=300)
                 images.append(Image.frombytes("RGB", [pix.width, pix.height], pix.samples))
                 del pix
             doc.close()
-            log.info(f"[OCR] PDF → {len(images)} page images at 200 DPI")
+            log.info(f"[OCR] PDF → {len(images)} page images at 300 DPI")
         except Exception as e:
             log.warning(f"[OCR] PyMuPDF failed, trying pdf2image: {e}")
             try:
@@ -3158,9 +3193,73 @@ def _extract_answers(path: str, exam_questions: list = None, exam: dict = None):
             "image_url": {"url": f"data:image/png;base64,{b64}", "detail": "high"}
         })
 
+    # MCQ bubble re-read uses ONLY the first page (sheet page 1 = encoded_images[0]).
+    # Sending all pages confuses GPT with subjective content from later pages
+    # and causes it to misread the MCQ bubbles on page 1.
+    mcq_img_content = [{
+        "type": "image_url",
+        "image_url": {"url": f"data:image/png;base64,{encoded_images[0]}", "detail": "high"}
+    }]
+
+    # ── Build isolated per-row image content for MCQ bubble re-reads ──────────
+    # Some answer sheets print option labels INSIDE the circles; when the student
+    # fills a circle the label gets obscured and GPT misreads the full-page scan.
+    # Sending each row as a separate labeled image fixes this (isolated context).
+    isolated_row_content: list = []
+    try:
+        _page0 = images[0]
+        _gray0 = _page0.convert('L')
+        _pw, _ph = _gray0.size
+        _lw = max(1, int(_pw * 0.20))
+        _dark_frac = []
+        for _y in range(_ph):
+            _row_px = list(_gray0.crop((0, _y, _lw, _y + 1)).getdata())
+            _dark_frac.append(sum(1 for _p in _row_px if _p < 80) / _lw)
+        _dark_rows = [_y for _y in range(_ph) if _dark_frac[_y] > 0.35]
+        if _dark_rows:
+            _bands, _bs, _prev = [], _dark_rows[0], _dark_rows[0]
+            for _y in _dark_rows[1:]:
+                if _y - _prev > 30:
+                    if _prev - _bs >= 100:
+                        _bands.append((_bs, _prev))
+                    _bs = _y
+                _prev = _y
+            if _prev - _bs >= 100:
+                _bands.append((_bs, _prev))
+            _q_bands = _bands[1:]  # skip header band
+            for _i, _qid in enumerate(sorted(mcq_ids)):
+                if _i >= len(_q_bands):
+                    break
+                _y0, _y1 = _q_bands[_i]
+                _crop = _page0.crop((0, _y0, _pw, _y1))
+                _crop = ImageEnhance.Contrast(_crop).enhance(1.5)
+                _crop = ImageEnhance.Sharpness(_crop).enhance(2.0)
+                _buf = _io.BytesIO()
+                _crop.save(_buf, format="PNG")
+                _b64c = base64.b64encode(_buf.getvalue()).decode()
+                isolated_row_content.append({"type": "text", "text": f"--- Q{_qid} row ---"})
+                isolated_row_content.append({
+                    "type": "image_url",
+                    "image_url": {"url": f"data:image/png;base64,{_b64c}", "detail": "high"}
+                })
+        if isolated_row_content:
+            log.info(f"[OCR] Built {len(isolated_row_content)//2} isolated MCQ row images")
+        else:
+            log.info("[OCR] No isolated row bands detected; will use full-page for passes 2&3")
+    except Exception as _irc_err:
+        log.warning(f"[OCR] Isolated row crop failed (non-fatal): {_irc_err}")
+        isolated_row_content = []
+
     # ── Helper: one Vision call ───────────────────────────────────────────────
-    def _call_vision(prompt_text: str) -> dict:
-        content = [{"type": "text", "text": prompt_text}] + img_content
+    def _call_vision(prompt_text: str, use_mcq_page_only: bool = False,
+                     use_isolated_rows: bool = False) -> dict:
+        if use_isolated_rows and isolated_row_content:
+            img_part = isolated_row_content
+        elif use_mcq_page_only:
+            img_part = mcq_img_content
+        else:
+            img_part = img_content
+        content = [{"type": "text", "text": prompt_text}] + img_part
         client = _oai.OpenAI(api_key=OPENAI_API_KEY)
         _openai_limiter.wait()
         resp = client.chat.completions.create(
@@ -3172,27 +3271,41 @@ def _extract_answers(path: str, exam_questions: list = None, exam: dict = None):
         return json.loads(raw)
 
     # ── Pass 1: Full extraction (MCQ + subjective) ────────────────────────────
+    # ── Build value→letter lookup for numeric write-box matching ─────────────
+    # Students sometimes write the numeric option VALUE in the write box
+    # (e.g. write "15" for option B whose value is "15") instead of the letter.
+    # Map: qid → {str_value → letter}
+    opt_value_map: Dict[int, Dict[str, str]] = {}
+    for q in exam_questions:
+        qid = int(q.get("id", 0))
+        opts = q.get("options", {})
+        if isinstance(opts, dict):
+            opt_value_map[qid] = {str(v).strip(): k.upper() for k, v in opts.items()}
+
     full_prompt = (
         "You are a handwriting recognition expert reading a scanned student answer sheet. "
-        "Extract the student's answer for each question.\n\n"
+        "Extract the student's raw marks for every question listed below.\n\n"
         "QUESTIONS ON THIS EXAM:\n" + q_block + "\n\n"
-        "RULES:\n"
-        "- For MCQ questions: Each MCQ box has TWO answer methods:\n"
-        "    (a) Bubbles — 4 circles with labels A/B/C/D printed ABOVE each circle. "
-        "Student filled or circled one bubble.\n"
-        "    (b) Write box — a square box on the RIGHT end of the MCQ row. "
-        "Student may have written a single letter A/B/C/D inside.\n"
-        "  CHECK THE WRITE BOX FIRST. If it contains a handwritten letter → use that.\n"
-        "  If write box is empty → identify which bubble is filled/circled; "
-        "count left-to-right: 1st=A, 2nd=B, 3rd=C, 4th=D.\n"
-        "  Return ONLY a single uppercase letter (A, B, C, or D).\n"
-        "- For Written questions: return the COMPLETE handwritten answer.\n"
-        "  Read ALL lines top-to-bottom. Do NOT stop after the first line.\n"
-        "  Join all lines into one string separated by spaces.\n"
-        "- If a question has no visible answer, omit it from the JSON.\n"
-        "- Do NOT include question text, labels, or instructions — only the student's answer.\n\n"
+        "INSTRUCTIONS:\n"
+        "1. MCQ questions — Each MCQ row has two answer zones:\n"
+        "   (a) BUBBLES: four circles. Each has a letter label (A, B, C, or D).\n"
+        "       Report the letter of the circle that is MOST HEAVILY FILLED, darkened, or circled.\n"
+        "   (b) WRITE BOX: a small square at the FAR RIGHT end of the MCQ row.\n"
+        "       Report exactly what the student wrote inside it (a letter, a number, or empty string).\n\n"
+        "   Return for each MCQ: {\"bubble\": \"B\", \"box\": \"15\"}\n"
+        "   • bubble: letter (A/B/C/D) of the most filled circle — never empty, always one letter\n"
+        "   • box: exact student handwriting inside the right-side square, or \"\" if empty/blank\n\n"
+        "2. Written/Subjective questions — Return the COMPLETE handwritten text.\n"
+        "   • Read ALL lines in the answer box top to bottom.\n"
+        "   • Include all mathematical expressions and workings exactly as written.\n"
+        "     E.g. '5x + 3y - 2x + 6 - y + 4 = (5x - 2x) + (3y - y) + (6 + 4) = 3x + 2y + 10'\n"
+        "   • A single number (e.g. '4') is a valid answer — include it.\n"
+        "   • DO NOT include printed question text — only the student's handwriting.\n\n"
+        "3. Omit completely empty questions.\n\n"
         "Return ONLY valid JSON:\n"
-        '{"answers": {"1": "B", "2": "D", "7": "The student wrote this answer across multiple lines"}}\n'
+        '{"answers": {"1": {"bubble": "B", "box": ""}, '
+        '"2": {"bubble": "C", "box": "7"}, '
+        '"7": "Multiply the length by 4.", "12": "3x + 2y + 10"}}\n'
     )
 
     try:
@@ -3205,61 +3318,152 @@ def _extract_answers(path: str, exam_questions: list = None, exam: dict = None):
     # ── Parse Pass 1 results ──────────────────────────────────────────────────
     answers: Dict[int, str] = {}
     mcq_votes: Dict[int, list] = {qid: [] for qid in mcq_ids}
+    # Questions whose answer was definitively set from the write box — skip
+    # bubble re-read passes for these so the explicit write-box intent wins.
+    write_box_locked: set = set()
 
     for qid_str, val in raw_json_1.get("answers", {}).items():
         try:
-            qid = int(qid_str)
-            val_str = str(val).strip()
-            if not val_str or val_str in {"—", "-", "--", "None", "null", ""}:
-                continue
-            if qid in mcq_ids:
-                letter = re.search(r'([A-D])', val_str, re.IGNORECASE)
-                if letter:
-                    mcq_votes.setdefault(qid, []).append(letter.group(1).upper())
-            else:
-                answers[qid] = val_str
+            # GPT sometimes returns "Q1" style keys — strip the Q prefix
+            qid = int(re.sub(r'^[Qq]', '', str(qid_str)).strip())
         except (ValueError, TypeError):
             continue
+        if qid not in mcq_ids:
+            # Subjective: val is a plain string
+            val_str = str(val).strip() if not isinstance(val, dict) else str(val.get("answer", val)).strip()
+            if val_str and val_str not in {"—", "-", "--", "None", "null", ""}:
+                answers[qid] = val_str
+            continue
 
-    # ── Pass 2 & 3: MCQ-only re-reads for majority vote ──────────────────────
-    # IMPORTANT: Do NOT include question text or option values here.
-    # Including them causes answer-key bias (model reads what it thinks is
-    # correct instead of what the student physically marked).
-    if mcq_ids:
-        mcq_qlist = ", ".join(f"Q{qid}" for qid in sorted(mcq_ids))
+        # MCQ: val may be dict {"bubble":..., "box":...} (new format)
+        # or old-style {"answer":..., "write_box":..., "source":...} or plain string
+        if isinstance(val, dict):
+            bubble_raw = str(val.get("bubble", val.get("answer", ""))).strip()
+            box_raw    = str(val.get("box", val.get("write_box", ""))).strip()
+        else:
+            bubble_raw = str(val).strip()
+            box_raw    = ""
+
+        # ── Code-side resolution: box → letter → write_box_letter ──────────
+        box_letter = re.search(r'^([A-D])$', box_raw.upper())
+        if box_letter:
+            letter = box_letter.group(1).upper()
+            write_box_locked.add(qid)
+            mcq_votes.setdefault(qid, []).extend([letter] * 3)
+            log.info(f"[OCR] Q{qid}: box_letter='{box_raw}' → locked {letter}")
+            continue
+
+        # ── Code-side resolution: box → number → write_box_number ──────────
+        if box_raw and re.search(r'\d', box_raw):
+            q_options = opt_value_map.get(qid, {})
+            # exact match
+            matched = q_options.get(box_raw)
+            if not matched:
+                # strip non-numeric chars and retry
+                num_part = re.sub(r'[^0-9.]', '', box_raw)
+                matched = q_options.get(num_part)
+            if not matched:
+                # fuzzy: box text is a substring of an option value or vice versa
+                matched = next(
+                    (ltr for v, ltr in q_options.items() if box_raw in v or v in box_raw),
+                    None
+                )
+            if matched:
+                write_box_locked.add(qid)
+                mcq_votes.setdefault(qid, []).extend([matched] * 3)
+                log.info(f"[OCR] Q{qid}: box_number='{box_raw}' → locked {matched}")
+                continue
+            else:
+                log.info(f"[OCR] Q{qid}: box='{box_raw}' has digits but no option match — using bubble")
+
+        # ── Fallback: use bubble field ───────────────────────────────────────
+        letter = re.search(r'([A-D])', bubble_raw, re.IGNORECASE)
+        if letter:
+            mcq_votes.setdefault(qid, []).append(letter.group(1).upper())
+
+    # ── Pass 2 & 3: bubble-only re-reads for unlocked MCQ questions ──────────
+    # Skip questions already locked by write-box to preserve the student's
+    # explicit intent (circled bubble may differ from write-box intent).
+    # Passes 2&3 use isolated per-row images when available so that filled
+    # circles whose label is printed INSIDE (and thus obscured by ink) are read
+    # by POSITION (1st circle=A … 4th circle=D) rather than by the hidden label.
+    unlocked_mcq = mcq_ids - write_box_locked
+    if unlocked_mcq:
+        mcq_qlist = ", ".join(f"Q{qid}" for qid in sorted(unlocked_mcq))
+        # Prompt when each question row appears as a separate labeled image
+        isolated_mcq_prompt = (
+            "You are reading scanned student answer sheet rows.\n"
+            "Each image below is ONE question row (I will label them by question number).\n"
+            "Each row has exactly 4 circles arranged left-to-right, and a small write box far right.\n\n"
+            "TASK for each question:\n"
+            "  bubble: Find the most DARKLY FILLED, heavily scribbled, or densely marked circle.\n"
+            "          Count its left-to-right position: 1st\u2192A, 2nd\u2192B, 3rd\u2192C, 4th\u2192D.\n"
+            "          Use POSITION, not any label that may be hidden under ink.\n"
+            "  box: Copy text from the small write square at far right, or \"\" if empty.\n\n"
+            "Return JSON (numeric keys for question numbers):\n"
+            '{"answers": {"1": {"bubble": "B", "box": ""}, "2": {"bubble": "C", "box": ""}}}\n'
+        )
+        # Fallback prompt when sending the full first page
         mcq_prompt = (
-            "You are a handwriting recognition expert reading a scanned student answer sheet.\n\n"
-            "Each MCQ box has TWO answer methods:\n"
-            "  (a) Bubbles — 4 empty circles. Letters A/B/C/D appear ABOVE each circle (not inside).\n"
-            "      Student filled or circled one bubble. Count left-to-right: 1st=A, 2nd=B, 3rd=C, 4th=D.\n"
-            "  (b) Write box — a square box at the RIGHT END of each MCQ row.\n"
-            "      Student may have written a single letter A/B/C/D inside.\n\n"
-            "PRIORITY: Check the WRITE BOX first. If it has a handwritten letter → use it.\n"
-            "If write box is empty → identify which bubble is filled/circled.\n\n"
-            f"MCQ question numbers on this sheet: {mcq_qlist}\n\n"
-            "CRITICAL INSTRUCTIONS:\n"
-            "1. For EACH question, look at BOTH the write box and the bubbles.\n"
-            "2. Describe what you PHYSICALLY SEE then report ONLY A, B, C, or D.\n"
-            "3. You are ONLY reading physical marks. Do NOT guess from question content.\n"
-            "4. If ambiguous, describe what you see and pick the most likely letter.\n\n"
-            "Return JSON with description and answer for each question:\n"
-            '{"answers": {"1": {"seen": "bubble A is filled/darkened", "answer": "A"}, '
-            '"2": {"seen": "letter C is circled", "answer": "C"}}}\n'
+            "You are reading a scanned student answer sheet. Report the BUBBLE and WRITE BOX for "
+            "the MCQ questions listed.\n\n"
+            "Each MCQ row has:\n"
+            "  BUBBLES: four circles labeled A, B, C, D. Report the letter of the most heavily "
+            "filled, darkened, or circled bubble.\n"
+            "  WRITE BOX: a small square at the FAR RIGHT end of the row. Report what's written, or \"\".\n\n"
+            f"Questions to read: {mcq_qlist}\n\n"
+            "Do NOT guess from question content. Only report physical marks.\n\n"
+            "Return JSON with numeric keys (e.g. \"1\" not \"Q1\"):\n"
+            '{"answers": {"1": {"bubble": "B", "box": ""}, "2": {"bubble": "C", "box": "7"}}}\n'
         )
         for pass_num in (2, 3):
             try:
-                log.info(f"[OCR] Pass {pass_num}: MCQ re-read for consensus...")
-                raw_json_n = _call_vision(mcq_prompt)
+                _use_iso = bool(isolated_row_content)
+                _pass_prompt = isolated_mcq_prompt if _use_iso else mcq_prompt
+                log.info(f"[OCR] Pass {pass_num}: bubble re-read for {len(unlocked_mcq)} unlocked MCQs "
+                         f"({'isolated rows' if _use_iso else 'full page'})...")
+                raw_json_n = _call_vision(_pass_prompt, use_isolated_rows=_use_iso,
+                                          use_mcq_page_only=not _use_iso)
                 for qid_str, val in raw_json_n.get("answers", {}).items():
-                    qid = int(qid_str)
-                    if qid in mcq_ids:
-                        # Handle both {"answer": "A", "seen": "..."} and plain "A"
-                        ans_text = val.get("answer", "") if isinstance(val, dict) else str(val)
-                        if isinstance(val, dict):
-                            log.info(f"[OCR] Pass {pass_num} Q{qid}: saw='{val.get('seen','')}' → {ans_text}")
-                        letter = re.search(r'([A-D])', ans_text, re.IGNORECASE)
-                        if letter:
-                            mcq_votes.setdefault(qid, []).append(letter.group(1).upper())
+                    try:
+                        # GPT sometimes returns "Q1" style keys — strip the Q prefix
+                        qid = int(re.sub(r'^[Qq]', '', str(qid_str)).strip())
+                    except (ValueError, TypeError):
+                        continue
+                    if qid not in unlocked_mcq:
+                        continue
+                    # New format: {"bubble": "B", "box": ""}
+                    # Old format: {"seen": "...", "answer": "B"}  (kept for backward compat)
+                    if isinstance(val, dict):
+                        bubble_raw = str(val.get("bubble", val.get("answer", ""))).strip()
+                        box_raw    = str(val.get("box", val.get("write_box", ""))).strip()
+                        log.info(f"[OCR] Pass {pass_num} Q{qid}: bubble={bubble_raw!r} box={box_raw!r}")
+                    else:
+                        bubble_raw = str(val).strip()
+                        box_raw    = ""
+                    # Code-side resolution (same logic as Pass 1)
+                    box_letter2 = re.search(r'^([A-D])$', box_raw.upper())
+                    if box_letter2:
+                        ltr = box_letter2.group(1).upper()
+                        write_box_locked.add(qid)
+                        unlocked_mcq.discard(qid)
+                        mcq_votes.setdefault(qid, []).extend([ltr] * 3)
+                        log.info(f"[OCR] Pass {pass_num} Q{qid}: box_letter → locked {ltr}")
+                        continue
+                    if box_raw and re.search(r'\d', box_raw):
+                        q_opts = opt_value_map.get(qid, {})
+                        m2 = q_opts.get(box_raw) or q_opts.get(re.sub(r'[^0-9.]', '', box_raw))
+                        if not m2:
+                            m2 = next((ltr for v, ltr in q_opts.items() if box_raw in v or v in box_raw), None)
+                        if m2:
+                            write_box_locked.add(qid)
+                            unlocked_mcq.discard(qid)
+                            mcq_votes.setdefault(qid, []).extend([m2] * 3)
+                            log.info(f"[OCR] Pass {pass_num} Q{qid}: box_number → locked {m2}")
+                            continue
+                    letter = re.search(r'([A-D])', bubble_raw, re.IGNORECASE)
+                    if letter:
+                        mcq_votes.setdefault(qid, []).append(letter.group(1).upper())
             except Exception as e:
                 log.warning(f"[OCR] Pass {pass_num} failed (non-fatal): {e}")
 
@@ -3268,7 +3472,8 @@ def _extract_answers(path: str, exam_questions: list = None, exam: dict = None):
         if votes:
             winner, count = Counter(votes).most_common(1)[0]
             answers[qid] = winner
-            log.info(f"[OCR] Q{qid} MCQ: votes={votes} → winner={winner} ({count}/{len(votes)})")
+            locked = " [LOCKED]" if qid in write_box_locked else ""
+            log.info(f"[OCR] Q{qid} MCQ: votes={votes} → {winner} ({count}/{len(votes)}){locked}")
         else:
             log.warning(f"[OCR] Q{qid} MCQ: no votes collected")
 
@@ -4573,6 +4778,242 @@ def me():
     return jsonify({"user": _safe(request.user)})
 
 # ══════════════════════════════════════════════════════════════════════════════
+#  PAYMENT — Razorpay Integration
+# ══════════════════════════════════════════════════════════════════════════════
+def _razorpay_client():
+    """Return an initialised Razorpay client, or None if credentials missing."""
+    if not RAZORPAY_KEY_ID or not RAZORPAY_KEY_SECRET:
+        return None
+    try:
+        import razorpay as _rp
+        return _rp.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET))
+    except ImportError:
+        return None
+
+def _apply_plan_quota(user: dict, plan_id: str):
+    """
+    After a successful payment, upgrade the user's quota limits to match
+    the purchased plan by writing user_overrides in quota_config.
+    """
+    preset_map = PLAN_TO_PRESET.get(plan_id)
+    if not preset_map:
+        return
+
+    qc = _qc_load()
+    ptype = preset_map["type"]
+
+    if ptype == "role_default":
+        # For student-pro: apply the preset as a user_override so only THIS user
+        # gets the upgraded limits (not all students).
+        preset = (QUOTA_PRESETS.get("role_defaults") or {}).get(preset_map["preset"])
+        if not preset:
+            return
+        template = preset.get("template", {})
+        uid = user["id"]
+        qc.setdefault("user_overrides", {}).setdefault(uid, {})
+        for feat in QUOTA_FEATURES:
+            if feat in template:
+                qc["user_overrides"][uid][feat] = int(template[feat])
+        _qc_save(qc)
+
+    elif ptype == "institution":
+        # For school/coaching plans: apply as institution_override
+        inst = (user.get("institution") or "").strip()
+        if not inst:
+            return
+        preset = (QUOTA_PRESETS.get("institution") or {}).get(preset_map["preset"])
+        if not preset:
+            return
+        qc.setdefault("institution_overrides", {}).setdefault(inst, {})
+        cfg = qc["institution_overrides"][inst]
+        cfg["user_daily"] = {
+            feat: int(limit)
+            for feat, limit in (preset.get("user_daily") or {}).items()
+            if feat in QUOTA_FEATURES
+        }
+        if preset.get("inst_daily"):
+            cfg["inst_daily"] = {
+                feat: int(limit)
+                for feat, limit in preset["inst_daily"].items()
+                if feat in QUOTA_FEATURES
+            }
+        _qc_save(qc)
+
+
+@app.post("/api/payments/create-order")
+@auth()
+def payments_create_order():
+    """
+    Create a Razorpay order for the given plan.
+    Body: { "plan_id": "student-pro" | "school-starter" | ... }
+    Returns: { order_id, amount, currency, key_id }
+    """
+    b = request.json or {}
+    plan_id = str(b.get("plan_id", "")).strip()
+
+    if plan_id not in PLAN_PRICES:
+        return jsonify({"error": f"Unknown plan: {plan_id}"}), 400
+
+    if not RAZORPAY_KEY_ID or not RAZORPAY_KEY_SECRET:
+        return jsonify({"error": "Payment gateway not configured. Contact support."}), 503
+
+    client = _razorpay_client()
+    if not client:
+        return jsonify({"error": "Payment gateway unavailable. Contact support."}), 503
+
+    amount = PLAN_PRICES[plan_id]
+    u = request.user
+    try:
+        order = client.order.create({
+            "amount":   amount,
+            "currency": "INR",
+            "payment_capture": 1,
+            "notes": {
+                "plan_id": plan_id,
+                "user_id": u["id"],
+                "email":   u["email"],
+            }
+        })
+    except Exception as e:
+        print(f"[PAYMENT] Razorpay order creation failed: {e}")
+        return jsonify({"error": "Could not create payment order. Please try again."}), 500
+
+    return jsonify({
+        "order_id": order["id"],
+        "amount":   order["amount"],
+        "currency": order["currency"],
+        "key_id":   RAZORPAY_KEY_ID,
+        "plan_id":  plan_id,
+    })
+
+
+@app.post("/api/payments/verify")
+@auth()
+def payments_verify():
+    """
+    Verify Razorpay payment signature and activate the subscription.
+    Body: { razorpay_order_id, razorpay_payment_id, razorpay_signature, plan_id }
+    """
+    b = request.json or {}
+    order_id   = str(b.get("razorpay_order_id", "")).strip()
+    payment_id = str(b.get("razorpay_payment_id", "")).strip()
+    signature  = str(b.get("razorpay_signature", "")).strip()
+    plan_id    = str(b.get("plan_id", "")).strip()
+
+    if not all([order_id, payment_id, signature, plan_id]):
+        return jsonify({"error": "Missing payment verification fields"}), 400
+
+    if not RAZORPAY_KEY_SECRET:
+        return jsonify({"error": "Payment gateway not configured"}), 503
+
+    # HMAC-SHA256 signature verification
+    import hmac as _hmac
+    import hashlib as _hashlib
+    expected = _hmac.new(
+        RAZORPAY_KEY_SECRET.encode(),
+        f"{order_id}|{payment_id}".encode(),
+        _hashlib.sha256
+    ).hexdigest()
+    if not _hmac.compare_digest(expected, signature):
+        return jsonify({"error": "Payment verification failed — invalid signature"}), 400
+
+    # Activate subscription
+    u = request.user
+    from datetime import date as _date, timedelta as _td
+    expires = (_date.today() + _td(days=30)).isoformat()
+
+    db = db_load()
+    for user in db["users"]:
+        if user["id"] == u["id"]:
+            user["plan"]           = plan_id
+            user["plan_expires"]   = expires
+            user["plan_payment_id"] = payment_id
+            break
+    db_save(db)
+
+    # Apply quota upgrades for this user/institution
+    _apply_plan_quota(u, plan_id)
+
+    db_log(db, u["id"], "payment", f"Activated plan {plan_id} via payment {payment_id}")
+    db_save(db)
+
+    return jsonify({
+        "ok":          True,
+        "plan":        plan_id,
+        "plan_expires": expires,
+    })
+
+
+@app.get("/api/payments/status")
+@auth()
+def payments_status():
+    """Return the current user's active plan and expiry."""
+    u = request.user
+    from datetime import date as _date
+    plan    = u.get("plan", "free")
+    expires = u.get("plan_expires", "")
+    active  = False
+    if expires:
+        try:
+            active = _date.today() <= _date.fromisoformat(expires)
+        except ValueError:
+            pass
+    if not active:
+        plan = "free"
+    return jsonify({
+        "plan":        plan,
+        "plan_expires": expires,
+        "active":      active,
+    })
+
+
+@app.post("/api/payments/webhook")
+def payments_webhook():
+    """
+    Razorpay webhook — verifies X-Razorpay-Signature header and processes
+    payment.captured events for async payment confirmation.
+    """
+    sig = request.headers.get("X-Razorpay-Signature", "")
+    body = request.get_data()
+
+    if RAZORPAY_KEY_SECRET and sig:
+        import hmac as _hmac
+        import hashlib as _hashlib
+        expected = _hmac.new(
+            RAZORPAY_KEY_SECRET.encode(),
+            body,
+            _hashlib.sha256
+        ).hexdigest()
+        if not _hmac.compare_digest(expected, sig):
+            return jsonify({"error": "Invalid webhook signature"}), 400
+
+    try:
+        event = request.json or {}
+        if event.get("event") == "payment.captured":
+            payload = event.get("payload", {}).get("payment", {}).get("entity", {})
+            notes   = payload.get("notes", {})
+            user_id = notes.get("user_id", "")
+            plan_id = notes.get("plan_id", "")
+            payment_id = payload.get("id", "")
+            if user_id and plan_id:
+                from datetime import date as _date, timedelta as _td
+                expires = (_date.today() + _td(days=30)).isoformat()
+                db = db_load()
+                for user in db["users"]:
+                    if user["id"] == user_id:
+                        user["plan"]           = plan_id
+                        user["plan_expires"]   = expires
+                        user["plan_payment_id"] = payment_id
+                        _apply_plan_quota(user, plan_id)
+                        break
+                db_save(db)
+    except Exception as e:
+        print(f"[WEBHOOK] Processing error: {e}")
+
+    return jsonify({"ok": True})
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 #  DOCUMENT UPLOAD / LIST / DELETE
 # ══════════════════════════════════════════════════════════════════════════════
 @app.post("/api/upload")
@@ -4747,6 +5188,43 @@ def register_virtual():
     }
     _save_syllabi()
     return jsonify({"success": True, "syllabus_id": sid})
+
+@app.get("/api/syllabi/<syllabus_id>/sample-questions")
+@auth()
+def get_syllabus_sample_questions(syllabus_id):
+    """Return 5 sample questions a student could ask for this syllabus."""
+    FALLBACK = [
+        "What are the main topics covered in this chapter?",
+        "Explain the key concepts with simple examples",
+        "What type of questions appear in the exam from this chapter?",
+        "How do I solve problems related to this topic?",
+        "What are the most important points to memorise?",
+    ]
+    if not OPENAI_API_KEY:
+        return jsonify({"questions": FALLBACK})
+    vs = _load_vs(syllabus_id)
+    if not vs:
+        return jsonify({"questions": FALLBACK})
+    try:
+        docs = vs.similarity_search("important concepts key topics exam questions definitions", k=4)
+        ctx  = "\n\n".join(d.page_content[:400] for d in docs[:3])
+        prompt = (
+            "You are an expert teacher. Based on the following excerpt from a student's syllabus, "
+            "generate exactly 5 short, specific questions (1 sentence each) that a student would "
+            "naturally ask their tutor while studying this material. "
+            "Make them concrete — reference actual topics from the text, not generic prompts.\n\n"
+            f"Excerpt:\n{ctx[:1800]}\n\n"
+            'Return JSON only: {"questions": ["Q1", "Q2", "Q3", "Q4", "Q5"]}'
+        )
+        result = _llm_json(prompt, temperature=0.3, mini=True)
+        if isinstance(result, dict):
+            qs = result.get("questions", [])
+            if isinstance(qs, list) and len(qs) >= 3:
+                return jsonify({"questions": qs[:5]})
+    except Exception as _e:
+        log.warning(f"[SAMPLE_Q] {syllabus_id}: {_e}")
+    return jsonify({"questions": FALLBACK})
+
 
 @app.delete("/api/syllabi/<syllabus_id>")
 @auth()
@@ -5311,7 +5789,14 @@ def chat():
         res = _get_llm(mini=True).invoke([sys_msg, HumanMessage(content=question)])
         return jsonify({"answer": res.content, "sources": [], "syllabus_id": syllabus_id or ""})
     except Exception as e:
-        return jsonify({"error": f"AI error: {e}"}), 500
+        log.exception("[CHAT] LLM fallback failed")
+        return jsonify({
+            "answer": _study_fallback_answer(question, u.get("role", "student")),
+            "sources": [],
+            "syllabus_id": syllabus_id or "",
+            "fallback": True,
+            "warning": f"AI backend temporary issue: {str(e)}",
+        }), 200
 
 # ── Mentor / Video Session ────────────────────────────────────────────────────
 @app.post("/api/mentor-session")
@@ -5885,11 +6370,10 @@ def _split_multi_student_pdf(pdf_path: str, exam_questions: list = None) -> list
         if _qnos:
             first_q_no = min(_qnos)
 
-    # ── Per-page boundary detection ───────────────────────────────────────────
-    # Analyze EACH page independently with gpt-4o-mini to determine:
-    #   • student name/roll at top (if any)
-    #   • whether this page is the start of a new student's sheet
-    #     (detected via: Q1 restart, new header area, visible divider, etc.)
+    # ── Per-page OCR: extract student identity from each page ────────────────
+    # Strategy: ask GPT for student_name + roll_no + sheet_page_no on each page,
+    # then GROUP pages by roll_no. This is far more robust than boundary detection
+    # because the answer sheet template repeats the name/roll header on every page.
     from PIL import ImageStat as _PILStat
     page_roles = []
     for _i, _img in enumerate(images[:20]):
@@ -5900,7 +6384,7 @@ def _split_multi_student_pdf(pdf_path: str, exam_questions: list = None) -> list
             _pix_std = 999.0
         if _pix_std < 22:
             page_roles.append({"page": _i, "is_blank": True, "student_name": "",
-                "roll_no": "", "first_q_visible": None, "starts_new_sheet": False})
+                "roll_no": "", "sheet_page_no": None})
             print(f"[MULTI-SPLIT] Page {_i}: BLANK (pixel_std={_pix_std:.1f}) — skipped")
             continue
         _buf = _io.BytesIO()
@@ -5908,25 +6392,24 @@ def _split_multi_student_pdf(pdf_path: str, exam_questions: list = None) -> list
         _b64 = base64.b64encode(_buf.getvalue()).decode()
         _pp = (
             f"This is page {_i} of a scanned multi-student answer sheet PDF.\n"
-            "Look at the ENTIRE page.\n\n"
+            "Look ONLY at the header area at the very top of the page.\n\n"
             "Return ONLY this JSON object (no extra text):\n"
-            '{"is_blank":false,"student_name":"name or empty","roll_no":"roll or empty",'
-            f'"first_q_visible":null,"starts_new_sheet":false}}\n\n'
+            '{"is_blank":false,"student_name":"","roll_no":"","sheet_page_no":null}\n\n'
             "Definitions:\n"
-            "  is_blank — true if the page is completely blank or nearly blank (no student writing, no questions, no answers)\n"
-            "  student_name — any name written at the very top header area (empty string if none)\n"
-            "  roll_no — any roll/admission/ID number at the top header area (empty string if none)\n"
-            f"  first_q_visible — the SMALLEST question number visible on this page (integer, or null if none visible)\n"
-            f"  starts_new_sheet — true ONLY if this page CLEARLY begins a new student's section AND is NOT blank:\n"
-            f"    • earliest question on this page is Q{first_q_no} (answer sheet starts fresh), OR\n"
-            "    • there is a visible student name/roll header at the top\n"
-            "  NOTE: if is_blank is true, starts_new_sheet MUST be false"
+            "  is_blank — true only if the entire page is blank (no writing whatsoever)\n"
+            "  student_name — the HANDWRITTEN text inside the STUDENT NAME box at the top. "
+            "Write it exactly; use space (not '+') between parts. Empty string if unreadable.\n"
+            "  roll_no — the HANDWRITTEN number inside the ROLL NUMBER box at the top. "
+            "Return as a string (e.g. '1', '2'). Empty string if unreadable.\n"
+            "  sheet_page_no — the PRINTED page label in the top-right corner (e.g. 'Page 1' → 1, "
+            "'Page 2' → 2). Return as integer. null if not visible.\n"
+            "  NOTE: Do NOT infer — only report what is clearly visible in the header."
         )
         try:
             _resp = client.chat.completions.create(
                 model="gpt-4o-mini",
                 temperature=0.0,
-                max_tokens=120,
+                max_tokens=100,
                 messages=[{"role": "user", "content": [
                     {"type": "text", "text": _pp},
                     {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{_b64}", "detail": "high"}},
@@ -5942,48 +6425,119 @@ def _split_multi_student_pdf(pdf_path: str, exam_questions: list = None) -> list
         page_roles.append(_role)
         print(f"[MULTI-SPLIT] Page {_i}: {_role}")
 
-    # ── Find boundary pages ───────────────────────────────────────────────────
+    # ── Group pages by student boundaries ────────────────────────────────────
+    # Strategy 1 (primary): detect student starts via printed sheet_page_no == 1.
+    # Printed text is far more reliably OCR'd than handwritten roll numbers, so
+    # finding "Page 1" resets is the most robust way to separate students.
+    # Strategy 2 (fallback): majority-vote roll_no grouping (handles PDFs where
+    # the sheet_page_no label is absent or not printed).
     blank_pages = {_r["page"] for _r in page_roles if _r.get("is_blank")}
     if blank_pages:
         print(f"[MULTI-SPLIT] Blank pages (skipped): {sorted(blank_pages)}")
 
-    boundaries = []
-    for _r in page_roles:
-        if _r.get("is_blank"):
-            continue  # never treat a blank page as a student boundary
-        _starts = _r.get("starts_new_sheet")
-        _fqv = _r.get("first_q_visible")
-        _is_boundary = (
-            _starts is True
-            or (isinstance(_fqv, (int, float)) and int(_fqv) <= first_q_no)
-        )
-        if _is_boundary:
-            boundaries.append(_r)
+    from collections import OrderedDict, Counter
+    _non_blank = sorted([_r for _r in page_roles if not _r.get("is_blank")],
+                        key=lambda x: x["page"])
+    _page_role_map: dict = {_r["page"]: _r for _r in page_roles}
+    _non_blank_page_set = {_r["page"] for _r in _non_blank}
+    _all_non_blank_sorted = sorted(_non_blank_page_set)
 
-    print(f"[MULTI-SPLIT] Boundary pages: {[b['page'] for b in boundaries]}")
+    # ── Strategy 1: sheet_page_no restart detection ───────────────────────────
+    _restart_pages = [_r["page"] for _r in _non_blank if _r.get("sheet_page_no") == 1]
+    print(f"[MULTI-SPLIT] Detected restart pages (sheet_page_no=1): {_restart_pages}")
 
-    # ── Group pages into per-student sections ─────────────────────────────────
-    if boundaries:
-        result = []
-        _student_seq = 0
-        for _bi, _b in enumerate(boundaries):
-            _sp = _b["page"]
-            _ep = boundaries[_bi + 1]["page"] - 1 if _bi + 1 < len(boundaries) else n_pages - 1
-            # Exclude blank pages from this student's pages
-            _pages = [p for p in range(_sp, _ep + 1) if p not in blank_pages]
-            if not _pages:
-                print(f"[MULTI-SPLIT] Boundary page {_sp} has no non-blank pages — skipping")
-                continue
-            _student_seq += 1
-            _name = (_b.get("student_name") or "").strip() or f"Student {_student_seq}"
-            _roll = (_b.get("roll_no") or "").strip() or str(_student_seq)
-            result.append({
-                "student_name": _name,
-                "roll_no": _roll,
-                "page_indices": _pages,
-            })
-        if result:
+    if len(_restart_pages) >= 2:
+        # Use restart-page indices as initial student-chunk boundaries
+        _raw_groups: list = []
+        for _i, _start in enumerate(_restart_pages):
+            _end = _restart_pages[_i + 1] if _i + 1 < len(_restart_pages) else n_pages
+            _grp = [p for p in _all_non_blank_sorted if _start <= p < _end]
+            if _grp:
+                _raw_groups.append(_grp)
+
+        # Merge micro-groups with the same dominant (name, roll) pair.
+        # This handles false-positive restart pages whose sheet_page_no was
+        # misread as "1": the group's dominant name+roll still matches the
+        # real student, so it gets safely merged back.
+        def _dom_nr(_grp):
+            _names = [re.sub(r'\s+', '', (_page_role_map[p].get("student_name") or "").replace("+", " ").lower().strip())
+                      for p in _grp]
+            _rolls = [(_page_role_map[p].get("roll_no") or "").strip() for p in _grp]
+            _dn = Counter(_names).most_common(1)[0][0] if any(_names) else ""
+            _dr = Counter(_rolls).most_common(1)[0][0] if any(_r for _r in _rolls if _r) else ""
+            return (_dn, _dr)
+
+        from collections import defaultdict as _defaultdict
+        _merged: dict = {}
+        _merge_order: list = []
+        for _rg in _raw_groups:
+            _key_nr = _dom_nr(_rg)
+            if _key_nr not in _merged:
+                _merged[_key_nr] = []
+                _merge_order.append(_key_nr)
+            _merged[_key_nr].extend(_rg)
+
+        _groups_pages = [_merged[k] for k in _merge_order if _merged[k]]
+        print(f"[MULTI-SPLIT] After name+roll merge, {len(_groups_pages)} student group(s): "
+              f"{ {k: len(v) for k, v in zip(_merge_order, _groups_pages)} }")
+
+        if len(_groups_pages) >= 2:
+            result = []
+            for _seq, _grp in enumerate(_groups_pages, 1):
+                _all_names = [(_page_role_map[p].get("student_name") or "").replace("+", " ").strip()
+                              for p in _grp
+                              if (_page_role_map[p].get("student_name") or "").strip()]
+                _all_rolls = [(_page_role_map[p].get("roll_no") or "").strip()
+                              for p in _grp
+                              if (_page_role_map[p].get("roll_no") or "").strip()]
+                # Sort within group by sheet_page_no when all values are unique (reliable OCR).
+                # Fall back to physical PDF order when sheet_page_no has duplicates (OCR errors).
+                _spnos = [(_page_role_map[p].get("sheet_page_no") or 0) for p in _grp]
+                if len(set(_spnos)) == len(_spnos) and all(_spnos):
+                    _srt = sorted(_grp, key=lambda p: _page_role_map[p].get("sheet_page_no"))
+                else:
+                    _srt = sorted(_grp)  # physical PDF order
+                _name = Counter(_all_names).most_common(1)[0][0] if _all_names else f"Student {_seq}"
+                _roll = Counter(_all_rolls).most_common(1)[0][0] if _all_rolls else str(_seq)
+                result.append({"student_name": _name, "roll_no": _roll, "page_indices": _srt})
+            print(f"[MULTI-SPLIT] Grouped by sheet_page_no restart + name/roll merge: "
+                  f"{[(r['student_name'], r['roll_no'], r['page_indices']) for r in result]}")
             return result
+
+    # ── Strategy 2: group by roll_no (fallback) ───────────────────────────────
+    print("[MULTI-SPLIT] sheet_page_no restart detection insufficient — trying roll_no grouping")
+    groups = OrderedDict()
+    for _r in _non_blank:
+        _roll = (_r.get("roll_no") or "").strip()
+        _name = (_r.get("student_name") or "").replace("+", " ").strip()
+        _key = _roll if _roll else (_name if _name else f"unknown_{_r['page']}")
+        if _key not in groups:
+            groups[_key] = {"roll_no": _roll, "all_names": [], "pages": []}
+        if _roll and not groups[_key]["roll_no"]:
+            groups[_key]["roll_no"] = _roll
+        if _name:
+            groups[_key]["all_names"].append(_name)
+        groups[_key]["pages"].append((_r.get("sheet_page_no") or 999, _r["page"]))
+
+    print(f"[MULTI-SPLIT] Groups by roll_no: { {k: len(v['pages']) for k, v in groups.items()} }")
+
+    if len(groups) > 1:
+        result = []
+        for _seq, (_key, _g) in enumerate(groups.items(), 1):
+            _raw_pages = [p for _, p in sorted(_g["pages"])]
+            _spnos2 = [(_page_role_map[p].get("sheet_page_no") or 0) for p in _raw_pages]
+            if len(set(_spnos2)) == len(_spnos2) and all(_spnos2):
+                _sorted_pages = sorted(_raw_pages, key=lambda p: _page_role_map[p].get("sheet_page_no"))
+            else:
+                _sorted_pages = sorted(_raw_pages)
+            _name = Counter(_g["all_names"]).most_common(1)[0][0] if _g["all_names"] else f"Student {_seq}"
+            _roll = _g["roll_no"] or str(_seq)
+            result.append({"student_name": _name, "roll_no": _roll, "page_indices": _sorted_pages})
+        print(f"[MULTI-SPLIT] Grouped result: {[(r['student_name'], r['roll_no'], r['page_indices']) for r in result]}")
+        return result
+
+    # ── No clear grouping — fall through to all-pages-at-once vision ──────────
+    print("[MULTI-SPLIT] Roll-number grouping did not yield multiple students — trying fallback")
 
     # ── Fallback: all-pages-at-once vision ────────────────────────────────────
     # Per-page analysis found no boundaries — send all pages together with a
@@ -6018,6 +6572,9 @@ def _split_multi_student_pdf(pdf_path: str, exam_questions: list = None) -> list
         if isinstance(_parsed, list) and _parsed:
             for _e in _parsed:
                 _e.setdefault("page_indices", all_pages)
+                # Clean '+' OCR artefact from names in fallback path too
+                if "student_name" in _e:
+                    _e["student_name"] = (_e["student_name"] or "").replace("+", " ").strip()
             # Reject single-student result only if n_pages > 2
             # (if GPT-4o still says 1 student for many pages, trust it less)
             if len(_parsed) > 1 or n_pages <= 2:
@@ -6413,9 +6970,9 @@ def bulk_evaluate():
         fn   = secure_filename(f.filename)
         path = UPL_DIR / f"{datetime.utcnow().strftime('%Y%m%dT%H%M%S')}_{fn}"
         f.save(str(path))
-        m    = re.search(r"(\d+)", fn)
-        roll = request.form.get(f"roll_no_{fn}", "") or (m.group(1) if m else fn)
-        name = request.form.get(f"name_{fn}", "")
+        # Prefer explicitly submitted values; roll defaults to "" (resolved from header later)
+        roll = request.form.get(f"roll_no_{fn}", "").strip()
+        name = request.form.get(f"name_{fn}", "").strip()
         saved.append((str(path), roll, name, fn))
 
     log.info(f"[BULK] {len(saved)} files saved for exam={exam_id}")
@@ -6443,8 +7000,20 @@ def bulk_evaluate():
         fpath, roll, name, fn = entry
         fhash  = _file_hash(fpath)
         cached = _cache_get(fhash, exam_id)
+        # Extract student info from header if roll/name not provided by caller
+        if not roll or not name:
+            try:
+                hdr = _extract_header_info(fpath)
+                if not roll:
+                    roll = hdr.get("roll_no", "").strip()
+                if not name:
+                    name = hdr.get("student_name", "").strip()
+            except Exception as _he:
+                log.warning(f"[BULK] Header extraction failed for {fn}: {_he}")
         if cached:
-            return {"evaluation_id": cached["evaluation_id"], "roll_no": roll,
+            return {"evaluation_id": cached["evaluation_id"],
+                    "student_name": name or cached.get("student_name", ""),
+                    "roll_no": roll or cached.get("roll_no", ""),
                     "percentage": cached["result"].get("percentage",0),
                     "is_pass": cached["result"].get("is_pass",False),
                     "total_awarded": cached["result"].get("total_awarded",0),
@@ -6466,7 +7035,7 @@ def bulk_evaluate():
         if not IS_VERCEL:
             _save_json(EVAL_DIR / f"{eid}.json", p)
         _cache_set(fhash, exam_id, p)
-        return {"evaluation_id": eid, "roll_no": roll,
+        return {"evaluation_id": eid, "student_name": name, "roll_no": roll,
                 "percentage": res.get("percentage",0), "is_pass": res.get("is_pass",False),
                 "total_awarded": res.get("total_awarded",0),
                 "total_possible": res.get("total_possible",0)}, None
@@ -8128,6 +8697,302 @@ def serve_manifest():
         return send_from_directory(app.static_folder, "manifest.json")
     except Exception:
         return jsonify({}), 200
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  FINANCE LEDGER  — admin-only internal accounting
+# ══════════════════════════════════════════════════════════════════════════════
+M_FINANCE      = "finance_ledger"
+M_PAYROLL_EMP  = "payroll_employees"
+M_INVESTORS    = "finance_investors"
+
+def _fin_id() -> str:
+    return "txn_" + uuid.uuid4().hex[:10]
+
+def _emp_id() -> str:
+    return "emp_" + uuid.uuid4().hex[:8]
+
+def _inv_id() -> str:
+    return "inv_" + uuid.uuid4().hex[:8]
+
+# expense categories that count as "outflow"
+EXPENSE_TYPES = {"expense", "salary", "refund"}
+INCOME_TYPES  = {"income", "investment"}
+
+@app.get("/api/admin/finance/summary")
+@auth(roles=["admin"])
+def finance_summary():
+    """Aggregate KPIs: totals, monthly breakdown, category breakdown."""
+    import calendar as _cal
+    _FIN_FILE = TMP_ROOT / "finance_ledger.json"
+
+    if MONGO_OK:
+        txns = _mongo_find(M_FINANCE, {})
+    else:
+        txns = _load_json(_FIN_FILE, [])
+
+    total_income   = sum(t["amount"] for t in txns if t.get("type") in INCOME_TYPES)
+    total_expenses = sum(t["amount"] for t in txns if t.get("type") in EXPENSE_TYPES)
+    api_cost_total = sum(t["amount"] for t in txns if t.get("category") == "api_cost")
+    salary_total   = sum(t["amount"] for t in txns if t.get("type") == "salary" or t.get("category") == "salary")
+    invest_total   = sum(t["amount"] for t in txns if t.get("type") == "investment")
+
+    # Monthly rollup
+    monthly_map = {}
+    for t in txns:
+        m = (t.get("date") or "")[:7]  # YYYY-MM
+        if not m:
+            continue
+        if m not in monthly_map:
+            monthly_map[m] = {"month": m, "income": 0.0, "expenses": 0.0, "count": 0}
+        if t.get("type") in INCOME_TYPES:
+            monthly_map[m]["income"] += t["amount"]
+        elif t.get("type") in EXPENSE_TYPES:
+            monthly_map[m]["expenses"] += t["amount"]
+        monthly_map[m]["count"] += 1
+    monthly = sorted(monthly_map.values(), key=lambda x: x["month"])
+    # Abbreviate month label e.g. "2026-03" → "Mar'26"
+    for row in monthly:
+        try:
+            yr, mo = row["month"].split("-")
+            row["month"] = f"{_cal.month_abbr[int(mo)]}'{yr[2:]}"
+        except Exception:
+            pass
+
+    # Category breakdown
+    cat_map = {}
+    for t in txns:
+        cat  = t.get("category", "misc_exp")
+        flow = "income" if t.get("type") in INCOME_TYPES else "expense"
+        key  = f"{cat}___{flow}"
+        if key not in cat_map:
+            cat_map[key] = {"category": cat, "flow": flow, "total": 0.0, "count": 0}
+        cat_map[key]["total"] += t["amount"]
+        cat_map[key]["count"] += 1
+
+    # Recent 20 transactions sorted by date desc
+    recent = sorted(txns, key=lambda t: t.get("date", ""), reverse=True)[:20]
+
+    return jsonify({
+        "summary": {
+            "total_income":     round(total_income,   2),
+            "total_expenses":   round(total_expenses, 2),
+            "net_pl":           round(total_income - total_expenses, 2),
+            "api_cost_total":   round(api_cost_total, 2),
+            "salary_total":     round(salary_total,   2),
+            "investment_total": round(invest_total,   2),
+            "monthly":          monthly,
+            "by_category":      list(cat_map.values()),
+        },
+        "recent_transactions": recent,
+    })
+
+
+@app.get("/api/admin/finance/transactions")
+@auth(roles=["admin"])
+def finance_list_transactions():
+    """List transactions with optional filters: type, category, from, to, q."""
+    _FIN_FILE = TMP_ROOT / "finance_ledger.json"
+    type_f = request.args.get("type", "")
+    cat_f  = request.args.get("category", "")
+    from_f = request.args.get("from", "")
+    to_f   = request.args.get("to", "")
+    q_f    = request.args.get("q", "").lower()
+
+    if MONGO_OK:
+        txns = _mongo_find(M_FINANCE, {})
+    else:
+        txns = _load_json(_FIN_FILE, [])
+
+    if type_f:
+        txns = [t for t in txns if t.get("type") == type_f]
+    if cat_f:
+        txns = [t for t in txns if t.get("category") == cat_f]
+    if from_f:
+        txns = [t for t in txns if (t.get("date") or "") >= from_f]
+    if to_f:
+        txns = [t for t in txns if (t.get("date") or "") <= to_f]
+    if q_f:
+        txns = [t for t in txns
+                if q_f in (t.get("description") or "").lower()
+                or q_f in (t.get("vendor") or "").lower()
+                or q_f in (t.get("reference") or "").lower()
+                or any(q_f in tag for tag in (t.get("tags") or []))]
+
+    txns = sorted(txns, key=lambda t: t.get("date", ""), reverse=True)
+    return jsonify({"transactions": txns, "count": len(txns)})
+
+
+@app.post("/api/admin/finance/transactions")
+@auth(roles=["admin"])
+def finance_add_transaction():
+    """Record a new transaction."""
+    data = request.json or {}
+    required = ["type", "amount", "description", "date"]
+    for f in required:
+        if not data.get(f):
+            return jsonify({"error": f"'{f}' is required"}), 400
+
+    txn = {
+        "id":          _fin_id(),
+        "type":        data["type"],
+        "category":    data.get("category", "misc_exp"),
+        "amount":      float(data["amount"]),
+        "currency":    data.get("currency", "INR"),
+        "description": data["description"],
+        "vendor":      data.get("vendor", ""),
+        "date":        data["date"],
+        "reference":   data.get("reference", ""),
+        "notes":       data.get("notes", ""),
+        "tags":        data.get("tags", []),
+        "created_by":  request.user["id"],
+        "created_at":  _now(),
+    }
+
+    if MONGO_OK:
+        _mongo_insert(M_FINANCE, txn)
+    else:
+        _FIN_FILE = TMP_ROOT / "finance_ledger.json"
+        existing = _load_json(_FIN_FILE, [])
+        existing.append(txn)
+        _save_json(_FIN_FILE, existing)
+
+    return jsonify({"transaction": txn}), 201
+
+
+@app.patch("/api/admin/finance/transactions/<txn_id>")
+@auth(roles=["admin"])
+def finance_update_transaction(txn_id):
+    """Update an existing transaction."""
+    data    = request.json or {}
+    allowed = {"type","category","amount","currency","description",
+               "vendor","date","reference","notes","tags"}
+    update  = {k: v for k, v in data.items() if k in allowed}
+    if "amount" in update:
+        update["amount"] = float(update["amount"])
+    update["updated_at"] = _now()
+
+    if MONGO_OK:
+        _mongo_update(M_FINANCE, {"id": txn_id}, {"$set": update})
+    else:
+        _FIN_FILE = TMP_ROOT / "finance_ledger.json"
+        txns = _load_json(_FIN_FILE, [])
+        for t in txns:
+            if t["id"] == txn_id:
+                t.update(update)
+        _save_json(_FIN_FILE, txns)
+
+    return jsonify({"updated": True})
+
+
+@app.delete("/api/admin/finance/transactions/<txn_id>")
+@auth(roles=["admin"])
+def finance_delete_transaction(txn_id):
+    """Delete a transaction."""
+    if MONGO_OK:
+        _mongo_delete(M_FINANCE, {"id": txn_id})
+    else:
+        _FIN_FILE = TMP_ROOT / "finance_ledger.json"
+        txns = _load_json(_FIN_FILE, [])
+        txns = [t for t in txns if t["id"] != txn_id]
+        _save_json(_FIN_FILE, txns)
+    return jsonify({"deleted": True})
+
+
+# ── Payroll: employees / contractors ─────────────────────────────────────────
+@app.get("/api/admin/finance/payroll/employees")
+@auth(roles=["admin"])
+def payroll_list_employees():
+    if MONGO_OK:
+        emps = _mongo_find(M_PAYROLL_EMP, {})
+    else:
+        emps = _load_json(TMP_ROOT / "payroll_employees.json", [])
+    return jsonify({"employees": emps})
+
+
+@app.post("/api/admin/finance/payroll/employees")
+@auth(roles=["admin"])
+def payroll_add_employee():
+    data = request.json or {}
+    if not data.get("name") or not data.get("monthly_salary"):
+        return jsonify({"error": "name and monthly_salary required"}), 400
+
+    emp = {
+        "id":             _emp_id(),
+        "name":           data["name"],
+        "role":           data.get("role", ""),
+        "email":          data.get("email", ""),
+        "type":           data.get("type", "employee"),
+        "monthly_salary": float(data["monthly_salary"]),
+        "currency":       data.get("currency", "INR"),
+        "bank_ref":       data.get("bank_ref", ""),
+        "joined_on":      data.get("joined_on", _now()[:10]),
+        "notes":          data.get("notes", ""),
+        "created_at":     _now(),
+    }
+    if MONGO_OK:
+        _mongo_insert(M_PAYROLL_EMP, emp)
+    else:
+        _EMP_FILE = TMP_ROOT / "payroll_employees.json"
+        existing = _load_json(_EMP_FILE, [])
+        existing.append(emp)
+        _save_json(_EMP_FILE, existing)
+    return jsonify({"employee": emp}), 201
+
+
+@app.delete("/api/admin/finance/payroll/employees/<emp_id>")
+@auth(roles=["admin"])
+def payroll_delete_employee(emp_id):
+    if MONGO_OK:
+        _mongo_delete(M_PAYROLL_EMP, {"id": emp_id})
+    else:
+        _EMP_FILE = TMP_ROOT / "payroll_employees.json"
+        emps = _load_json(_EMP_FILE, [])
+        emps = [e for e in emps if e["id"] != emp_id]
+        _save_json(_EMP_FILE, emps)
+    return jsonify({"deleted": True})
+
+
+# ── Investors / funding rounds ────────────────────────────────────────────────
+@app.get("/api/admin/finance/payroll/investors")
+@auth(roles=["admin"])
+def investors_list():
+    if MONGO_OK:
+        investors = _mongo_find(M_INVESTORS, {})
+    else:
+        investors = _load_json(TMP_ROOT / "finance_investors.json", [])
+    return jsonify({"investors": investors})
+
+
+@app.post("/api/admin/finance/payroll/investors")
+@auth(roles=["admin"])
+def investors_add():
+    data = request.json or {}
+    if not data.get("name") or not data.get("amount"):
+        return jsonify({"error": "name and amount required"}), 400
+
+    inv = {
+        "id":         _inv_id(),
+        "name":       data["name"],
+        "type":       data.get("type", "angel"),
+        "round":      data.get("round", "Seed"),
+        "amount":     float(data["amount"]),
+        "currency":   data.get("currency", "INR"),
+        "equity_pct": float(data.get("equity_pct") or 0),
+        "date":       data.get("date", _now()[:10]),
+        "contact":    data.get("contact", ""),
+        "terms":      data.get("terms", ""),
+        "notes":      data.get("notes", ""),
+        "created_at": _now(),
+    }
+    if MONGO_OK:
+        _mongo_insert(M_INVESTORS, inv)
+    else:
+        _INV_FILE = TMP_ROOT / "finance_investors.json"
+        existing = _load_json(_INV_FILE, [])
+        existing.append(inv)
+        _save_json(_INV_FILE, existing)
+    return jsonify({"investor": inv}), 201
+
 
 @app.route("/", defaults={"path": ""})
 @app.route("/<path:path>")
