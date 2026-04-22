@@ -15,11 +15,12 @@ API base:     http://localhost:5001/api/...
 import os, json, re, uuid, hashlib, random, base64, shutil, smtplib
 import logging
 import time as _time
+import threading
 import requests as _requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from functools import wraps
 from typing import List, Dict, Any, Optional
@@ -57,8 +58,38 @@ except ImportError:
     OPENAI_OK = False
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+OPENAI_API_KEY_BULK_PRIMARY = os.getenv("OPENAI_API_KEY_BULK_PRIMARY", "")
+OPENAI_API_KEY_BULK_FALLBACK = os.getenv("OPENAI_API_KEY_BULK_FALLBACK", "")
+OPENAI_API_KEY_PREMIUM = os.getenv("OPENAI_API_KEY_PREMIUM", "")
 OPENAI_MODEL   = os.getenv("OPENAI_MODEL", "gpt-4o")
 OPENAI_MINI    = os.getenv("OPENAI_MINI_MODEL", "gpt-4o-mini")
+OCR_VISION_MODEL        = os.getenv("OCR_VISION_MODEL", OPENAI_MINI)
+OCR_PREMIUM_VISION_MODEL = os.getenv("OCR_PREMIUM_VISION_MODEL", OPENAI_MODEL)
+SUBJECTIVE_OCR_MODEL    = os.getenv("SUBJECTIVE_OCR_MODEL", OPENAI_MINI)  # default to mini for lower cost; override in env when needed
+OCR_MAX_IMAGE_DIM = int(os.getenv("OCR_MAX_IMAGE_DIM", "2048") or "2048")
+OCR_JPEG_QUALITY = int(os.getenv("OCR_JPEG_QUALITY", "82") or "82")
+OCR_PDF_DPI = int(os.getenv("OCR_PDF_DPI", "180" if os.getenv("K_SERVICE", "").strip() else "300") or "300")
+OCR_QUALITY_ESCALATION_THRESHOLD = float(os.getenv("OCR_QUALITY_ESCALATION_THRESHOLD", "0.75") or "0.75")
+OCR_PREPROCESS_GEOMETRY = os.getenv("OCR_PREPROCESS_GEOMETRY", "1") == "1"
+OCR_PREPROCESS_CLAHE = os.getenv("OCR_PREPROCESS_CLAHE", "1") == "1"
+OCR_PREPROCESS_COMPRESSION = os.getenv("OCR_PREPROCESS_COMPRESSION", "1") == "1"
+MULTI_SPLIT_FIXED_PAGES = int(os.getenv("MULTI_SPLIT_FIXED_PAGES", "4") or "4")
+MULTI_EVAL_BATCH_SIZE = int(os.getenv("MULTI_EVAL_BATCH_SIZE", "5") or "5")
+MULTI_EVAL_INTER_BATCH_DELAY = float(os.getenv("MULTI_EVAL_INTER_BATCH_DELAY", "0.75") or "0.75")
+MULTI_EVAL_EXTRACT_ATTEMPTS = int(os.getenv("MULTI_EVAL_EXTRACT_ATTEMPTS", "4") or "4")
+MULTI_EVAL_EVAL_ATTEMPTS = int(os.getenv("MULTI_EVAL_EVAL_ATTEMPTS", "3") or "3")
+MULTI_EVAL_MAX_WORKERS_OVERRIDE = int(os.getenv("MULTI_EVAL_MAX_WORKERS", "0") or "0")
+OCR_PIPELINE_VERSION = "2026-04-19.2"
+OCR_FAST_COST = os.getenv("OCR_FAST_COST", "1") == "1"
+
+# ── Enhanced Evaluation Configuration ──────────────────────────────────────────
+OCR_CONFIDENCE_THRESHOLD = float(os.getenv("OCR_CONFIDENCE_THRESHOLD", "0.75") or "0.75")     # Escalate if below
+GRADING_BORDERLINE_MARGIN = float(os.getenv("GRADING_BORDERLINE_MARGIN", "0.05") or "0.05") # 5% of pass threshold
+REVIEW_ESSAY_LENGTH_THRESHOLD = int(os.getenv("REVIEW_ESSAY_LENGTH_THRESHOLD", "500") or "500")  # Words
+REVIEW_SCORE_ANOMALY_STDDEV = float(os.getenv("REVIEW_SCORE_ANOMALY_STDDEV", "2.0") or "2.0") # >2σ deviations
+BULK_PARALLEL_WORKERS = int(os.getenv("BULK_PARALLEL_WORKERS", "10") or "10")     # Max workers for bulk
+COST_OPTIMIZATION_ENABLED = os.getenv("COST_OPTIMIZATION_ENABLED", "1") == "1"     # Route by sheet quality
+ENABLE_PARENT_EMAILS = os.getenv("ENABLE_PARENT_EMAILS", "0") == "1"               # Send automated parent reports
 
 # ── Razorpay (Payment Gateway) ─────────────────────────────────────────────────
 RAZORPAY_KEY_ID     = os.getenv("RAZORPAY_KEY_ID", "")
@@ -102,7 +133,16 @@ ALLOWED = {"pdf","txt","md","docx","doc","mp3","mp4","wav","m4a","ogg","jpg","jp
 
 # ── Flask ─────────────────────────────────────────────────────────────────────
 app = Flask(__name__, static_folder="dist", static_url_path="")
-CORS(app, resources={r"/api/*": {"origins": "*"}})
+CORS(app, resources={
+    r"/api/*": {
+        "origins": "*",
+        "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        "allow_headers": ["Content-Type", "Authorization"],
+        "expose_headers": ["Content-Type", "Authorization"],
+        "supports_credentials": True,
+        "max_age": 3600
+    }
+})
 app.config["MAX_CONTENT_LENGTH"] = 200 * 1024 * 1024  # 200 MB
 
 @app.errorhandler(413)
@@ -145,19 +185,264 @@ try:
 except Exception as _ce:
     log.warning(f"Celery/Redis unavailable — falling back to sync evaluation: {_ce}")
 
+# ── Native background task registry (used when Celery/Redis is unavailable) ──
+# Keyed by a random hex task_id. Entries: {"status": "pending"|"completed"|"failed",
+# "result": {...}|None, "error": str|None}
+_bg_task_registry: dict = {}
+_bg_task_lock = threading.Lock()
+
+def _bg_task_persist(tid: str, status: str, result: Optional[dict] = None, error: Optional[str] = None):
+    """Persist background task state to MongoDB when available."""
+    if not MONGO_OK:
+        return
+    try:
+        _mongo_update(
+            M_BG_TASKS,
+            {"task_id": tid},
+            {"$set": {
+                "task_id": tid,
+                "status": status,
+                "result": _stringify_keys(result) if isinstance(result, dict) else None,
+                "error": str(error or ""),
+                "updated_at": _now(),
+            }},
+            upsert=True,
+        )
+    except Exception as _bg_err:
+        log.warning(f"[BG-TASK] Persist failed for {tid}: {_bg_err}")
+
+def _bg_task_create() -> str:
+    """Register a new pending background task and return its ID."""
+    tid = uuid.uuid4().hex
+    with _bg_task_lock:
+        _bg_task_registry[tid] = {"status": "pending", "result": None, "error": None}
+    _bg_task_persist(tid, "pending", result=None, error=None)
+    return tid
+
+def _bg_task_set_result(tid: str, result: dict):
+    with _bg_task_lock:
+        _bg_task_registry[tid] = {"status": "completed", "result": result, "error": None}
+    _bg_task_persist(tid, "completed", result=result, error=None)
+
+def _bg_task_set_error(tid: str, error: str):
+    with _bg_task_lock:
+        _bg_task_registry[tid] = {"status": "failed", "result": None, "error": error}
+    _bg_task_persist(tid, "failed", result=None, error=error)
+
+def _bg_task_get(tid: str) -> dict | None:
+    with _bg_task_lock:
+        local = _bg_task_registry.get(tid)
+    if local is not None:
+        return local
+    if not MONGO_OK:
+        return None
+    doc = _mongo_find_one(M_BG_TASKS, {"task_id": tid})
+    if not doc:
+        return None
+    payload = {
+        "status": doc.get("status", "pending"),
+        "result": doc.get("result"),
+        "error": doc.get("error"),
+    }
+    with _bg_task_lock:
+        _bg_task_registry[tid] = payload
+    return payload
+
 # ── OpenAI rate limiter (2 req/s to stay within tier limits) ─────────────────
 class _RateLimiter:
     def __init__(self, rate: float = 2.0):
         self._min_gap = 1.0 / rate
         self._last    = 0.0
+        self._lock    = threading.Lock()
     def wait(self):
-        now = _time.monotonic()
-        gap = now - self._last
-        if gap < self._min_gap:
-            _time.sleep(self._min_gap - gap)
-        self._last = _time.monotonic()
+        with self._lock:
+            now = _time.monotonic()
+            gap = now - self._last
+            if gap < self._min_gap:
+                _time.sleep(self._min_gap - gap)
+            self._last = _time.monotonic()
 
 _openai_limiter = _RateLimiter(rate=2.0)
+
+def _openai_key_candidates(premium: bool = False) -> list[str]:
+    """Ordered OpenAI keys for failover. Premium queue prefers premium key first."""
+    raw = []
+    if premium:
+        raw.append(OPENAI_API_KEY_PREMIUM)
+    raw.extend([OPENAI_API_KEY_BULK_PRIMARY, OPENAI_API_KEY, OPENAI_API_KEY_BULK_FALLBACK])
+    out: list[str] = []
+    for k in raw:
+        ks = str(k or "").strip()
+        # Filter out empty keys AND inline comments from .env files
+        if ks and not ks.startswith('#') and ks not in out:
+            out.append(ks)
+    return out
+
+def _is_retryable_openai_error(ex: Exception) -> bool:
+    msg = str(ex).lower()
+    retry_tokens = (
+        "429", "rate limit", "rate_limit", "insufficient_quota",
+        "timeout", "timed out", "connection", "temporar", "service unavailable",
+    )
+    return any(t in msg for t in retry_tokens)
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  ENHANCED EVALUATION SYSTEM — Data Models & Helpers
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _create_ocr_extraction_record(eval_id: str, student_name: str, roll_no: str, 
+                                   exam_id: str, answers: dict, confidence_scores: dict) -> dict:
+    """Create an OCR extraction record with confidence scores per answer."""
+    min_confidence = min(confidence_scores.values()) if confidence_scores else 1.0
+    needs_review = min_confidence < OCR_CONFIDENCE_THRESHOLD
+    
+    return {
+        "extraction_id": eval_id,
+        "exam_id": exam_id,
+        "student_name": student_name,
+        "roll_no": roll_no,
+        "answers": _stringify_keys(answers),
+        "confidence_scores": _stringify_keys(confidence_scores),
+        "min_confidence": round(min_confidence, 3),
+        "needs_review": needs_review,
+        "review_reason": "low_confidence_ocr" if needs_review else "",
+        "created_at": _now(),
+    }
+
+def _create_grading_record(eval_id: str, exam_id: str, student_name: str, roll_no: str,
+                           answers: dict, grading_result: dict, subject: str = "", class_level: str = "") -> dict:
+    """Create a grading record with per-question marks and subject-specific rules applied."""
+    total_marks = 0
+    max_marks = 0
+    questions_graded = []
+    
+    # Extract marks from grading result
+    for q_id, q_result in grading_result.items():
+        if isinstance(q_result, dict):
+            marks_awarded = float(q_result.get("marks_awarded", 0))
+            max_q_marks = float(q_result.get("max_marks", 0))
+            total_marks += marks_awarded
+            max_marks += max_q_marks
+            questions_graded.append({
+                "question_id": q_id,
+                "marks_awarded": marks_awarded,
+                "max_marks": max_q_marks,
+                "reason": q_result.get("reason", ""),
+            })
+    
+    percentage = round((total_marks / max(max_marks, 1)) * 100, 1)
+    pass_threshold = 40.0  # Default: 40% pass threshold
+    is_pass = percentage >= pass_threshold
+    
+    return {
+        "grading_id": eval_id,
+        "exam_id": exam_id,
+        "student_name": student_name,
+        "roll_no": roll_no,
+        "subject": subject,
+        "class_level": class_level,
+        "total_marks": round(total_marks, 2),
+        "max_marks": max_marks,
+        "percentage": percentage,
+        "is_pass": is_pass,
+        "pass_threshold": pass_threshold,
+        "questions_graded": questions_graded,
+        "grading_model": OPENAI_MODEL,
+        "created_at": _now(),
+    }
+
+def _add_to_review_queue(eval_id: str, exam_id: str, student_name: str, roll_no: str, 
+                         reason: str, metadata: dict = None) -> bool:
+    """Add an evaluation to the teacher review queue."""
+    if not reason:
+        return False
+    
+    review_item = {
+        "review_id": uuid.uuid4().hex[:10],
+        "evaluation_id": eval_id,
+        "exam_id": exam_id,
+        "student_name": student_name,
+        "roll_no": roll_no,
+        "review_reason": reason,
+        "review_reason_type": _categorize_review_reason(reason),
+        "metadata": metadata or {},
+        "status": "pending",  # pending, approved, rejected, auto_approved
+        "teacher_comments": "",
+        "created_at": _now(),
+        "updated_at": _now(),
+    }
+    
+    if MONGO_OK:
+        try:
+            _mongo_insert(M_REVIEW_QUEUE, review_item)
+            log.info(f"[REVIEW-QUEUE] Added {student_name} ({roll_no}): {reason}")
+            return True
+        except Exception as ex:
+            log.warning(f"[REVIEW-QUEUE] Failed to add {eval_id}: {ex}")
+    return False
+
+def _categorize_review_reason(reason: str) -> str:
+    """Categorize the review reason for analytics."""
+    reason_lower = reason.lower()
+    if "low_confidence" in reason_lower:
+        return "low_confidence_ocr"
+    elif "borderline" in reason_lower:
+        return "borderline_marks"
+    elif "illegible" in reason_lower:
+        return "illegible_handwriting"
+    elif "diagram" in reason_lower:
+        return "complex_diagram"
+    elif "essay" in reason_lower or "length" in reason_lower:
+        return "long_essay"
+    elif "anomaly" in reason_lower or "unusual" in reason_lower:
+        return "score_anomaly"
+    else:
+        return "other"
+
+def _track_analytics(exam_id: str, teacher_id: str, metrics: dict) -> bool:
+    """Track evaluation analytics for insights dashboard."""
+    analytics_doc = {
+        "analytics_id": uuid.uuid4().hex[:10],
+        "exam_id": exam_id,
+        "teacher_id": teacher_id,
+        "papers_processed": metrics.get("papers_processed", 0),
+        "avg_grading_time_sec": metrics.get("avg_grading_time_sec", 0),
+        "accuracy_review_percent": metrics.get("accuracy_review_percent", 0),
+        "cost_per_paper_usd": metrics.get("cost_per_paper_usd", 0),
+        "teacher_corrections_percent": metrics.get("teacher_corrections_percent", 0),
+        "most_common_weak_topics": metrics.get("weak_topics", []),
+        "pass_rate_percent": metrics.get("pass_rate_percent", 0),
+        "avg_score": metrics.get("avg_score", 0),
+        "created_at": _now(),
+    }
+    
+    if MONGO_OK:
+        try:
+            _mongo_insert(M_ANALYTICS, analytics_doc)
+            return True
+        except Exception as ex:
+            log.warning(f"[ANALYTICS] Failed to track: {ex}")
+    return False
+
+def _track_cost(eval_id: str, exam_id: str, model_used: str, tokens_used: int, cost_usd: float) -> bool:
+    """Track AI API cost per evaluation."""
+    cost_doc = {
+        "cost_id": uuid.uuid4().hex[:10],
+        "evaluation_id": eval_id,
+        "exam_id": exam_id,
+        "model_used": model_used,
+        "tokens_used": tokens_used,
+        "cost_usd": round(cost_usd, 4),
+        "created_at": _now(),
+    }
+    
+    if MONGO_OK:
+        try:
+            _mongo_insert(M_COST_TRACKER, cost_doc)
+            return True
+        except Exception as ex:
+            log.warning(f"[COST-TRACK] Failed to track: {ex}")
+    return False
 
 @app.route("/api/uploads/<path:filename>")
 def download_upload(filename):
@@ -234,6 +519,16 @@ M_EVALS           = "evaluations"
 M_BULK            = "bulk_evals"
 M_SESSIONS        = "sessions"
 M_PRACTICE_HIST   = "practice_history"
+M_BG_TASKS        = "bg_tasks"
+
+# ── Enhanced Evaluation Collections ────────────────────────────────────────────
+M_UPLOADS         = "evaluation_uploads"       # Bulk upload tracking (exam, subject, class, max_marks)
+M_OCR_QUEUE       = "ocr_extraction_queue"     # Answer extraction with confidence scores
+M_GRADING_QUEUE   = "grading_queue"            # Grading results with per-question marks
+M_REVIEW_QUEUE    = "review_queue"             # Items needing teacher review
+M_EVAL_RESULTS    = "evaluation_results"       # Complete evaluation history
+M_ANALYTICS       = "evaluation_analytics"     # Daily/hourly analytics tracking
+M_COST_TRACKER    = "cost_tracking"            # AI API cost per paper
 
 # ── MongoDB helpers ────────────────────────────────────────────────────────────
 def _stringify_keys(obj):
@@ -335,6 +630,22 @@ def _save_bulk():
     if not IS_VERCEL:
         _save_json(BULK_REG_F, bulk_evaluations_registry)
 
+def _rebuild_exams_registry_from_dir() -> Dict[str, dict]:
+    rebuilt: Dict[str, dict] = {}
+    try:
+        for p in sorted(EXAMS_DIR.glob("*.json")):
+            try:
+                data = json.loads(p.read_text(encoding="utf-8"))
+                if isinstance(data, dict):
+                    exam_id = str(data.get("exam_id") or p.stem)
+                    data["exam_id"] = exam_id
+                    rebuilt[exam_id] = data
+            except Exception:
+                continue
+    except Exception:
+        return {}
+    return rebuilt
+
 def _boot_load():
     """On startup: load registries from MongoDB first, fall back to JSON."""
     global syllabi_registry, exams_registry, evaluations_registry, bulk_evaluations_registry
@@ -352,6 +663,13 @@ def _boot_load():
     exams_registry             = _load(M_EXAMS,   EXAMS_REG_F)
     evaluations_registry       = _load(M_EVALS,   EVALS_REG_F)
     bulk_evaluations_registry  = _load(M_BULK,    BULK_REG_F)
+
+    if not exams_registry:
+        rebuilt = _rebuild_exams_registry_from_dir()
+        if rebuilt:
+            exams_registry = rebuilt
+            _save_exams()
+            print(f"[BOOT] Rebuilt exams registry from files: {len(rebuilt)}")
 
     counts = {
         "syllabi":     len(syllabi_registry),
@@ -404,6 +722,12 @@ def _normalize_subject_name(subject: str) -> str:
         "social": "social science",
         "cs": "computer science",
         "comp science": "computer science",
+        "computer application": "computer applications",
+        "history and civics": "history & civics",
+        "history/civics": "history & civics",
+        "history civics": "history & civics",
+        "english lit": "english literature",
+        "english lang": "english language",
     }
     return aliases.get(s, s)
 
@@ -414,8 +738,33 @@ def _coerce_mcq_answer(student_answer: str, options: Dict[str, str]) -> str:
     """IMPROVED: Properly handles dash-prefixed answers like '- A'"""
     if not student_answer:
         return ""
+
+    # If OCR returned a structured payload (often stringified as a dict),
+    # prefer the explicit bubble field over any incidental letter elsewhere.
+    if isinstance(student_answer, dict):
+        bubble_val = str(student_answer.get("bubble", student_answer.get("answer", ""))).strip()
+        box_val    = str(student_answer.get("box", student_answer.get("write_box", ""))).strip()
+        if bubble_val:
+            return _coerce_mcq_answer(bubble_val, options)
+        if box_val:
+            return _coerce_mcq_answer(box_val, options)
+        return ""
     
     s = str(student_answer).strip()
+
+    if s.startswith("{") and s.endswith("}"):
+        try:
+            import ast
+            parsed = ast.literal_eval(s)
+            if isinstance(parsed, dict):
+                bubble_val = str(parsed.get("bubble", parsed.get("answer", ""))).strip()
+                box_val    = str(parsed.get("box", parsed.get("write_box", ""))).strip()
+                if bubble_val:
+                    return _coerce_mcq_answer(bubble_val, options)
+                if box_val:
+                    return _coerce_mcq_answer(box_val, options)
+        except Exception:
+            pass
     
     # Remove answer prefixes
     s = re.sub(r'^(?:ans(?:wer)?|response|student\s*ans(?:wer)?)\s*[:\-]\s*', '', s, flags=re.IGNORECASE)
@@ -530,6 +879,28 @@ def _objective_is_correct(q: dict, student_answer: str) -> bool:
         valid_norm.add(_normalize(options[student_upper]))
 
     return bool(student_norm and student_norm in valid_norm)
+
+def _refresh_evaluation_for_report(ev: dict, exam: dict) -> dict:
+    """Recompute the evaluation result from stored submitted answers before rendering a report."""
+    submitted = ev.get("submitted_answers") or {}
+    if not isinstance(submitted, dict) or not submitted:
+        return ev
+
+    normalized: Dict[int, str] = {}
+    for k, v in submitted.items():
+        try:
+            normalized[int(k)] = v
+        except (TypeError, ValueError):
+            continue
+
+    refreshed = _evaluate_answers(exam, normalized, str(ev.get("roll_no", "")))
+    if not refreshed:
+        return ev
+
+    ev = dict(ev)
+    ev["result"] = refreshed
+    ev["report_refreshed_at"] = _now()
+    return ev
 
 def _dtype(ext: str)-> str:
     return {"pdf":"PDF","txt":"Text","md":"Text","mp3":"Audio","wav":"Audio",
@@ -757,6 +1128,7 @@ def _default_db() -> dict:
         ],
         "documents": [],
         "activity": [],
+        "sessions": [],
         "settings": {
             "model":                  OPENAI_MODEL,
             "max_uploads_per_user":   20,
@@ -1342,6 +1714,172 @@ def _evaluate_answers(exam: dict, submitted: Dict[int, str], roll_no: str = "") 
         "improvement_prediction": improvement, "question_wise": evals
     }
 
+# ══════════════════════════════════════════════════════════════════════════════
+#  SUBJECT-SPECIFIC GRADING RULES
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _get_subject_grading_prompt(exam: dict, subject: str, class_level: str) -> str:
+    """Return a grading prompt tailored to the subject and class level."""
+    subject_lower = subject.lower() if subject else ""
+    
+    # MATHEMATICS: Step marking, formula correctness, final answer
+    if "math" in subject_lower or "maths" in subject_lower:
+        return """You are a strict CBSE Mathematics examiner.
+When grading answers:
+1. Award FULL marks only if:
+   - The method/approach is correct
+   - All steps are shown (if multi-step problem)
+   - Formula is applied correctly
+   - Final answer is correct AND properly simplified
+2. Award PARTIAL marks (50% of max) if:
+   - Correct method but calculation error
+   - Correct final answer but steps missing
+   - Formula is correct but unit is wrong
+3. Award 0 marks if:
+   - Completely wrong method
+   - No working shown for multi-step problem
+   - Formula misapplied
+Return JSON: {{"awarded_marks": X, "max_marks": Y, "reason": "...", "method_correct": bool, "answer_correct": bool}}"""
+    
+    # SCIENCE: Keywords, explanation quality, diagram labels
+    elif "science" in subject_lower or "physics" in subject_lower or "chemistry" in subject_lower or "biology" in subject_lower:
+        return """You are a strict CBSE Science examiner.
+When grading answers:
+1. Award FULL marks if:
+   - All key scientific terms are used correctly
+   - Explanation includes cause-effect relationship
+   - Diagram (if required) is labeled correctly
+   - Answer is scientifically accurate
+2. Award PARTIAL marks if:
+   - Most keywords present but one missing
+   - Correct concept but incomplete explanation
+   - Diagram present but missing labels
+3. Award 0 marks if:
+   - Fundamentally incorrect understanding
+   - No use of scientific vocabulary
+   - Irrelevant/off-topic
+Return JSON: {{"awarded_marks": X, "max_marks": Y, "reason": "...", "keywords_found": [...], "explanation_quality": "good/fair/poor"}}"""
+    
+    # ENGLISH: Grammar, structure, content relevance
+    elif "english" in subject_lower:
+        return """You are a strict CBSE English examiner.
+When grading answers:
+1. Award FULL marks if:
+   - Grammar and spelling are mostly correct
+   - Sentence structure is coherent and varied
+   - Content is relevant and well-organized
+   - Vocabulary is appropriate
+2. Award PARTIAL marks if:
+   - Minor grammar/spelling errors
+   - Content is mostly relevant but slightly disorganized
+   - Simple vocabulary but understandable
+3. Award 0 marks if:
+   - Severe grammar/spelling making it unintelligible
+   - Irrelevant content
+   - No attempt at coherent structure
+Return JSON: {{"awarded_marks": X, "max_marks": Y, "reason": "...", "grammar_score": 0-10, "content_score": 0-10, "structure_score": 0-10}}"""
+    
+    # SOCIAL STUDIES: Concepts, dates, examples
+    elif "sst" in subject_lower or "history" in subject_lower or "geography" in subject_lower or "civics" in subject_lower:
+        return """You are a strict CBSE Social Studies examiner.
+When grading answers:
+1. Award FULL marks if:
+   - Core concept is accurately explained
+   - Relevant historical dates/examples included
+   - Answer shows understanding (not just memorization)
+2. Award PARTIAL marks if:
+   - Concept mostly correct but one detail wrong
+   - Examples are relevant but dates might be off by 1-2 years
+   - Shows understanding but missing one supporting detail
+3. Award 0 marks if:
+   - Core concept is misunderstood
+   - Completely wrong dates/facts
+   - Irrelevant answer
+Return JSON: {{"awarded_marks": X, "max_marks": Y, "reason": "...", "concept_correct": bool, "examples_relevant": bool, "dates_accurate": bool}}"""
+    
+    # DEFAULT: Generic grading
+    else:
+        return """You are a fair and strict examiner.
+When grading answers:
+1. Award FULL marks if the answer is correct and complete
+2. Award PARTIAL marks if the answer shows understanding but has minor errors or omissions
+3. Award 0 marks if the answer is fundamentally wrong or irrelevant
+Return JSON: {{"awarded_marks": X, "max_marks": Y, "reason": "...", "accuracy": 0-100}}"""
+
+def _grade_with_subject_rules(exam: dict, submitted: Dict[int, str], subject: str = "", 
+                               class_level: str = "", roll_no: str = "") -> dict:
+    """
+    Enhanced grading with subject-specific rules.
+    Applies specialized prompts based on subject (Maths, Science, English, SST, etc).
+    """
+    evals, total_awarded, total_possible = [], 0.0, 0.0
+    subject_prompt_template = _get_subject_grading_prompt(exam, subject, class_level)
+    
+    for q in exam.get("questions", []):
+        qid = int(q["id"])
+        qtype = q.get("type", "objective")
+        max_m = float(q.get("weightage", q.get("marks", 1)))
+        student = str(submitted.get(qid, "")).strip()
+        total_possible += max_m
+        
+        if qtype == "objective":
+            # MCQ grading is simple: all or nothing
+            coerced = _coerce_mcq_answer(student, q.get("options", {}))
+            correct = _objective_is_correct(q, student)
+            awarded = max_m if correct else 0.0
+            total_awarded += awarded
+            evals.append({
+                "question_id": qid, "type": "objective", "student_answer": coerced,
+                "awarded_marks": awarded, "max_marks": max_m,
+                "reason": "Correct answer" if correct else "Incorrect answer",
+                "confidence": 1.0 if correct else 0.0,
+            })
+        else:
+            # Subjective: use subject-specific grading
+            student_cleaned = _clean_subjective_answer(student)
+            model_ans = str(q.get("model_answer", q.get("answer", ""))).strip()
+            
+            prompt = f"""{subject_prompt_template}
+
+Question: {q.get('question', '')}
+Max Marks: {max_m}
+Model Answer/Rubric: {model_ans}
+Student's Answer: {student_cleaned}"""
+            
+            try:
+                grade_json = _llm_json(prompt, temperature=0)
+                awarded = max(0.0, min(max_m, float(grade_json.get("awarded_marks", 0))))
+                reason = grade_json.get("reason", "Subjective evaluation")
+                confidence = 0.85  # Subjective grading has inherent uncertainty
+            except Exception as ex:
+                log.warning(f"[GRADE] Subject-specific grading failed: {ex}")
+                awarded = 0.0
+                reason = "Evaluation failed"
+                confidence = 0.0
+            
+            total_awarded += awarded
+            evals.append({
+                "question_id": qid, "type": "subjective",
+                "student_answer": student_cleaned,
+                "awarded_marks": awarded, "max_marks": max_m,
+                "reason": reason,
+                "confidence": confidence,
+            })
+    
+    pct = round((total_awarded / total_possible) * 100, 2) if total_possible else 0.0
+    
+    return {
+        "roll_no": roll_no,
+        "total_awarded": total_awarded,
+        "total_possible": total_possible,
+        "percentage": pct,
+        "grade": _grade(pct),
+        "is_pass": pct >= 40.0,
+        "subject": subject,
+        "class_level": class_level,
+        "question_wise": evals,
+    }
+
 def _preprocess_image_for_ocr(img):
     """
     Enhance a scanned image so handwriting (faint pen, circles, ticks) becomes
@@ -1355,6 +1893,134 @@ def _preprocess_image_for_ocr(img):
     img = ImageEnhance.Sharpness(img).enhance(2.0) # sharpen edges (helps circles/ticks)
     img = img.filter(ImageFilter.MedianFilter())   # remove scan noise
     return img.convert("RGB")                      # back to RGB for API
+
+def _preprocess_image_enhanced(img, apply_rotation=True, apply_shadow_removal=True, 
+                                apply_clahe=False, apply_compression=True):
+    """
+    Enhanced image preprocessing for evaluation papers:
+    1. Rotation detection & correction (deskew)
+    2. Shadow removal (gamma correction)
+    3. CLAHE (Contrast Limited Adaptive Histogram Equalization)
+    4. Intelligent compression
+    
+    This improves OCR accuracy for skewed/shadowed handwritten answers.
+    """
+    from PIL import ImageEnhance, ImageFilter, Image
+    import numpy as np
+    
+    # Convert to numpy for advanced processing
+    img_np = np.array(img.convert("L"))
+    
+    # Step 1: Rotation detection & correction (deskew)
+    if apply_rotation:
+        try:
+            from scipy import ndimage
+            # Find text skew angle via contour analysis
+            img_edges = cv2.Canny(img_np, 100, 200) if 'cv2' in globals() else None
+            if img_edges is not None:
+                lines = cv2.HoughLinesP(img_edges, 1, np.pi/180, 50, minLineLength=100, maxLineGap=10)
+                if lines is not None and len(lines) > 0:
+                    angles = []
+                    for line in lines:
+                        x1, y1, x2, y2 = line[0]
+                        angle = np.arctan2(y2-y1, x2-x1) * 180 / np.pi
+                        if abs(angle) < 45:  # Only consider text-like angles
+                            angles.append(angle)
+                    if angles:
+                        median_angle = np.median(angles)
+                        if abs(median_angle) > 0.5:  # Only rotate if meaningful skew
+                            img = img.rotate(-median_angle, expand=False, fillcolor="white")
+                            img_np = np.array(img.convert("L"))
+                            log.debug(f"[IMAGE-PROC] Deskewed by {median_angle:.1f}°")
+        except Exception as ex:
+            log.debug(f"[IMAGE-PROC] Deskew skipped: {ex}")
+    
+    # Step 2: Shadow removal via gamma correction
+    if apply_shadow_removal:
+        img_np = np.clip(img_np.astype(float) / 255.0, 0, 1)
+        gamma = 1.2  # Brighten shadows without oversaturating highlights
+        img_np = (img_np ** (1/gamma)) * 255
+        img_np = np.clip(img_np, 0, 255).astype(np.uint8)
+        log.debug(f"[IMAGE-PROC] Applied gamma correction (gamma={gamma})")
+    
+    # Step 3: CLAHE (more adaptive than global contrast)
+    if apply_clahe:
+        try:
+            import cv2
+            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+            img_np = clahe.apply(img_np.astype(np.uint8))
+            log.debug("[IMAGE-PROC] Applied CLAHE")
+        except Exception as ex:
+            log.debug(f"[IMAGE-PROC] CLAHE skipped: {ex}")
+    
+    # Standard enhancement: contrast + sharpen
+    img = Image.fromarray(img_np).convert("L")
+    img = ImageEnhance.Contrast(img).enhance(2.5)
+    img = ImageEnhance.Sharpness(img).enhance(2.0)
+    img = img.filter(ImageFilter.MedianFilter())
+    
+    # Step 4: Intelligent compression (reduce file size while preserving quality)
+    if apply_compression:
+        # For OCR, we can be aggressive: target 80-85% quality
+        img_rgb = img.convert("RGB")
+        # Size limiting is handled at the API level
+    else:
+        img_rgb = img.convert("RGB")
+    
+    return img_rgb
+
+def _detect_and_crop_borders(img, border_color_tolerance=30):
+    """
+    Detect and crop white/light borders from scanned pages.
+    Removes unnecessary margins that waste tokens in Vision API.
+    """
+    from PIL import Image
+    import numpy as np
+    
+    img_np = np.array(img.convert("L"))
+    threshold = 240  # Light gray threshold for "white" borders
+    
+    # Find rows/cols with mostly white pixels
+    height, width = img_np.shape
+    row_white = (img_np > threshold).sum(axis=1) > (width * 0.95)
+    col_white = (img_np > threshold).sum(axis=0) > (height * 0.95)
+    
+    # Find first/last non-white row/col
+    white_rows = np.where(row_white)[0]
+    white_cols = np.where(col_white)[0]
+    
+    crop_top, crop_bottom = 0, height
+    crop_left, crop_right = 0, width
+    
+    if len(white_rows) > 0:
+        # Find largest gap of white rows
+        white_diffs = np.diff(white_rows)
+        if len(white_diffs) > 0 and np.max(white_diffs) > 10:
+            largest_gap_idx = np.argmax(white_diffs)
+            crop_top = white_rows[largest_gap_idx] + 1
+            crop_bottom = white_rows[largest_gap_idx + 1]
+    
+    if len(white_cols) > 0:
+        white_diffs = np.diff(white_cols)
+        if len(white_diffs) > 0 and np.max(white_diffs) > 10:
+            largest_gap_idx = np.argmax(white_diffs)
+            crop_left = white_cols[largest_gap_idx] + 1
+            crop_right = white_cols[largest_gap_idx + 1]
+    
+    # Add small margin to avoid cutting text
+    margin = 10
+    crop_top = max(0, crop_top - margin)
+    crop_left = max(0, crop_left - margin)
+    crop_bottom = min(height, crop_bottom + margin)
+    crop_right = min(width, crop_right + margin)
+    
+    if crop_top >= crop_bottom or crop_left >= crop_right:
+        return img  # No valid crop
+    
+    cropped = img.crop((crop_left, crop_top, crop_right, crop_bottom))
+    removed_percent = round(100 * (1 - (cropped.size[0]*cropped.size[1]) / (width*height)), 1)
+    log.debug(f"[IMAGE-PROC] Cropped borders: removed {removed_percent}% of image area")
+    return cropped
 
 def _build_ocr_prompt_v2(exam_questions: list) -> str:
     """
@@ -1796,6 +2462,28 @@ def _draw_answer_sheet_page_header(c, exam, page_num, W, H, mm, colors):
     c.setFillColor(colors.HexColor('#94a3b8'))
     c.drawRightString(W - M - 4*mm, H - BAR_H - 5*mm, f'Page {page_num}')
 
+    # QR marker improves downstream split/trace reliability for multi-student scans.
+    try:
+        from reportlab.graphics.barcode import qr as _qr
+        from reportlab.graphics.shapes import Drawing as _Drawing
+        from reportlab.graphics import renderPDF as _renderPDF
+        qr_payload = f"exam:{exam.get('exam_id', '')}|page:{page_num}|school:{exam.get('school_name', '')}"
+        qr_code = _qr.QrCodeWidget(qr_payload)
+        b = qr_code.getBounds()
+        bw = max(1, b[2] - b[0])
+        bh = max(1, b[3] - b[1])
+        qr_size = 14 * mm
+        qr_draw = _Drawing(qr_size, qr_size, transform=[qr_size / bw, 0, 0, qr_size / bh, 0, 0])
+        qr_draw.add(qr_code)
+        _renderPDF.draw(qr_draw, c, W - M - qr_size, H - BAR_H - META_H - qr_size - 1.5 * mm)
+
+        c.setFillColor(colors.HexColor('#64748b'))
+        c.setFont("Helvetica", 5.5)
+        c.drawRightString(W - M, H - BAR_H - META_H - qr_size - 3.2 * mm,
+                          f"Scan ID: {exam.get('exam_id', '')} · Pg {page_num}")
+    except Exception:
+        pass
+
     # ── Row 3: student info boxes ─────────────────────────────────────────────
     INFO_TOP = H - BAR_H - META_H - 3*mm
     BOX_H    = 10 * mm
@@ -1822,7 +2510,7 @@ def _draw_answer_sheet_page_header(c, exam, page_num, W, H, mm, colors):
     c.setFillColor(colors.HexColor('#0369a1'))
     c.setFont("Helvetica-Bold", 7)
     c.drawString(M + 4*mm, INSTR_Y - 4*mm,
-        'INSTRUCTIONS:  Section A — Circle ONE bubble (A/B/C/D) OR write the letter in the box on the right  '
+        'INSTRUCTIONS:  Section A — Circle ONE bubble (A/B/C/D). If writing, write ONLY the option letter in the box  '
         '·  Section B — Write your answer on the ruled lines in the box  '
         '·  Write ONLY inside the boxes')
 
@@ -1955,15 +2643,15 @@ def _generate_answer_sheet_pdf(exam: dict) -> bytes:
                 # ── "Write answer" box (right side) ──────────────────────────
                 c.setFillColor(rl_colors.HexColor('#64748b'))
                 c.setFont("Helvetica", 7)
-                c.drawCentredString(WRITE_BOX_X + WRITE_BOX_W/2, y - 7*mm, 'OR write:')
+                c.drawCentredString(WRITE_BOX_X + WRITE_BOX_W/2, y - 7*mm, 'OR write letter:')
 
                 # Square for writing the letter (bold border, generous size)
-                SQ = 18 * mm
+                SQ = 20 * mm
                 sq_x = WRITE_BOX_X + (WRITE_BOX_W - SQ) / 2
                 sq_y = y - BUBBLE_FROM_TOP - SQ/2
                 c.setStrokeColor(rl_colors.HexColor('#64748b'))
                 c.setFillColor(rl_colors.white)
-                c.setLineWidth(1.8)
+                c.setLineWidth(2.0)
                 c.roundRect(sq_x, sq_y, SQ, SQ, 2, fill=1, stroke=1)
 
                 y -= BOX_H + 4*mm
@@ -2688,6 +3376,107 @@ def _cache_set(file_hash: str, exam_id: str, payload: dict):
     except Exception as e:
         log.warning(f"[CACHE] set error: {e}")
 
+def _find_uploaded_file(file_name: str, file_path: str = "") -> Optional[Path]:
+    """Locate the original uploaded file so stale reports can be refreshed."""
+    if file_path:
+        p = Path(file_path)
+        if p.exists():
+            return p
+    if file_name:
+        exact = UPL_DIR / file_name
+        if exact.exists():
+            return exact
+        matches = list(UPL_DIR.glob(f"*_{file_name}"))
+        if len(matches) == 1:
+            return matches[0]
+    return None
+
+def _refresh_evaluation_for_report(ev: dict, exam: dict) -> dict:
+    """Recompute stored evaluation results when the OCR pipeline changes.
+    
+    Priority:
+    1. If ocr_version matches current → skip (already up to date)
+    2. If submitted_answers exist → re-evaluate from stored answers (fast)
+    3. If page_indices + file available → re-extract from student pages only
+    4. Fall back to full-PDF extraction (last resort)
+    """
+    if not ev:
+        return ev
+
+    # ── Fast path: already up to date ─────────────────────────────────────
+    if ev.get("ocr_version") == OCR_PIPELINE_VERSION:
+        return ev
+
+    # ── Re-evaluate from stored submitted_answers (no OCR needed) ─────────
+    submitted = ev.get("submitted_answers")
+    if isinstance(submitted, dict) and submitted:
+        normalized: Dict[int, str] = {}
+        for k, v in submitted.items():
+            try:
+                normalized[int(k)] = v
+            except (TypeError, ValueError):
+                continue
+        if normalized:
+            refreshed = dict(ev)
+            refreshed["result"] = _evaluate_answers(exam, normalized, str(ev.get("roll_no", "")))
+            refreshed["ocr_version"] = OCR_PIPELINE_VERSION
+            refreshed["report_refreshed_at"] = _now()
+            eid = str(refreshed.get("evaluation_id", "")).strip()
+            if eid:
+                evaluations_registry[eid] = refreshed
+                if not IS_VERCEL:
+                    _save_json(EVAL_DIR / f"{eid}.json", refreshed)
+                _save_evals()
+                _mongo_update("eval_items", {"evaluation_id": eid}, {"$set": {**refreshed, "evaluation_id": eid}}, upsert=True)
+            return refreshed
+
+    # ── Re-extract from student's specific pages (not full PDF) ───────────
+    upload_path = _find_uploaded_file(
+        str(ev.get("file_name", "")).strip(),
+        str(ev.get("file_path", "")).strip(),
+    )
+    if not upload_path:
+        log.info(f"[REPORT] No upload found to refresh evaluation {ev.get('evaluation_id', '—')}")
+        return ev
+
+    page_indices = ev.get("page_indices")
+    answers = {}
+    mode = ""
+    err = None
+
+    if isinstance(page_indices, list) and page_indices:
+        # Per-student page extraction (correct for multi-student PDFs)
+        answers, mode, err = _extract_answers_from_pages(
+            str(upload_path), page_indices,
+            exam_questions=exam.get("questions", []), exam=exam, attempts=2
+        )
+        log.info(f"[REPORT] Refreshed {ev.get('evaluation_id', '—')} from pages {page_indices}: {len(answers)} answers")
+    else:
+        # Single-student PDF fallback
+        answers, mode, err = _extract_answers_with_retry(
+            str(upload_path), exam_questions=exam.get("questions", []), exam=exam, attempts=2
+        )
+
+    if not answers:
+        log.warning(f"[REPORT] Refresh failed for {ev.get('evaluation_id', '—')} ({mode})")
+        return ev
+
+    refreshed = dict(ev)
+    refreshed["submitted_answers"] = answers
+    refreshed["result"] = _evaluate_answers(exam, answers, str(ev.get("roll_no", "")))
+    refreshed["extraction_mode"] = mode
+    refreshed["ocr_version"] = OCR_PIPELINE_VERSION
+    refreshed["report_refreshed_at"] = _now()
+
+    eid = str(refreshed.get("evaluation_id", "")).strip()
+    if eid:
+        evaluations_registry[eid] = refreshed
+        if not IS_VERCEL:
+            _save_json(EVAL_DIR / f"{eid}.json", refreshed)
+        _save_evals()
+        _mongo_update("eval_items", {"evaluation_id": eid}, {"$set": {**refreshed, "evaluation_id": eid}}, upsert=True)
+    return refreshed
+
 def _ocr_page_parallel(images: list, exam_questions: list, exam: dict,
                         blank_pages: list = None) -> Dict[int, str]:
     """
@@ -2845,7 +3634,7 @@ def _ocr_page_parallel(images: list, exam_questions: list, exam: dict,
                     y_top = max(0, min(y_top, H_px - 10))
                     y_bot = max(y_top + 10, min(y_bot, H_px))
 
-                    crop = img.crop((0, y_top, W_px, y_bot))
+                    crop = img.crop((int(W_px * 0.10), y_top, W_px, y_bot))
                     # Additional contrast on crop
                     crop = _IE.Contrast(crop).enhance(1.5)
 
@@ -2919,7 +3708,14 @@ def _ocr_page_parallel(images: list, exam_questions: list, exam: dict,
 
                 # Merge: crop answers override full-page answers for MCQ
                 if verified:
-                    page_answers.update(verified)
+                    for qid, crop_val in verified.items():
+                        full_val = str(page_answers.get(qid, "")).strip().upper()
+                        if not full_val or full_val == crop_val:
+                            page_answers[qid] = crop_val
+                        else:
+                            log.info(
+                                f"[CROP-OCR] Q{qid} crop={crop_val} disagrees with full-page={full_val}; keeping full-page"
+                            )
                     log.info(f"[CROP-OCR] page {page_idx+1} verified MCQ: {verified}")
 
             # ── Step 4: Per-question crop for Subjective questions ──────────────
@@ -3090,16 +3886,32 @@ def _extract_header_info(path: str) -> dict:
             '{"student_name": "...", "roll_no": "...", "class_section": "..."}'
         )
 
-        client = _oai.OpenAI(api_key=OPENAI_API_KEY)
-        resp = client.chat.completions.create(
-            model=OPENAI_MINI, temperature=0, max_tokens=200,
-            response_format={"type": "json_object"},
-            messages=[{"role": "user", "content": [
-                {"type": "text", "text": prompt},
-                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}", "detail": "high"}}
-            ]}]
-        )
-        return json.loads(resp.choices[0].message.content)
+        keys = _openai_key_candidates(premium=False)
+        if not keys:
+            raise RuntimeError("No OpenAI API key configured")
+
+        last_err = None
+        for i, key in enumerate(keys):
+            try:
+                client = _oai.OpenAI(api_key=key)
+                _openai_limiter.wait()
+                resp = client.chat.completions.create(
+                    model=OPENAI_MINI, temperature=0, max_tokens=200,
+                    response_format={"type": "json_object"},
+                    messages=[{"role": "user", "content": [
+                        {"type": "text", "text": prompt},
+                        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}", "detail": "high"}}
+                    ]}]
+                )
+                return json.loads(resp.choices[0].message.content)
+            except Exception as ex:
+                last_err = ex
+                if i < len(keys) - 1 and _is_retryable_openai_error(ex):
+                    log.warning(f"[OCR] Header extraction key failover {i+1}/{len(keys)}: {ex}")
+                    continue
+                if i < len(keys) - 1:
+                    continue
+        raise last_err if last_err else RuntimeError("Header extraction failed")
     except Exception as e:
         log.warning(f"[OCR] Header extraction failed: {e}")
         return {}
@@ -3116,6 +3928,123 @@ def _extract_answers(path: str, exam_questions: list = None, exam: dict = None):
     exam_questions = exam_questions or []
     ext = Path(path).suffix.lower()
 
+    def _score_page_quality(pil_img) -> tuple[float, dict]:
+        """Composite quality score in [0,1] used to decide premium escalation."""
+        try:
+            import numpy as _np
+            import cv2 as _cv2
+            arr = _np.array(pil_img.convert("RGB"))
+            gray = _cv2.cvtColor(arr, _cv2.COLOR_RGB2GRAY)
+            lap_var = float(_cv2.Laplacian(gray, _cv2.CV_64F).var())
+            contrast_std = float(gray.std())
+            _, th = _cv2.threshold(gray, 0, 255, _cv2.THRESH_BINARY_INV + _cv2.THRESH_OTSU)
+            text_coverage = float((th > 0).mean())
+            lines = _cv2.HoughLinesP(
+                _cv2.Canny(gray, 50, 150), 1, _np.pi / 180,
+                threshold=120, minLineLength=max(30, gray.shape[1] // 8), maxLineGap=12
+            )
+            line_count = 0 if lines is None else len(lines)
+
+            blur_n = min(max(lap_var / 180.0, 0.0), 1.0)
+            contrast_n = min(max(contrast_std / 64.0, 0.0), 1.0)
+            text_n = max(0.0, 1.0 - min(abs(text_coverage - 0.18) / 0.18, 1.0))
+            straight_n = min(max(line_count / 25.0, 0.0), 1.0)
+            score = 0.35 * blur_n + 0.25 * contrast_n + 0.20 * text_n + 0.20 * straight_n
+            return float(max(0.0, min(1.0, score))), {
+                "lap_var": round(lap_var, 2),
+                "contrast_std": round(contrast_std, 2),
+                "text_cov": round(text_coverage, 4),
+                "line_count": line_count,
+            }
+        except Exception:
+            return 0.5, {"fallback": True}
+
+    def _preprocess_page_for_ocr(pil_img):
+        """Geometry correction + CLAHE + compression-friendly normalization."""
+        out = pil_img.convert("RGB")
+        try:
+            import numpy as _np
+            import cv2 as _cv2
+
+            arr = _np.array(out)
+            gray = _cv2.cvtColor(arr, _cv2.COLOR_RGB2GRAY)
+
+            # Stage 2: perspective correction + deskew for phone-captured sheets.
+            if OCR_PREPROCESS_GEOMETRY:
+                try:
+                    edged = _cv2.Canny(_cv2.GaussianBlur(gray, (5, 5), 0), 50, 150)
+                    cnts, _ = _cv2.findContours(edged, _cv2.RETR_LIST, _cv2.CHAIN_APPROX_SIMPLE)
+                    cnts = sorted(cnts, key=_cv2.contourArea, reverse=True)[:8]
+                    quad = None
+                    for c in cnts:
+                        peri = _cv2.arcLength(c, True)
+                        approx = _cv2.approxPolyDP(c, 0.02 * peri, True)
+                        if len(approx) == 4:
+                            quad = approx.reshape(4, 2).astype("float32")
+                            break
+                    if quad is not None:
+                        s = quad.sum(axis=1)
+                        diff = _np.diff(quad, axis=1)
+                        rect = _np.array([
+                            quad[_np.argmin(s)],
+                            quad[_np.argmin(diff)],
+                            quad[_np.argmax(s)],
+                            quad[_np.argmax(diff)],
+                        ], dtype="float32")
+                        (tl, tr, br, bl) = rect
+                        widthA = _np.linalg.norm(br - bl)
+                        widthB = _np.linalg.norm(tr - tl)
+                        heightA = _np.linalg.norm(tr - br)
+                        heightB = _np.linalg.norm(tl - bl)
+                        maxW = int(max(widthA, widthB))
+                        maxH = int(max(heightA, heightB))
+                        if maxW > 400 and maxH > 400:
+                            dst = _np.array(
+                                [[0, 0], [maxW - 1, 0], [maxW - 1, maxH - 1], [0, maxH - 1]],
+                                dtype="float32",
+                            )
+                            M = _cv2.getPerspectiveTransform(rect, dst)
+                            arr = _cv2.warpPerspective(arr, M, (maxW, maxH))
+                            gray = _cv2.cvtColor(arr, _cv2.COLOR_RGB2GRAY)
+                except Exception:
+                    pass
+
+                try:
+                    from deskew import determine_skew
+                    angle = float(determine_skew(gray))
+                    if abs(angle) <= 15:
+                        h, w = gray.shape[:2]
+                        M = _cv2.getRotationMatrix2D((w / 2.0, h / 2.0), angle, 1.0)
+                        arr = _cv2.warpAffine(
+                            arr, M, (w, h), flags=_cv2.INTER_CUBIC,
+                            borderMode=_cv2.BORDER_CONSTANT, borderValue=(255, 255, 255)
+                        )
+                        gray = _cv2.cvtColor(arr, _cv2.COLOR_RGB2GRAY)
+                except Exception:
+                    pass
+
+            # Stage 3: CLAHE for faint blue/pencil handwriting.
+            if OCR_PREPROCESS_CLAHE:
+                clahe = _cv2.createCLAHE(clipLimit=2.2, tileGridSize=(8, 8))
+                gray = clahe.apply(gray)
+
+            # Mild adaptive binarization blend keeps handwriting while reducing background noise.
+            th = _cv2.adaptiveThreshold(
+                gray, 255, _cv2.ADAPTIVE_THRESH_GAUSSIAN_C, _cv2.THRESH_BINARY, 35, 11
+            )
+            blend = _cv2.addWeighted(gray, 0.78, th, 0.22, 0)
+            out = Image.fromarray(_cv2.cvtColor(blend, _cv2.COLOR_GRAY2RGB))
+        except Exception:
+            out = ImageEnhance.Contrast(ImageEnhance.Sharpness(out).enhance(1.8)).enhance(1.4)
+
+        # Stage 6: image size normalization for token/cost control.
+        max_dim = max(800, OCR_MAX_IMAGE_DIM)
+        if OCR_PREPROCESS_COMPRESSION and max(out.size) > max_dim:
+            scale = max_dim / float(max(out.size))
+            out = out.resize((max(1, int(out.width * scale)), max(1, int(out.height * scale))), Image.LANCZOS)
+
+        return out
+
     # ── Text files: regex parse ───────────────────────────────────────────────
     if ext in {".txt", ".md"}:
         return _parse_answer_text(Path(path).read_text(encoding="utf-8", errors="ignore")), "parsed_text"
@@ -3127,16 +4056,16 @@ def _extract_answers(path: str, exam_questions: list = None, exam: dict = None):
             import fitz as _fitz
             doc = _fitz.open(path)
             for page in doc:
-                pix = page.get_pixmap(dpi=300)
+                pix = page.get_pixmap(dpi=max(120, OCR_PDF_DPI))
                 images.append(Image.frombytes("RGB", [pix.width, pix.height], pix.samples))
                 del pix
             doc.close()
-            log.info(f"[OCR] PDF → {len(images)} page images at 300 DPI")
+            log.info(f"[OCR] PDF → {len(images)} page images at {max(120, OCR_PDF_DPI)} DPI")
         except Exception as e:
             log.warning(f"[OCR] PyMuPDF failed, trying pdf2image: {e}")
             try:
                 from pdf2image import convert_from_path
-                images = convert_from_path(path, dpi=200)
+                images = convert_from_path(path, dpi=max(120, min(200, OCR_PDF_DPI)))
                 log.info(f"[OCR] pdf2image → {len(images)} pages")
             except Exception as e2:
                 log.error(f"[OCR] All PDF converters failed: {e2}")
@@ -3152,19 +4081,30 @@ def _extract_answers(path: str, exam_questions: list = None, exam: dict = None):
     if not images:
         return {}, "no_images"
 
-    # ── Preprocess & encode each page ─────────────────────────────────────────
+    # ── Preprocess, quality-score, and encode each page ──────────────────────
     encoded_images = []
+    processed_images = []
+    quality_scores = []
     for img in images:
-        if img.mode != "RGB":
-            img = img.convert("RGB")
-        if img.width < 2000:
-            scale = 2000 / img.width
-            img = img.resize((2000, int(img.height * scale)), Image.LANCZOS)
-        img = ImageEnhance.Sharpness(img).enhance(2.0)
-        img = ImageEnhance.Contrast(img).enhance(1.5)
+        _in_score, _ = _score_page_quality(img)
+        pimg = _preprocess_page_for_ocr(img)
+        _out_score, _ = _score_page_quality(pimg)
+        _score = max(_in_score, _out_score)
+        quality_scores.append(_score)
+        processed_images.append(pimg)
+
         buf = _io.BytesIO()
-        img.save(buf, format="PNG")
+        pimg.save(buf, format="JPEG", quality=max(55, min(95, OCR_JPEG_QUALITY)), optimize=True)
         encoded_images.append(base64.b64encode(buf.getvalue()).decode())
+
+    images = processed_images
+    ocr_quality = min(quality_scores) if quality_scores else 1.0
+    use_premium_ocr = (ocr_quality < OCR_QUALITY_ESCALATION_THRESHOLD) and (not OCR_FAST_COST)
+    selected_vision_model = OCR_PREMIUM_VISION_MODEL if use_premium_ocr else OCR_VISION_MODEL
+    log.info(
+        f"[OCR] quality_min={ocr_quality:.3f} threshold={OCR_QUALITY_ESCALATION_THRESHOLD:.3f} "
+        f"queue={'premium' if use_premium_ocr else 'standard'} model={selected_vision_model}"
+    )
 
     # ── Build question reference for prompt ───────────────────────────────────
     mcq_ids = set()
@@ -3182,6 +4122,89 @@ def _extract_answers(path: str, exam_questions: list = None, exam: dict = None):
             q_lines.append(f"  Q{qid} [Written, {q.get('weightage', q.get('marks', '?'))} marks]: {qtext}")
 
     q_block = "\n".join(q_lines)
+
+    def _deterministic_mcq_from_page(page_img, mcq_qids: list[int]) -> Dict[int, str]:
+        """
+        Template-geometry MCQ reader for Section A.
+        Uses fixed bubble coordinates from _generate_answer_sheet_pdf and local
+        neighborhood search to tolerate scan shifts.
+        """
+        import numpy as _np
+        if not mcq_qids:
+            return {}
+
+        gray = _np.array(page_img.convert("L"))
+        H_px, W_px = gray.shape
+        mmx = W_px / 210.0
+        mmy = H_px / 297.0
+
+        # Bubble centers from answer-sheet generator (in mm from top-left).
+        x_mm = [42.0, 71.0, 100.0, 129.0]  # A, B, C, D
+        y0_mm = 82.0                       # Q1 bubble center
+        y_gap_mm = 40.0                    # row-to-row center gap
+
+        # Adaptive darkness threshold to survive varying scan brightness.
+        dark_thr = int(_np.percentile(gray, 35))
+        dark_thr = max(70, min(155, dark_thr))
+
+        r = max(8, int(min(mmx, mmy) * 5.8))
+        srch_dx = max(2, int(mmx * 3.0))
+        srch_dy = max(2, int(mmy * 3.0))
+        step_x = max(1, int(mmx * 1.2))
+        step_y = max(1, int(mmy * 1.2))
+
+        letters = ["A", "B", "C", "D"]
+        out: Dict[int, str] = {}
+
+        for i, qid in enumerate(mcq_qids):
+            yc0 = int((y0_mm + i * y_gap_mm) * mmy)
+            option_scores = []
+
+            for x0_mm in x_mm:
+                xc0 = int(x0_mm * mmx)
+                best = 0.0
+
+                for dx in range(-srch_dx, srch_dx + 1, step_x):
+                    for dy in range(-srch_dy, srch_dy + 1, step_y):
+                        xc = xc0 + dx
+                        yc = yc0 + dy
+                        x1 = max(0, xc - r)
+                        x2 = min(W_px, xc + r + 1)
+                        y1 = max(0, yc - r)
+                        y2 = min(H_px, yc + r + 1)
+                        if x2 - x1 < 5 or y2 - y1 < 5:
+                            continue
+
+                        patch = gray[y1:y2, x1:x2]
+                        yy, xx = _np.ogrid[:patch.shape[0], :patch.shape[1]]
+                        cx = xc - x1
+                        cy = yc - y1
+                        mask = (xx - cx) ** 2 + (yy - cy) ** 2 <= (r * 0.85) ** 2
+                        if not _np.any(mask):
+                            continue
+
+                        vals = patch[mask]
+                        darkness = (255.0 - float(vals.mean())) / 255.0
+                        fill = float((vals < dark_thr).mean())
+                        score = 0.55 * darkness + 0.45 * fill
+                        if score > best:
+                            best = score
+
+                option_scores.append(best)
+
+            if len(option_scores) != 4:
+                continue
+
+            ranked = sorted(range(4), key=lambda j: option_scores[j], reverse=True)
+            best_i, second_i = ranked[0], ranked[1]
+            best_s = option_scores[best_i]
+            gap = best_s - option_scores[second_i]
+
+            # Always emit a deterministic choice so OCR/API failures still
+            # produce objective answers (prevents student evaluation dropouts).
+            out[qid] = letters[best_i]
+
+        return out
 
     # ── Build image content (reused across calls) ─────────────────────────────
     img_content = []
@@ -3201,47 +4224,68 @@ def _extract_answers(path: str, exam_questions: list = None, exam: dict = None):
         "image_url": {"url": f"data:image/png;base64,{encoded_images[0]}", "detail": "high"}
     }]
 
+    det_mcq_answers: Dict[int, str] = {}
+    try:
+        if images and mcq_ids:
+            det_mcq_answers = _deterministic_mcq_from_page(images[0], sorted(mcq_ids))
+            if det_mcq_answers:
+                log.info(f"[OCR] Deterministic MCQ candidates: {det_mcq_answers}")
+    except Exception as _det_err:
+        log.warning(f"[OCR] Deterministic MCQ fallback failed (non-fatal): {_det_err}")
+
     # ── Build isolated per-row image content for MCQ bubble re-reads ──────────
     # Some answer sheets print option labels INSIDE the circles; when the student
     # fills a circle the label gets obscured and GPT misreads the full-page scan.
     # Sending each row as a separate labeled image fixes this (isolated context).
     isolated_row_content: list = []
+    isolated_row_images: Dict[int, Image.Image] = {}
     try:
         _page0 = images[0]
         _gray0 = _page0.convert('L')
         _pw, _ph = _gray0.size
-        _lw = max(1, int(_pw * 0.20))
+        # Use a narrow strip (7% of width) so the strip falls mostly within the
+        # Q-number tab area (~6-8% of page width). A 20% strip dilutes the dark
+        # fraction below the detection threshold for these narrow tabs.
+        _lw = max(1, int(_pw * 0.07))
         _dark_frac = []
         for _y in range(_ph):
             _row_px = list(_gray0.crop((0, _y, _lw, _y + 1)).getdata())
-            _dark_frac.append(sum(1 for _p in _row_px if _p < 80) / _lw)
-        _dark_rows = [_y for _y in range(_ph) if _dark_frac[_y] > 0.35]
+            _dark_frac.append(sum(1 for _p in _row_px if _p < 120) / _lw)
+        _dark_rows = [_y for _y in range(_ph) if _dark_frac[_y] > 0.12]
         if _dark_rows:
             _bands, _bs, _prev = [], _dark_rows[0], _dark_rows[0]
             for _y in _dark_rows[1:]:
                 if _y - _prev > 30:
-                    if _prev - _bs >= 100:
+                    if _prev - _bs >= 60:  # reduced from 100 to catch shorter rows
                         _bands.append((_bs, _prev))
                     _bs = _y
                 _prev = _y
-            if _prev - _bs >= 100:
+            if _prev - _bs >= 60:
                 _bands.append((_bs, _prev))
             _q_bands = _bands[1:]  # skip header band
-            for _i, _qid in enumerate(sorted(mcq_ids)):
-                if _i >= len(_q_bands):
-                    break
-                _y0, _y1 = _q_bands[_i]
-                _crop = _page0.crop((0, _y0, _pw, _y1))
-                _crop = ImageEnhance.Contrast(_crop).enhance(1.5)
-                _crop = ImageEnhance.Sharpness(_crop).enhance(2.0)
-                _buf = _io.BytesIO()
-                _crop.save(_buf, format="PNG")
-                _b64c = base64.b64encode(_buf.getvalue()).decode()
-                isolated_row_content.append({"type": "text", "text": f"--- Q{_qid} row ---"})
-                isolated_row_content.append({
-                    "type": "image_url",
-                    "image_url": {"url": f"data:image/png;base64,{_b64c}", "detail": "high"}
-                })
+            if len(_q_bands) != len(mcq_ids):
+                log.warning(
+                    f"[OCR] MCQ band count mismatch: detected {len(_q_bands)} row band(s) for {len(mcq_ids)} MCQ question(s). "
+                    "Falling back to full-page bubble rereads for safety."
+                )
+            else:
+                # Keep the leftmost bubble fully in-frame. Cropping too far right
+                # can cut off option A and shift the read by one letter.
+                _x0 = max(1, int(_pw * 0.10))
+                for _i, _qid in enumerate(sorted(mcq_ids)):
+                    _y0, _y1 = _q_bands[_i]
+                    _crop = _page0.crop((_x0, _y0, _pw, _y1))
+                    _crop = ImageEnhance.Contrast(_crop).enhance(1.5)
+                    _crop = ImageEnhance.Sharpness(_crop).enhance(2.0)
+                    _buf = _io.BytesIO()
+                    _crop.save(_buf, format="PNG")
+                    _b64c = base64.b64encode(_buf.getvalue()).decode()
+                    isolated_row_content.append({"type": "text", "text": f"--- Q{_qid} row ---"})
+                    isolated_row_content.append({
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/png;base64,{_b64c}", "detail": "high"}
+                    })
+                    isolated_row_images[_qid] = _crop
         if isolated_row_content:
             log.info(f"[OCR] Built {len(isolated_row_content)//2} isolated MCQ row images")
         else:
@@ -3249,6 +4293,97 @@ def _extract_answers(path: str, exam_questions: list = None, exam: dict = None):
     except Exception as _irc_err:
         log.warning(f"[OCR] Isolated row crop failed (non-fatal): {_irc_err}")
         isolated_row_content = []
+        isolated_row_images = {}
+
+    def _row_box_has_ink(qid: int) -> bool:
+        """Return True if the write-box region likely contains handwriting."""
+        img = isolated_row_images.get(qid)
+        if not img:
+            return False
+        w, h = img.size
+        x0 = int(w * 0.72)
+        x1 = int(w * 0.98)
+        y0 = int(h * 0.20)
+        y1 = int(h * 0.88)
+        if x1 <= x0 or y1 <= y0:
+            return False
+        box = img.crop((x0, y0, x1, y1)).convert("L")
+        inset = max(2, int(min(box.size) * 0.08))
+        if box.width <= 2 * inset or box.height <= 2 * inset:
+            return False
+        box_inner = box.crop((inset, inset, box.width - inset, box.height - inset))
+        hist = box_inner.histogram()
+        total = sum(hist)
+        if total == 0:
+            return False
+        dark = sum(hist[:130])
+        return (dark / total) > 0.006
+
+    def _ocr_box_value(qid: int) -> str:
+        """OCR the write-box region for a single MCQ row."""
+        img = isolated_row_images.get(qid)
+        if not img:
+            return ""
+        w, h = img.size
+        x0 = int(w * 0.72)
+        x1 = int(w * 0.98)
+        y0 = int(h * 0.20)
+        y1 = int(h * 0.88)
+        if x1 <= x0 or y1 <= y0:
+            return ""
+        box = img.crop((x0, y0, x1, y1))
+        box = ImageEnhance.Contrast(box).enhance(2.0)
+        box = ImageEnhance.Sharpness(box).enhance(2.0)
+        _buf = _io.BytesIO()
+        box.save(_buf, format="PNG")
+        _b64 = base64.b64encode(_buf.getvalue()).decode()
+
+        prompt = (
+            "Read ONLY handwritten content inside the box. "
+            "Return digits (e.g. 10, 20, 6) or a single letter A-D. "
+            "If the box is empty, return an empty string. "
+            "Return JSON only: {\"box\": \"\"}."
+        )
+        keys = _openai_key_candidates(premium=use_premium_ocr)
+        if not keys:
+            return ""
+        last_err = None
+        for i, key in enumerate(keys):
+            try:
+                client = _oai.OpenAI(api_key=key)
+                _openai_limiter.wait()
+                resp = client.chat.completions.create(
+                    model=selected_vision_model, temperature=0, max_tokens=512, timeout=60,
+                    response_format={"type": "json_object"},
+                    messages=[{"role": "user", "content": [
+                        {"type": "text", "text": prompt},
+                        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{_b64}", "detail": "high"}},
+                    ]}],
+                )
+                raw = resp.choices[0].message.content
+                data = json.loads(raw)
+                return str(data.get("box", "")).strip()
+            except Exception as ex:
+                last_err = ex
+                if i < len(keys) - 1:
+                    continue
+        if last_err:
+            log.warning(f"[OCR] Box OCR failed for Q{qid}: {last_err}")
+        return ""
+
+    def _normalize_box_digits(val: str) -> str:
+        """Normalize common OCR confusions in numeric box values."""
+        if not val:
+            return ""
+        s = val.upper()
+        if not re.search(r"\d", s):
+            return ""
+        s = (s.replace("O", "0")
+               .replace("D", "0")
+               .replace("I", "1")
+               .replace("L", "1")
+               .replace("S", "5"))
+        return re.sub(r"[^0-9.]", "", s)
 
     # ── Helper: one Vision call ───────────────────────────────────────────────
     def _call_vision(prompt_text: str, use_mcq_page_only: bool = False,
@@ -3260,15 +4395,72 @@ def _extract_answers(path: str, exam_questions: list = None, exam: dict = None):
         else:
             img_part = img_content
         content = [{"type": "text", "text": prompt_text}] + img_part
-        client = _oai.OpenAI(api_key=OPENAI_API_KEY)
-        _openai_limiter.wait()
-        resp = client.chat.completions.create(
-            model=OPENAI_MODEL, temperature=0, max_tokens=4096, timeout=120,
-            response_format={"type": "json_object"},
-            messages=[{"role": "user", "content": content}],
-        )
-        raw = resp.choices[0].message.content
-        return json.loads(raw)
+        keys = _openai_key_candidates(premium=use_premium_ocr)
+        if not keys:
+            raise RuntimeError("No OpenAI API key configured")
+
+        last_err = None
+        for i, key in enumerate(keys):
+            try:
+                client = _oai.OpenAI(api_key=key)
+                _openai_limiter.wait()
+                resp = client.chat.completions.create(
+                    model=selected_vision_model, temperature=0, max_tokens=8192, timeout=120,
+                    seed=42,
+                    response_format={"type": "json_object"},
+                    messages=[{"role": "user", "content": content}],
+                )
+                raw = resp.choices[0].message.content
+                return json.loads(raw)
+            except Exception as ex:
+                last_err = ex
+                if i < len(keys) - 1:
+                    log.warning(f"[OCR] Vision key failover {i+1}/{len(keys)} model={selected_vision_model}: {ex}")
+                    continue
+        raise last_err if last_err else RuntimeError("Vision call failed")
+
+    # ── Fast-cost mode: deterministic MCQ + single subjective OCR pass ───────
+    if OCR_FAST_COST:
+        if not det_mcq_answers and mcq_ids:
+            log.warning("[OCR] Fast-cost: deterministic MCQ empty — falling back to single Vision pass")
+        else:
+            fast_subj_ids = {int(q.get("id", 0)) for q in exam_questions
+                             if q.get("type", "objective") != "objective"} if exam_questions else set()
+            if not fast_subj_ids:
+                return det_mcq_answers, "deterministic_mcq_fast"
+
+            subj_prompt = (
+                "Read ONLY Section B (written/subjective) answer boxes. "
+                "Ignore MCQ bubbles entirely. For each written question, read ALL lines in the box "
+                "and join them with spaces. Return JSON only.\n"
+                "{\"answers\": {\"7\": \"full answer\", \"8\": \"...\"}}"
+            )
+            try:
+                raw_json_fast = _call_vision(subj_prompt)
+            except Exception as e:
+                log.error(f"[OCR] Fast-cost subjective pass failed: {e}")
+                if det_mcq_answers:
+                    return det_mcq_answers, "deterministic_mcq_fast"
+                return {}, f"vision_api_failed: {str(e)[:100]}"
+
+            answers_fast: Dict[int, str] = {}
+            for qid_str, val in raw_json_fast.get("answers", {}).items():
+                try:
+                    qid = int(re.sub(r'^[Qq]', '', str(qid_str)).strip())
+                except (ValueError, TypeError):
+                    continue
+                if qid in mcq_ids:
+                    continue
+                val_str = str(val).strip() if not isinstance(val, dict) else str(val.get("answer", val)).strip()
+                if val_str and val_str not in {"—", "-", "--", "None", "null", ""}:
+                    answers_fast[qid] = val_str
+
+            answers_fast.update(det_mcq_answers)
+            if answers_fast:
+                return answers_fast, "vision_ocr_fast"
+            if det_mcq_answers:
+                return det_mcq_answers, "deterministic_mcq_fast"
+            return {}, "no_answers_extracted"
 
     # ── Pass 1: Full extraction (MCQ + subjective) ────────────────────────────
     # ── Build value→letter lookup for numeric write-box matching ─────────────
@@ -3284,23 +4476,41 @@ def _extract_answers(path: str, exam_questions: list = None, exam: dict = None):
 
     full_prompt = (
         "You are a handwriting recognition expert reading a scanned student answer sheet. "
+        f"This answer sheet has {len(encoded_images)} page(s) — scan EVERY page for handwritten answers. "
         "Extract the student's raw marks for every question listed below.\n\n"
         "QUESTIONS ON THIS EXAM:\n" + q_block + "\n\n"
+        "BLEED-THROUGH WARNING: Scanned pages may show faint ghost shadows or dark silhouettes caused\n"
+        "by ink bleeding through the thin paper from the reverse side. These appear as dark circular\n"
+        "blobs (like big filled circles), person-shaped shadows, or diagonal dark bands. IGNORE ALL\n"
+        "such faint/ghost images completely — they are NOT part of the student's handwritten answers.\n\n"
         "INSTRUCTIONS:\n"
-        "1. MCQ questions — Each MCQ row has two answer zones:\n"
-        "   (a) BUBBLES: four circles. Each has a letter label (A, B, C, or D).\n"
-        "       Report the letter of the circle that is MOST HEAVILY FILLED, darkened, or circled.\n"
-        "   (b) WRITE BOX: a small square at the FAR RIGHT end of the MCQ row.\n"
-        "       Report exactly what the student wrote inside it (a letter, a number, or empty string).\n\n"
+        "1. MCQ questions (Section A) — Each MCQ row has a DARK (black or dark navy) tab on the LEFT\n"
+        "   with the Q number printed in white. To the right are 4 large circles in a row.\n"
+        "   Each circle has a letter label (A, B, C, D) printed either ABOVE or INSIDE it\n"
+        "   (the exact position varies by template — check both locations).\n"
+        "   The student FILLS or HEAVILY SCRIBBLES one circle to mark their answer.\n"
+        "   At the FAR RIGHT end of the row is a small pre-printed write box (square).\n"
+        "   (a) BUBBLES: Find the circle with the MOST HEAVY, DENSE, DARK fill or scribble.\n"
+        "       Identify it by POSITION left-to-right: 1st circle = A, 2nd = B, 3rd = C, 4th = D.\n"
+        "       Do NOT rely on any label that may be obscured by the student's ink fill.\n"
+        "   (b) WRITE BOX: a small pre-printed square at the FAR RIGHT end of the MCQ row.\n"
+        "       ⚠ CRITICAL: The write box has a printed border. If only the printed BORDER is\n"
+        "       visible (nothing written inside) → return \"\". ONLY return a value if you see\n"
+        "       actual handwritten text or digits clearly written INSIDE the box area.\n"
+        "       A box with only its rectangular outline and no ink inside = return \"\".\n\n"
         "   Return for each MCQ: {\"bubble\": \"B\", \"box\": \"15\"}\n"
         "   • bubble: letter (A/B/C/D) of the most filled circle — never empty, always one letter\n"
-        "   • box: exact student handwriting inside the right-side square, or \"\" if empty/blank\n\n"
-        "2. Written/Subjective questions — Return the COMPLETE handwritten text.\n"
-        "   • Read ALL lines in the answer box top to bottom.\n"
+        "   • box: handwritten content inside the write box, or \"\" if the box is empty/blank\n\n"
+        "2. Written/Subjective questions (Section B) — Each answer box has a DARK (black/green) tab\n"
+        "   on the LEFT with the Q number. The student writes on RULED LINES to the RIGHT of the tab.\n"
+        "   ⚠️  Students write across MULTIPLE RULED LINES — do NOT stop after the first line.\n"
+        "   • Read EVERY ruled line from top to bottom. Join all lines with spaces into ONE string.\n"
         "   • Include all mathematical expressions and workings exactly as written.\n"
         "     E.g. '5x + 3y - 2x + 6 - y + 4 = (5x - 2x) + (3y - y) + (6 + 4) = 3x + 2y + 10'\n"
         "   • A single number (e.g. '4') is a valid answer — include it.\n"
-        "   • DO NOT include printed question text — only the student's handwriting.\n\n"
+        "   • DO NOT include the printed label 'Write your answer below:' — only student handwriting.\n"
+        "   • DO NOT include printed question text — only the student's handwriting.\n"
+        "   • IGNORE any faint ghost/shadow images behind the text (bleed-through from paper back).\n\n"
         "3. Omit completely empty questions.\n\n"
         "Return ONLY valid JSON:\n"
         '{"answers": {"1": {"bubble": "B", "box": ""}, '
@@ -3313,7 +4523,23 @@ def _extract_answers(path: str, exam_questions: list = None, exam: dict = None):
         raw_json_1 = _call_vision(full_prompt)
     except Exception as e:
         log.error(f"[OCR] Vision API call failed: {e}")
+        if det_mcq_answers:
+            log.warning("[OCR] Falling back to deterministic MCQ answers due Vision failure")
+            return det_mcq_answers, "deterministic_mcq_fallback"
         return {}, f"vision_api_failed: {str(e)[:100]}"
+
+    # ── Box-only OCR (rightmost write boxes) ─────────────────────────────────
+    box_only_prompt = (
+        "Read ONLY the rightmost write boxes for the MCQ rows (Q1–Q4). "
+        "Do NOT read bubbles. If a box is empty, return an empty string. "
+        "Return JSON only.\n"
+        '{"answers": {"1": {"box": ""}, "2": {"box": ""}, "3": {"box": ""}, "4": {"box": ""}}}'
+    )
+    try:
+        raw_json_box = _call_vision(box_only_prompt, use_mcq_page_only=True)
+    except Exception as e:
+        log.warning(f"[OCR] Box-only OCR failed (non-fatal): {e}")
+        raw_json_box = {}
 
     # ── Parse Pass 1 results ──────────────────────────────────────────────────
     answers: Dict[int, str] = {}
@@ -3331,7 +4557,15 @@ def _extract_answers(path: str, exam_questions: list = None, exam: dict = None):
         if qid not in mcq_ids:
             # Subjective: val is a plain string
             val_str = str(val).strip() if not isinstance(val, dict) else str(val.get("answer", val)).strip()
-            if val_str and val_str not in {"—", "-", "--", "None", "null", ""}:
+            # Clean up common OCR artifacts and printed labels
+            val_str = re.sub(
+                r'^(?:write\s+your\s+answer\s+below\s*[:\-]?\s*|answer\s*[:\-]\s*)',
+                "", val_str, flags=re.IGNORECASE
+            ).strip()
+            val_str = re.sub(r'[\r\n]+', ' ', val_str)
+            val_str = re.sub(r'\s{2,}', ' ', val_str).strip()
+            # Only reject if truly empty or placeholder dash
+            if val_str and val_str not in {"—", "-", "--", "None", "null", "", "blank", "no answer"}:
                 answers[qid] = val_str
             continue
 
@@ -3345,41 +4579,55 @@ def _extract_answers(path: str, exam_questions: list = None, exam: dict = None):
             box_raw    = ""
 
         # ── Code-side resolution: box → letter → write_box_letter ──────────
-        box_letter = re.search(r'^([A-D])$', box_raw.upper())
-        if box_letter:
-            letter = box_letter.group(1).upper()
-            write_box_locked.add(qid)
-            mcq_votes.setdefault(qid, []).extend([letter] * 3)
-            log.info(f"[OCR] Q{qid}: box_letter='{box_raw}' → locked {letter}")
-            continue
+        # Single-letter write-box OCR is noisy and can mirror the same off-by-one
+        # error as the bubble read. Keep it informational only; bubble position
+        # should determine the MCQ answer unless the box contains a numeric value.
+        # Prefer box-only OCR from the full page when available
+        box_val = ""
+        if raw_json_box.get("answers"):
+            bobj = raw_json_box.get("answers", {}).get(str(qid)) or raw_json_box.get("answers", {}).get(qid)
+            if isinstance(bobj, dict):
+                box_val = str(bobj.get("box", "")).strip()
+            elif bobj is not None:
+                box_val = str(bobj).strip()
 
-        # ── Code-side resolution: box → number → write_box_number ──────────
-        if box_raw and re.search(r'\d', box_raw):
-            q_options = opt_value_map.get(qid, {})
-            # exact match
-            matched = q_options.get(box_raw)
-            if not matched:
-                # strip non-numeric chars and retry
-                num_part = re.sub(r'[^0-9.]', '', box_raw)
-                matched = q_options.get(num_part)
-            if not matched:
-                # fuzzy: box text is a substring of an option value or vice versa
-                matched = next(
-                    (ltr for v, ltr in q_options.items() if box_raw in v or v in box_raw),
-                    None
-                )
-            if matched:
+        if box_val:
+            box_ocr = box_val
+        elif not raw_json_box.get("answers"):
+            box_ocr = _ocr_box_value(qid)
+        else:
+            box_ocr = ""
+        if box_ocr:
+            box_letter = re.search(r'^([A-D])$', box_ocr.upper())
+            if box_letter:
+                letter = box_letter.group(1).upper()
                 write_box_locked.add(qid)
-                mcq_votes.setdefault(qid, []).extend([matched] * 3)
-                log.info(f"[OCR] Q{qid}: box_number='{box_raw}' → locked {matched}")
+                mcq_votes.setdefault(qid, []).extend([letter] * 3)
+                log.info(f"[OCR] Q{qid}: box_ocr='{box_ocr}' → locked {letter}")
                 continue
-            else:
-                log.info(f"[OCR] Q{qid}: box='{box_raw}' has digits but no option match — using bubble")
+            if re.search(r'\d', box_ocr):
+                q_options = opt_value_map.get(qid, {})
+                matched = q_options.get(box_ocr)
+                if not matched:
+                    num_part = _normalize_box_digits(box_ocr)
+                    matched = q_options.get(num_part) if num_part else None
+                if not matched:
+                    matched = next(
+                        (ltr for v, ltr in q_options.items() if box_ocr in v or v in box_ocr),
+                        None
+                    )
+                if matched:
+                    write_box_locked.add(qid)
+                    mcq_votes.setdefault(qid, []).extend([matched] * 3)
+                    log.info(f"[OCR] Q{qid}: box_ocr='{box_ocr}' → locked {matched}")
+                    continue
+            log.info(f"[OCR] Q{qid}: box_ocr='{box_ocr}' unreadable → using bubble")
 
         # ── Fallback: use bubble field ───────────────────────────────────────
         letter = re.search(r'([A-D])', bubble_raw, re.IGNORECASE)
         if letter:
-            mcq_votes.setdefault(qid, []).append(letter.group(1).upper())
+            bubble_letter = letter.group(1).upper()
+            mcq_votes.setdefault(qid, []).append(bubble_letter)
 
     # ── Pass 2 & 3: bubble-only re-reads for unlocked MCQ questions ──────────
     # Skip questions already locked by write-box to preserve the student's
@@ -3393,13 +4641,15 @@ def _extract_answers(path: str, exam_questions: list = None, exam: dict = None):
         # Prompt when each question row appears as a separate labeled image
         isolated_mcq_prompt = (
             "You are reading scanned student answer sheet rows.\n"
-            "Each image below is ONE question row (I will label them by question number).\n"
-            "Each row has exactly 4 circles arranged left-to-right, and a small write box far right.\n\n"
+            "Each image below is ONE question row (labeled by question number).\n"
+            "Each row has exactly 4 circles arranged left-to-right, and a small pre-printed write box far right.\n\n"
             "TASK for each question:\n"
             "  bubble: Find the most DARKLY FILLED, heavily scribbled, or densely marked circle.\n"
             "          Count its left-to-right position: 1st\u2192A, 2nd\u2192B, 3rd\u2192C, 4th\u2192D.\n"
-            "          Use POSITION, not any label that may be hidden under ink.\n"
-            "  box: Copy text from the small write square at far right, or \"\" if empty.\n\n"
+            "          Use POSITION, NOT any label — labels may be obscured by the student's ink fill.\n"
+            "  box: The write box is a SMALL PRE-PRINTED SQUARE at the far right end of the row.\n"
+            "       CRITICAL: If only the printed rectangular BORDER is visible with no writing inside\n"
+            "       → return \"\". Only return a value if there are actual handwritten marks INSIDE the box.\n\n"
             "Return JSON (numeric keys for question numbers):\n"
             '{"answers": {"1": {"bubble": "B", "box": ""}, "2": {"bubble": "C", "box": ""}}}\n'
         )
@@ -3408,9 +4658,13 @@ def _extract_answers(path: str, exam_questions: list = None, exam: dict = None):
             "You are reading a scanned student answer sheet. Report the BUBBLE and WRITE BOX for "
             "the MCQ questions listed.\n\n"
             "Each MCQ row has:\n"
-            "  BUBBLES: four circles labeled A, B, C, D. Report the letter of the most heavily "
-            "filled, darkened, or circled bubble.\n"
-            "  WRITE BOX: a small square at the FAR RIGHT end of the row. Report what's written, or \"\".\n\n"
+            "  BUBBLES: four circles arranged left-to-right. Each circle has a letter label (A/B/C/D)\n"
+            "  printed ABOVE or INSIDE it (varies by template). Identify the most heavily filled,\n"
+            "  scribbled, or darkened circle by its POSITION (1st=A, 2nd=B, 3rd=C, 4th=D).\n"
+            "  Do NOT rely on obscured labels — always determine the answer by position counting.\n"
+            "  WRITE BOX: a small PRE-PRINTED SQUARE at the FAR RIGHT end of the row.\n"
+            "  CRITICAL: Return \"\" if only the printed border is visible (nothing written inside).\n"
+            "  Only report handwritten content actually written INSIDE the box.\n\n"
             f"Questions to read: {mcq_qlist}\n\n"
             "Do NOT guess from question content. Only report physical marks.\n\n"
             "Return JSON with numeric keys (e.g. \"1\" not \"Q1\"):\n"
@@ -3442,25 +4696,8 @@ def _extract_answers(path: str, exam_questions: list = None, exam: dict = None):
                         bubble_raw = str(val).strip()
                         box_raw    = ""
                     # Code-side resolution (same logic as Pass 1)
-                    box_letter2 = re.search(r'^([A-D])$', box_raw.upper())
-                    if box_letter2:
-                        ltr = box_letter2.group(1).upper()
-                        write_box_locked.add(qid)
-                        unlocked_mcq.discard(qid)
-                        mcq_votes.setdefault(qid, []).extend([ltr] * 3)
-                        log.info(f"[OCR] Pass {pass_num} Q{qid}: box_letter → locked {ltr}")
-                        continue
-                    if box_raw and re.search(r'\d', box_raw):
-                        q_opts = opt_value_map.get(qid, {})
-                        m2 = q_opts.get(box_raw) or q_opts.get(re.sub(r'[^0-9.]', '', box_raw))
-                        if not m2:
-                            m2 = next((ltr for v, ltr in q_opts.items() if box_raw in v or v in box_raw), None)
-                        if m2:
-                            write_box_locked.add(qid)
-                            unlocked_mcq.discard(qid)
-                            mcq_votes.setdefault(qid, []).extend([m2] * 3)
-                            log.info(f"[OCR] Pass {pass_num} Q{qid}: box_number → locked {m2}")
-                            continue
+                    # For letter boxes in Passes 2 & 3: lock if the letter appears
+                    # in votes at least twice already (confirmed across passes).
                     letter = re.search(r'([A-D])', bubble_raw, re.IGNORECASE)
                     if letter:
                         mcq_votes.setdefault(qid, []).append(letter.group(1).upper())
@@ -3469,20 +4706,312 @@ def _extract_answers(path: str, exam_questions: list = None, exam: dict = None):
 
     # ── Resolve MCQ answers by majority vote ──────────────────────────────────
     for qid, votes in mcq_votes.items():
+        det = det_mcq_answers.get(qid)
         if votes:
-            winner, count = Counter(votes).most_common(1)[0]
-            answers[qid] = winner
+            # ALWAYS use proper majority voting via Counter for all questions
+            vote_counts = Counter(votes)
+            top = vote_counts.most_common()
+            winner, count = top[0]
+            
+            # If write_box_locked, the answer is already heavily weighted (3 votes)
+            # so the majority vote will naturally reflect the locked answer
             locked = " [LOCKED]" if qid in write_box_locked else ""
-            log.info(f"[OCR] Q{qid} MCQ: votes={votes} → {winner} ({count}/{len(votes)}){locked}")
+            
+            # Trust Vision voting over deterministic template reader for multi-student PDFs
+            # The deterministic reader uses fixed coordinates that don't match scanned sheets.
+            # Only use deterministic as LAST RESORT when Vision completely fails (no votes).
+            # 
+            # Require at least 2 votes for confidence. If only 1 vote (meaning Passes 2&3
+            # failed to re-read), this indicates an unclear/ambiguous bubble that needs
+            # manual review or deterministic fallback.
+            
+            if len(votes) >= 2 or qid in write_box_locked:
+                # Confident: multiple passes agreed OR write-box locked
+                answers[qid] = winner
+                log.info(f"[OCR] Q{qid} MCQ: votes={votes} → {winner} ({count}/{len(votes)}){locked}")
+            elif det:
+                # Low confidence (only 1 vote) but deterministic available
+                answers[qid] = det
+                log.warning(f"[OCR] Q{qid} MCQ: votes={votes} → using deterministic {det} (low confidence)")
+            else:
+                # Low confidence and no deterministic fallback - use the single vote but warn
+                answers[qid] = winner
+                log.warning(f"[OCR] Q{qid} MCQ: votes={votes} → {winner} (LOW CONFIDENCE: only 1 vote)")
+        elif det:
+            # Only use deterministic when Vision produced NO votes at all
+            answers[qid] = det
+            log.warning(f"[OCR] Q{qid} MCQ: no Vision votes → deterministic fallback {det} (unreliable for scanned sheets)")
         else:
-            log.warning(f"[OCR] Q{qid} MCQ: no votes collected")
+            log.warning(f"[OCR] Q{qid} MCQ: no votes collected and no deterministic fallback")
+
+    # ── Pass 4: Subjective re-read for any missed questions ───────────────────
+    # If any subjective questions returned no answer in Pass 1, retry them with
+    # SUBJECTIVE_OCR_MODEL (defaults to gpt-4o) using a focused prompt that
+    # explicitly describes the green-tab + ruled-line layout.
+    subj_ids = {int(q.get("id", 0)) for q in exam_questions
+                if q.get("type", "objective") != "objective"} if exam_questions else set()
+    # Include questions with no answer OR placeholder dash values
+    placeholder_values = {"—", "-", "--", "None", "null", "", "blank", "no answer"}
+    missed_subj_ids = sorted(qid for qid in subj_ids 
+                            if not answers.get(qid) or answers.get(qid) in placeholder_values)
+    if missed_subj_ids:
+        missed_qlist = ", ".join(f"Q{qid}" for qid in missed_subj_ids)
+        subj_q_block = "\n".join(
+            f"  Q{q['id']} [{q.get('weightage', q.get('marks', '?'))} marks]: {str(q.get('question', ''))[:120]}"
+            for q in sorted(exam_questions, key=lambda x: int(x.get("id", 0)))
+            if int(q.get("id", 0)) in set(missed_subj_ids)
+        ) if exam_questions else missed_qlist
+        subj_reread_prompt = (
+            "You are a handwriting recognition expert. I am showing you a scanned student answer sheet.\n"
+            "Focus ONLY on the SECTION B (Subjective) answer boxes for the questions listed below.\n\n"
+            f"Questions to read: {missed_qlist}\n\n"
+            f"QUESTION DETAILS:\n{subj_q_block}\n\n"
+            "BLEED-THROUGH WARNING: The scanned pages may show DARK SHADOW IMAGES behind the answer\n"
+            "text — these are caused by ink bleeding through from the reverse side of thin paper.\n"
+            "They may appear as: large dark circles (like big filled bubbles), person-shaped silhouettes,\n"
+            "or diagonal dark patches. IGNORE ALL such shadow/ghost images completely.\n"
+            "Read ONLY the clearly written blue/black pen marks that are the student's handwriting.\n\n"
+            "LAYOUT OF SECTION B BOXES:\n"
+            "  \u2022 A DARK (black or dark green) tab on the LEFT edge with the Q number printed inside it.\n"
+            "  \u2022 RULED HORIZONTAL LINES to the RIGHT of the tab \u2014 the student writes here.\n"
+            "  \u2022 A small printed label 'Write your answer below:' at the top (IGNORE THIS).\n\n"
+            "\u26a0\ufe0f  CRITICAL READING RULES:\n"
+            "  1. Students write across MULTIPLE ruled lines. Do NOT stop after the first line.\n"
+            "  2. Read EVERY ruled line in the box from top to bottom.\n"
+            "  3. Join all lines with spaces into ONE continuous string.\n"
+            "  4. A single word or number is a valid complete answer \u2014 include it.\n"
+            "  5. Include all mathematical working/steps exactly as written.\n"
+            "  6. DO NOT include the printed 'Write your answer below:' label.\n"
+            "  7. DO NOT include printed question text \u2014 only the student's handwritten text.\n"
+            "  8. IGNORE faint ghost/shadow images from paper bleed-through.\n"
+            "  9. If a box is genuinely blank (no student ink at all), omit that question from JSON.\n\n"
+            "Return ONLY valid JSON with numeric question number keys:\n"
+            '{\"answers\": {\"7\": \"complete answer text here\", \"8\": \"another answer\"}}\n'
+        )
+        try:
+            log.info(f"[OCR] Pass 4: Subjective re-read for {len(missed_subj_ids)} missed questions "
+                     f"({missed_qlist}) using {SUBJECTIVE_OCR_MODEL}...")
+            _sub_resp = None
+            _last_sub_err = None
+            for _i, _k in enumerate(_openai_key_candidates(premium=True)):
+                try:
+                    _sub_client = _oai.OpenAI(api_key=_k)
+                    _openai_limiter.wait()
+                    _sub_resp = _sub_client.chat.completions.create(
+                        model=SUBJECTIVE_OCR_MODEL, temperature=0, max_tokens=8192, timeout=180,
+                        seed=42,
+                        response_format={"type": "json_object"},
+                        messages=[{"role": "user", "content": [{"type": "text", "text": subj_reread_prompt}] + img_content}],
+                    )
+                    break
+                except Exception as _se:
+                    _last_sub_err = _se
+                    if _i < len(_openai_key_candidates(premium=True)) - 1:
+                        log.warning(f"[OCR] Pass 4 key failover {_i+1}: {_se}")
+                        continue
+            if _sub_resp is None:
+                raise _last_sub_err if _last_sub_err else RuntimeError("Pass 4 failed")
+            _sub_raw = json.loads(_sub_resp.choices[0].message.content)
+            for _qid_str, _val in _sub_raw.get("answers", {}).items():
+                try:
+                    _qid = int(re.sub(r'^[Qq]', '', str(_qid_str)).strip())
+                except (ValueError, TypeError):
+                    continue
+                if _qid not in set(missed_subj_ids):
+                    continue
+                _val_str = str(_val).strip() if not isinstance(_val, dict) else ""
+                _val_str = re.sub(
+                    r'^(?:write\s+your\s+answer\s+below\s*[:\-]?\s*|answer\s*[:\-]\s*)',
+                    "", _val_str, flags=re.IGNORECASE
+                ).strip()
+                _val_str = re.sub(r'[\r\n]+', ' ', _val_str)
+                _val_str = re.sub(r'\s{2,}', ' ', _val_str).strip()
+                if _val_str and _val_str not in {"\u2014", "-", "--", "None", "null", "", "blank", "no answer"}:
+                    # Overwrite placeholder values from Pass 1, but preserve real answers
+                    if _qid not in answers or answers[_qid] in {"\u2014", "-", "--", "None", "null", "", "blank", "no answer"}:
+                        answers[_qid] = _val_str
+                        log.info(f"[OCR] Pass 4 Q{_qid}: captured '{_val_str[:80]}'")
+                    else:
+                        log.info(f"[OCR] Pass 4 Q{_qid}: keeping Pass 1 answer (not placeholder)")
+        except Exception as _p4_err:
+            log.warning(f"[OCR] Pass 4 subjective re-read failed (non-fatal): {_p4_err}")
 
     if answers:
-        log.info(f"[OCR] Extracted {len(answers)} answers (MCQ consensus from 3 reads)")
+        log.info(f"[OCR] Extracted {len(answers)} answers (MCQ consensus + subjective re-read)")
         return answers, "vision_ocr_consensus"
 
     log.warning("[OCR] No answers extracted from Vision response")
     return {}, "no_answers_extracted"
+
+
+def _extract_answers_from_pages(pdf_path: str, page_indices: list, exam_questions: list = None, 
+                                exam: dict = None, attempts: int = 3):
+    """
+    Extract answers from SPECIFIC pages of a PDF (e.g., student's pages only).
+    Memory-optimized: Uses PyPDF to extract pages without loading entire PDF into memory.
+    
+    Args:
+        pdf_path: Full path to the PDF file
+        page_indices: List of page numbers to extract from (0-indexed)
+        exam_questions: Optional list of exam questions for context
+        exam: Optional exam dict
+        attempts: Number of retry attempts
+    
+    Returns:
+        (answers, mode, error) tuple where answers is extracted answers dict or empty dict
+    """
+    import tempfile as _tempfile
+    from pathlib import Path as _PathLib
+    
+    if not page_indices or not isinstance(page_indices, (list, tuple)):
+        log.warning(f"[EXTRACT-PAGES] Invalid page_indices: {page_indices}")
+        return {}, "invalid_pages", "page_indices must be a non-empty list"
+    
+    page_indices = [int(p) for p in page_indices if isinstance(p, (int, float))]
+    if not page_indices:
+        return {}, "invalid_pages", "no valid page indices"
+    
+    tmp_path = None
+    try:
+        # Use PyPDF for memory-efficient page extraction
+        import pypdf
+        
+        reader = pypdf.PdfReader(pdf_path)
+        total_pages = len(reader.pages)
+        
+        # Validate page indices
+        page_indices = [p for p in page_indices if 0 <= p < total_pages]
+        if not page_indices:
+            log.error(f"[EXTRACT-PAGES] No valid page indices after filtering (total={total_pages})")
+            return {}, "no_valid_pages", f"all pages out of range [0, {total_pages})"
+        
+        # Create a temporary PDF with only the specified pages
+        with _tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+            tmp_path = tmp.name
+        
+        # Write selected pages to temp file using PyPDF (memory-efficient)
+        writer = pypdf.PdfWriter()
+        for page_idx in sorted(set(page_indices)):
+            writer.add_page(reader.pages[page_idx])
+        
+        with open(tmp_path, "wb") as output_file:
+            writer.write(output_file)
+        
+        log.info(f"[EXTRACT-PAGES] Created temp PDF with pages {sorted(set(page_indices))} at {tmp_path}")
+        
+        # Extract answers from the temporary PDF
+        answers, mode = _extract_answers(tmp_path, exam_questions=exam_questions, exam=exam)
+        
+        log.info(f"[EXTRACT-PAGES] Successfully extracted from pages {sorted(page_indices)}: {len(answers)} answers (mode={mode})")
+        return answers, mode, None
+        
+    except Exception as ex:
+        log.error(f"[EXTRACT-PAGES] Failed to extract from pages {page_indices}: {ex}")
+        return {}, "extraction_error", str(ex)
+    
+    finally:
+        # Clean up temporary file immediately to free memory
+        if tmp_path:
+            try:
+                _PathLib(tmp_path).unlink(missing_ok=True)
+                log.debug(f"[EXTRACT-PAGES] Cleaned up temp file: {tmp_path}")
+            except Exception as cleanup_err:
+                log.warning(f"[EXTRACT-PAGES] Failed to clean temp file: {cleanup_err}")
+
+
+def _extract_answers_with_retry(path: str, exam_questions: list = None, exam: dict = None,
+                                attempts: int = 3, base_delay: float = 1.5):
+    """
+    Retry OCR extraction to survive transient OpenAI/API turbulence.
+    Returns (answers, mode, error_message_or_none).
+    """
+    def _retry_sleep_from_msg(msg: str, fallback: float) -> float:
+        if not msg:
+            return fallback
+        _m = re.search(r"try again in\s*([0-9]*\.?[0-9]+)\s*(ms|s)", msg, re.IGNORECASE)
+        if not _m:
+            return fallback
+        _v = float(_m.group(1))
+        _u = _m.group(2).lower()
+        _sec = (_v / 1000.0) if _u == "ms" else _v
+        return max(fallback, _sec + 0.25)
+
+    last_mode = "no_answers_extracted"
+    last_err = ""
+    attempts = max(1, int(attempts))
+    for attempt in range(1, attempts + 1):
+        try:
+            answers, mode = _extract_answers(path, exam_questions=exam_questions, exam=exam)
+            last_mode = mode
+            if answers:
+                return answers, mode, None
+            last_err = f"empty_answers ({mode})"
+        except Exception as ex:
+            last_mode = "extract_exception"
+            last_err = str(ex)
+            log.warning(f"[OCR-RETRY] Attempt {attempt}/{attempts} failed for {Path(path).name}: {ex}")
+
+        if attempt < attempts:
+            _fallback = base_delay * attempt
+            _sleep_for = _retry_sleep_from_msg(last_err, _fallback)
+            _time.sleep(_sleep_for)
+
+    return {}, last_mode, last_err or "no_answers_extracted"
+
+
+def _evaluate_answers_with_retry(exam: dict, answers: dict, roll_no: str,
+                                 attempts: int = 2, base_delay: float = 1.0):
+    """Retry grading for transient upstream failures."""
+    def _retry_sleep_from_msg(msg: str, fallback: float) -> float:
+        if not msg:
+            return fallback
+        _m = re.search(r"try again in\s*([0-9]*\.?[0-9]+)\s*(ms|s)", msg, re.IGNORECASE)
+        if not _m:
+            return fallback
+        _v = float(_m.group(1))
+        _u = _m.group(2).lower()
+        _sec = (_v / 1000.0) if _u == "ms" else _v
+        return max(fallback, _sec + 0.25)
+
+    last_err = "evaluation_failed"
+    attempts = max(1, int(attempts))
+    for attempt in range(1, attempts + 1):
+        try:
+            _openai_limiter.wait()
+            return _evaluate_answers(exam, answers, roll_no), None
+        except Exception as ex:
+            last_err = str(ex)
+            log.warning(f"[EVAL-RETRY] Attempt {attempt}/{attempts} failed for roll={roll_no}: {ex}")
+            if attempt < attempts:
+                _fallback = base_delay * attempt
+                _sleep_for = _retry_sleep_from_msg(last_err, _fallback)
+                _time.sleep(_sleep_for)
+    return None, last_err
+
+
+def _multi_student_worker_count(student_count: int) -> int:
+    """
+    Adaptive concurrency for class-PDF evaluation.
+    Higher worker count helps 40-50 student batches while the thread-safe
+    limiter keeps API calls paced.
+    """
+    if student_count >= 40:
+        return 2
+    if student_count >= 20:
+        return 3
+    return 4
+
+def _resolve_multi_eval_batch_size(student_count: int) -> int:
+    """
+    Keep batch waves smaller for large class PDFs to reduce long-tail timeouts.
+    MULTI_EVAL_BATCH_SIZE remains the upper bound from env.
+    """
+    base = max(1, MULTI_EVAL_BATCH_SIZE)
+    if student_count >= 30:
+        return min(base, 5)
+    if student_count >= 20:
+        return min(base, 6)
+    return base
 
 def _parse_answer_text(text: str) -> Dict[int, str]:
     """
@@ -4006,6 +5535,291 @@ CHAPTERS_DB: Dict[tuple, list] = {
     ("class10","social science"):["History Ch 1: The Rise of Nationalism in Europe","History Ch 2: Nationalism in India","History Ch 3: The Making of a Global World","History Ch 4: The Age of Industrialisation","History Ch 5: Print Culture and the Modern World","Geography Ch 1: Resources and Development","Geography Ch 2: Forest and Wildlife Resources","Geography Ch 3: Water Resources","Geography Ch 4: Agriculture","Geography Ch 5: Minerals and Energy Resources","Geography Ch 6: Manufacturing Industries","Geography Ch 7: Lifelines of National Economy","Political Science Ch 1: Power Sharing","Political Science Ch 2: Federalism","Political Science Ch 3: Democracy and Diversity","Political Science Ch 4: Gender, Religion and Caste","Political Science Ch 5: Popular Struggles and Movements","Economics Ch 1: Development","Economics Ch 2: Sectors of the Indian Economy","Economics Ch 3: Money and Credit","Economics Ch 4: Globalisation and the Indian Economy"],
 }
 
+# Curated CISCE chapter structure for ICSE classes 9-10.
+# These follow the book-style subject split students expect on ICSE reference
+# sites such as KnowledgeBoat/Oswaal instead of a generic LLM-generated list.
+def _prefixed(prefix: str, items: List[str]) -> List[str]:
+    return [f"{prefix}: {item}" for item in items]
+
+_ICSE_9_ENGLISH_LITERATURE = [
+    "The Fun They Had",
+    "The Sound of Music",
+    "The Little Girl",
+    "A Truly Beautiful Mind",
+    "The Snake and the Mirror",
+    "My Childhood",
+    "Packing",
+    "The Bond of Love",
+    "The Road Not Taken",
+    "The Lake Isle of Innisfree",
+    "A Legend of the Northland",
+    "No Men Are Foreign",
+    "The Duck and the Kangaroo",
+    "On the Grasshopper and Cricket",
+    "The Gift of the Magi",
+]
+_ICSE_9_ENGLISH_LANGUAGE = [
+    "Composition Writing",
+    "Story and Narrative Writing",
+    "Descriptive Writing",
+    "Picture Composition",
+    "Letter Writing",
+    "Email and Notice Writing",
+    "Comprehension",
+    "Grammar - Tenses and Subject-Verb Agreement",
+    "Grammar - Transformation of Sentences",
+    "Grammar - Synthesis, Prepositions and Usage",
+]
+_ICSE_9_MATHEMATICS = [
+    "Number Systems",
+    "Polynomials",
+    "Coordinate Geometry",
+    "Linear Equations in Two Variables",
+    "Introduction to Euclid's Geometry",
+    "Lines and Angles",
+    "Triangles",
+    "Quadrilaterals",
+    "Areas of Parallelograms and Triangles",
+    "Circles",
+    "Constructions",
+    "Heron's Formula",
+    "Surface Areas and Volumes",
+    "Statistics",
+    "Probability",
+]
+_ICSE_9_PHYSICS = [
+    "Measurements and Experimentation",
+    "Motion in One Dimension",
+    "Laws of Motion",
+    "Pressure in Fluids and Atmospheric Pressure",
+    "Upthrust in Fluids, Archimedes' Principle and Floatation",
+    "Heat and Energy",
+    "Reflection of Light",
+    "Propagation of Sound Waves",
+    "Current Electricity and Household Circuits",
+    "Magnetism",
+]
+_ICSE_9_CHEMISTRY = [
+    "The Language of Chemistry",
+    "Chemical Changes and Reactions",
+    "Water",
+    "Atomic Structure and Chemical Bonding",
+    "The Periodic Table",
+    "Study of the First Element - Hydrogen",
+    "Study of Gas Laws",
+    "Atmospheric Pollution",
+]
+_ICSE_9_BIOLOGY = [
+    "Cell - The Unit of Life",
+    "Tissues",
+    "Flower",
+    "Pollination and Fertilisation",
+    "Seeds",
+    "Digestive System",
+    "Skeleton - Movement and Locomotion",
+    "Skin - The Jack of All Trades",
+    "Respiratory System",
+    "Health Organisations",
+    "Waste Generation and Management",
+]
+_ICSE_9_HISTORY_CIVICS = [
+    "The Harappan Civilisation",
+    "The Vedic Period",
+    "Jainism and Buddhism",
+    "The Mauryan Empire",
+    "The Sangam Age",
+    "The Age of the Guptas",
+    "Medieval India",
+    "The Modern Age in Europe",
+    "Our Constitution",
+    "Elections",
+    "Local Self-Government - Rural",
+    "Local Self-Government - Urban",
+]
+_ICSE_9_GEOGRAPHY = [
+    "Earth as a Planet",
+    "Geographic Grid - Latitudes and Longitudes",
+    "Rotation and Revolution",
+    "Structure of the Earth",
+    "Volcanoes",
+    "Earthquakes",
+    "Weathering and Denudation",
+    "Hydrosphere",
+    "Atmosphere",
+    "Humidity",
+    "Natural Regions of the World",
+]
+_ICSE_9_COMPUTER_APPLICATIONS = [
+    "Introduction to Object-Oriented Programming",
+    "Values and Data Types",
+    "Operators in Java",
+    "Input in Java",
+    "Mathematical Library Methods",
+    "Conditional Constructs",
+    "Iterative Constructs",
+    "Nested Loops",
+    "Computing and Ethics",
+]
+
+_ICSE_10_ENGLISH_LITERATURE = [
+    "Merchant of Venice - Act 3 Scene 2",
+    "Merchant of Venice - Act 4 Scene 1",
+    "Merchant of Venice - Act 4 Scene 2",
+    "Merchant of Venice - Act 5 Scene 1",
+    "Treasure Chest - The Heart of the Tree",
+    "Treasure Chest - The Cold Within",
+    "Treasure Chest - The Bangle Sellers",
+    "Treasure Chest - After Blenheim",
+    "Treasure Chest - The Blue Bead",
+    "Treasure Chest - My Greatest Olympic Prize",
+    "Treasure Chest - All Summer in a Day",
+    "Treasure Chest - The Power of Music",
+]
+_ICSE_10_ENGLISH_LANGUAGE = [
+    "Composition Writing",
+    "Argumentative and Reflective Writing",
+    "Story and Descriptive Writing",
+    "Letter Writing",
+    "Email, Notice and Proposal Writing",
+    "Comprehension",
+    "Grammar - Tenses, Agreement and Prepositions",
+    "Grammar - Transformation of Sentences",
+    "Grammar - Synthesis and Re-ordering",
+    "Grammar - Vocabulary and Usage",
+]
+_ICSE_10_MATHEMATICS = [
+    "Goods and Services Tax",
+    "Banking - Recurring Deposit and Bank Accounts",
+    "Shares and Dividends",
+    "Linear Inequations",
+    "Quadratic Equations",
+    "Ratio and Proportion",
+    "Factorisation",
+    "Matrices",
+    "Arithmetic Progression",
+    "Reflection",
+    "Section Formula and Mid-point Formula",
+    "Equation of a Straight Line",
+    "Similarity",
+    "Loci",
+    "Circles",
+    "Tangents and Intersections",
+    "Trigonometric Identities",
+    "Heights and Distances",
+    "Mensuration",
+    "Statistics",
+    "Probability",
+]
+_ICSE_10_PHYSICS = [
+    "Force",
+    "Work, Energy and Power",
+    "Machines",
+    "Refraction of Light at Plane Surfaces",
+    "Refraction through a Lens",
+    "Spectrum",
+    "Sound",
+    "Current Electricity",
+    "Household Circuits",
+    "Electromagnetism",
+    "Calorimetry",
+    "Radioactivity",
+]
+_ICSE_10_CHEMISTRY = [
+    "Periodic Properties and Variations of Properties",
+    "Chemical Bonding",
+    "Acids, Bases and Salts",
+    "Analytical Chemistry",
+    "Mole Concept and Stoichiometry",
+    "Electrolysis",
+    "Metallurgy",
+    "Hydrogen Chloride",
+    "Ammonia",
+    "Nitric Acid",
+    "Sulphuric Acid",
+    "Organic Chemistry",
+]
+_ICSE_10_BIOLOGY = [
+    "Cell Cycle and Cell Division",
+    "Genetics",
+    "Absorption by Roots",
+    "Transpiration",
+    "Photosynthesis",
+    "Chemical Coordination in Plants",
+    "Circulatory System",
+    "Excretory System",
+    "Nervous System",
+    "Sense Organs",
+    "Endocrine System",
+    "Reproductive System",
+    "Population",
+    "Pollution",
+]
+_ICSE_10_HISTORY_CIVICS = [
+    "The First War of Independence, 1857",
+    "Growth of Nationalism",
+    "Gandhian Nationalism",
+    "Forward Bloc and the INA",
+    "Independence and Partition",
+    "The Union Legislature",
+    "The Union Executive",
+    "The Judiciary",
+    "The United Nations",
+    "Major Agencies of the United Nations",
+]
+_ICSE_10_GEOGRAPHY = [
+    "Interpretation of Topographical Maps",
+    "Map Work",
+    "Climate",
+    "Soil Resources",
+    "Natural Vegetation",
+    "Water Resources",
+    "Mineral and Energy Resources",
+    "Agriculture",
+    "Manufacturing Industries",
+    "Transport",
+    "Waste Management - 1",
+    "Waste Management - 2",
+]
+_ICSE_10_COMPUTER_APPLICATIONS = [
+    "Classes as Objects",
+    "User-defined Methods",
+    "Constructors",
+    "Library Classes",
+    "Arrays",
+    "Strings",
+    "Class as the Basis of All Computation",
+    "Encapsulation and Function Overloading",
+    "Recursion",
+    "Boolean Logic and Operators",
+]
+
+CISCE_CURATED_CHAPTERS: Dict[tuple, List[str]] = {
+    ("class9", "english"): _ICSE_9_ENGLISH_LITERATURE,
+    ("class9", "english literature"): _ICSE_9_ENGLISH_LITERATURE,
+    ("class9", "english language"): _ICSE_9_ENGLISH_LANGUAGE,
+    ("class9", "mathematics"): _ICSE_9_MATHEMATICS,
+    ("class9", "physics"): _ICSE_9_PHYSICS,
+    ("class9", "chemistry"): _ICSE_9_CHEMISTRY,
+    ("class9", "biology"): _ICSE_9_BIOLOGY,
+    ("class9", "history & civics"): _ICSE_9_HISTORY_CIVICS,
+    ("class9", "geography"): _ICSE_9_GEOGRAPHY,
+    ("class9", "computer applications"): _ICSE_9_COMPUTER_APPLICATIONS,
+    ("class9", "science"): _prefixed("Physics", _ICSE_9_PHYSICS) + _prefixed("Chemistry", _ICSE_9_CHEMISTRY) + _prefixed("Biology", _ICSE_9_BIOLOGY),
+    ("class9", "social science"): _prefixed("History & Civics", _ICSE_9_HISTORY_CIVICS) + _prefixed("Geography", _ICSE_9_GEOGRAPHY),
+    ("class10", "english"): _ICSE_10_ENGLISH_LITERATURE,
+    ("class10", "english literature"): _ICSE_10_ENGLISH_LITERATURE,
+    ("class10", "english language"): _ICSE_10_ENGLISH_LANGUAGE,
+    ("class10", "mathematics"): _ICSE_10_MATHEMATICS,
+    ("class10", "physics"): _ICSE_10_PHYSICS,
+    ("class10", "chemistry"): _ICSE_10_CHEMISTRY,
+    ("class10", "biology"): _ICSE_10_BIOLOGY,
+    ("class10", "history & civics"): _ICSE_10_HISTORY_CIVICS,
+    ("class10", "geography"): _ICSE_10_GEOGRAPHY,
+    ("class10", "computer applications"): _ICSE_10_COMPUTER_APPLICATIONS,
+    ("class10", "science"): _prefixed("Physics", _ICSE_10_PHYSICS) + _prefixed("Chemistry", _ICSE_10_CHEMISTRY) + _prefixed("Biology", _ICSE_10_BIOLOGY),
+    ("class10", "social science"): _prefixed("History & Civics", _ICSE_10_HISTORY_CIVICS) + _prefixed("Geography", _ICSE_10_GEOGRAPHY),
+}
+
 NCERT_PDF_URLS: Dict[tuple, str] = {
     # ── Science ──────────────────────────────────────────
     # Class 6 Science: new 2023-24 "Curiosity" textbook — no direct portal URL yet; Google fallback
@@ -4377,6 +6191,47 @@ def _500(e):
 # ══════════════════════════════════════════════════════════════════════════════
 SESSION_TTL_DAYS = int(os.getenv("SESSION_TTL_DAYS", 30))
 
+def _session_find(token: str) -> Optional[dict]:
+    """Load a session by token (MongoDB primary, JSON fallback)."""
+    if not token:
+        return None
+    if MONGO_OK:
+        return _mongo_find_one(M_SESSIONS, {"token": token})
+    db = db_load()
+    for s in db.get("sessions", []):
+        if s.get("token") == token:
+            return s
+    return None
+
+def _session_save(token: str, user_id: str, role: str, ip: str = ""):
+    """Persist a session (MongoDB primary, JSON fallback)."""
+    payload = {
+        "token": token,
+        "user_id": user_id,
+        "role": role,
+        "created_at": _now(),
+        "ip": ip or "",
+    }
+    if MONGO_OK:
+        _mongo_insert(M_SESSIONS, payload)
+        return
+    db = db_load()
+    sessions = [s for s in db.get("sessions", []) if s.get("token") != token]
+    sessions.append(payload)
+    db["sessions"] = sessions
+    db_save(db)
+
+def _session_delete(token: str):
+    """Delete a session by token from the active persistence layer."""
+    if not token:
+        return
+    if MONGO_OK:
+        _mongo_delete(M_SESSIONS, {"token": token})
+        return
+    db = db_load()
+    db["sessions"] = [s for s in db.get("sessions", []) if s.get("token") != token]
+    db_save(db)
+
 def auth(roles=None):
     """
     Decorator that:
@@ -4400,23 +6255,23 @@ def auth(roles=None):
             uid = TOKENS.get(tok)
 
             # Session lookup in MongoDB if not cached in memory
-            if not uid and MONGO_OK:
-                session = _mongo_find_one(M_SESSIONS, {"token": tok})
+            if not uid:
+                session = _session_find(tok)
                 if session:
                     # Check session TTL
                     created = session.get("created_at", "")
                     if created:
                         try:
-                            from datetime import timezone
                             age_days = (datetime.utcnow() - datetime.fromisoformat(created)).days
                             if age_days > SESSION_TTL_DAYS:
                                 # Session expired — clean up
-                                _mongo_delete(M_SESSIONS, {"token": tok})
+                                _session_delete(tok)
                                 return jsonify({"error": "Session expired. Please sign in again."}), 401
                         except Exception:
                             pass
-                    uid = session["user_id"]
-                    TOKENS[tok] = uid
+                    uid = session.get("user_id")
+                    if uid:
+                        TOKENS[tok] = uid
 
             if not uid:
                 return jsonify({"error": "Unauthorized — invalid or expired token"}), 401
@@ -4625,11 +6480,7 @@ def login():
     # Issue token
     tok = uuid.uuid4().hex
     TOKENS[tok] = u["id"]
-    _mongo_insert(M_SESSIONS, {
-        "token": tok, "user_id": u["id"],
-        "role": u["role"], "created_at": _now(),
-        "ip": request.remote_addr or ""
-    })
+    _session_save(tok, u["id"], u["role"], ip=request.remote_addr or "")
     # Save activity log + last_login in background (non-blocking)
     import threading
     def _save_activity():
@@ -4694,11 +6545,7 @@ def signup():
 
     tok = uuid.uuid4().hex
     TOKENS[tok] = u["id"]
-    _mongo_insert(M_SESSIONS, {
-        "token": tok, "user_id": u["id"],
-        "role": u["role"], "created_at": _now(),
-        "ip": request.remote_addr or ""
-    })
+    _session_save(tok, u["id"], u["role"], ip=request.remote_addr or "")
     return jsonify({"token": tok, "user": _safe(u)}), 201
 
 @app.post("/api/auth/register-institute")
@@ -4756,11 +6603,7 @@ def register_institute():
 
     tok = uuid.uuid4().hex
     TOKENS[tok] = u["id"]
-    _mongo_insert(M_SESSIONS, {
-        "token": tok, "user_id": u["id"],
-        "role": "institute_admin", "created_at": _now(),
-        "ip": request.remote_addr or ""
-    })
+    _session_save(tok, u["id"], "institute_admin", ip=request.remote_addr or "")
     return jsonify({"token": tok, "user": _safe(u)}), 201
 
 
@@ -4769,7 +6612,7 @@ def register_institute():
 def logout():
     tok = request.headers.get("Authorization", "").replace("Bearer ", "").strip()
     TOKENS.pop(tok, None)
-    _mongo_delete(M_SESSIONS, {"token": tok})
+    _session_delete(tok)
     return jsonify({"ok": True})
 
 @app.get("/api/auth/me")
@@ -5336,7 +7179,8 @@ def get_curriculum_subjects():
 @auth()
 def get_curriculum_chapters():
     b = request.json or {}
-    board   = b.get("board", "CBSE")
+    # Backward compatibility: some older clients send `exam` instead of `board`.
+    board   = (b.get("board") or b.get("exam") or "CBSE")
     class_n = b.get("class", "Class 10")
     subject = b.get("subject", "Mathematics")
     subject_canon = _normalize_subject_name(subject)
@@ -5403,6 +7247,11 @@ def get_curriculum_chapters():
         chapters     = None
         pdf_url      = ""
         supp_pdf_url = ""
+
+    if _is_cisce:
+        chapters = CISCE_CURATED_CHAPTERS.get((class_key, subj_key))
+        if chapters:
+            source = "cisce_curated"
 
     # For CBSE/NCERT with known chapters, use local data (fastest).
     # CISCE boards (ICSE/ISC) bypass DIKSHA — their content is not on DIKSHA.
@@ -5993,6 +7842,30 @@ def list_exams_alias():
     """GET /api/exams — alias for GET /api/questions (returns all saved exams)."""
     return list_exams()
 
+@app.post("/api/exams/import-registry")
+@auth(roles=["admin"])
+def import_exams_registry():
+    """Replace or merge the exams registry (admin-only)."""
+    try:
+        data = request.get_json(force=True) or {}
+        registry = data.get("registry") or data.get("data") or {}
+        merge = bool(data.get("merge"))
+
+        if not isinstance(registry, dict) or not registry:
+            return jsonify({"error": "registry must be a non-empty object"}), 400
+
+        global exams_registry
+        if merge:
+            exams_registry.update(registry)
+        else:
+            exams_registry = registry
+
+        _save_exams()
+        return jsonify({"ok": True, "count": len(exams_registry), "merged": merge})
+    except Exception as e:
+        log.error(f"[EXAMS] import-registry failed: {e}", exc_info=True)
+        return jsonify({"error": f"Import failed: {e}"}), 500
+
 @app.post("/api/exams/save")
 @auth()
 def save_exam():
@@ -6348,7 +8221,7 @@ def _split_multi_student_pdf(pdf_path: str, exam_questions: list = None) -> list
     except Exception:
         all_text = ""
 
-    if all_text:
+    if all_text and n_pages <= 80:
         _tp = (
             f"Text from a combined answer sheet PDF:\n{all_text[:6000]}\n\n"
             "List each student with their pages (0-indexed). Return JSON array:\n"
@@ -6356,9 +8229,21 @@ def _split_multi_student_pdf(pdf_path: str, exam_questions: list = None) -> list
         )
         _tr = _llm_json(_tp, temperature=0.1, mini=True)
         if isinstance(_tr, list) and _tr:
+            _covered = set()
             for _e in _tr:
+                _pis = _e.get("page_indices")
+                if isinstance(_pis, list):
+                    _covered.update([p for p in _pis if isinstance(p, int) and 0 <= p < n_pages])
                 _e.setdefault("page_indices", all_pages)
-            return _tr
+
+            # Accept text-path only when it covers most pages; otherwise keep going
+            # to per-page vision logic (more robust for large or scanned PDFs).
+            if len(_covered) >= max(1, int(0.80 * n_pages)):
+                return _tr
+            print(
+                f"[MULTI-SPLIT] Text-path split under-covered pages "
+                f"({len(_covered)}/{n_pages}) — falling back to vision split"
+            )
 
     client = _oai.OpenAI(api_key=OPENAI_API_KEY)
 
@@ -6370,13 +8255,203 @@ def _split_multi_student_pdf(pdf_path: str, exam_questions: list = None) -> list
         if _qnos:
             first_q_no = min(_qnos)
 
+    def _analyze_header_page(_i: int, _img) -> dict:
+        # Keep the request cheap enough to run for every page.
+        from PIL import Image as _PILImage
+        _w, _h = _img.size
+        _attempts = (
+            (0.18, "low", 120),
+            (0.24, "high", 160),
+        )
+        _last = None
+        for _crop_frac, _detail, _tok in _attempts:
+            try:
+                _header_img = _img.crop((0, 0, _w, max(int(_h * _crop_frac), 1)))
+                if _header_img.width > 1100:
+                    _new_w = 1100
+                    _new_h = max(1, int(_header_img.height * (_new_w / _header_img.width)))
+                    _header_img = _header_img.resize((_new_w, _new_h), _PILImage.LANCZOS)
+                _buf = _io.BytesIO()
+                _header_img.save(_buf, format="PNG")
+                _b64 = base64.b64encode(_buf.getvalue()).decode()
+                _pp = (
+                    f"Page {_i} header only. Extract the student name, roll number, and page label from the top boxes.\n"
+                    "Return only JSON with keys is_blank, student_name, roll_no, sheet_page_no.\n"
+                    "Do not guess. Use empty strings / null if unreadable.\n"
+                    '{"is_blank":false,"student_name":"","roll_no":"","sheet_page_no":null}'
+                )
+                _openai_limiter.wait()
+                _resp = client.chat.completions.create(
+                    model=OCR_VISION_MODEL,
+                    temperature=0.0,
+                    max_tokens=_tok,
+                    response_format={"type": "json_object"},
+                    messages=[{"role": "user", "content": [
+                        {"type": "text", "text": _pp},
+                        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{_b64}", "detail": _detail}},
+                    ]}]
+                )
+                _role = _clean_json(_resp.choices[0].message.content)
+                if isinstance(_role, dict) and (
+                    (_role.get("student_name") or "") or (_role.get("roll_no") or "") or _role.get("sheet_page_no") is not None
+                ):
+                    return _role
+            except Exception as _pe:
+                _last = _pe
+                _time.sleep(0.25)
+        print(f"[MULTI-SPLIT] Page {_i} analysis error: {_last}")
+        return {}
+
+    def _best_student_identity(_names: list, _rolls: list, fallback_idx: int) -> tuple[str, str]:
+        def _clean_name(val: str) -> str:
+            return re.sub(r'\s+', ' ', str(val or '').replace('+', ' ').strip())
+
+        def _is_generic_name(val: str) -> bool:
+            s = _clean_name(val).lower()
+            if not s:
+                return True
+            if s.startswith("student") or s.startswith("students"):
+                return True
+            s2 = re.sub(r'[^a-z0-9]+', '', s)
+            return s2 in {"student", "students", "name"}
+
+        def _score_name(val: str) -> tuple[int, int, int]:
+            s = _clean_name(val)
+            digits = 1 if re.search(r'\d', s) else 0
+            generic_penalty = 0 if not _is_generic_name(s) else -10
+            return (generic_penalty, digits, len(s))
+
+        clean_names = [_clean_name(n) for n in _names if _clean_name(n)]
+        clean_rolls = [str(r).strip() for r in _rolls if str(r).strip()]
+
+        best_roll = Counter(clean_rolls).most_common(1)[0][0] if clean_rolls else ""
+        best_name = ""
+        if clean_names:
+            best_name = sorted(clean_names, key=_score_name, reverse=True)[0]
+
+        if not best_name or _is_generic_name(best_name):
+            if best_roll:
+                best_name = f"Student {best_roll}"
+            else:
+                best_name = f"Student {fallback_idx}"
+        else:
+            lower_name = best_name.lower()
+            if (lower_name.startswith("student") or lower_name.startswith("students")) and best_roll:
+                best_name = f"Student {best_roll}"
+
+        return best_name, (best_roll or str(fallback_idx))
+
+    # ── Fixed-chunk fast path: deterministic chunking + sparse OCR ─────────────
+    # Applies to ANY class PDF whose page count is an exact multiple of
+    # MULTI_SPLIT_FIXED_PAGES (default 4). Works for small real PDFs (e.g. 24pp /
+    # 6 students) AND large synthetic ones (160pp / 40 students).
+    # Only one header OCR call per chunk → avoids per-page TPM spikes.
+    #
+    # VALIDATION: Before committing to the fixed chunk size, we probe the SECOND
+    # chunk's first page. If its student_name/roll_no differs from the first
+    # chunk, the chunk size is correct.  If they match (i.e. pages 0 and
+    # MULTI_SPLIT_FIXED_PAGES belong to the SAME student), the chunk size is
+    # too small — we fall through to per-page OCR which auto-detects boundaries.
+    _min_fast_path_pages = MULTI_SPLIT_FIXED_PAGES * 2   # at least 2 students
+    if (n_pages >= _min_fast_path_pages and MULTI_SPLIT_FIXED_PAGES >= 2
+            and n_pages % MULTI_SPLIT_FIXED_PAGES == 0):
+        _pps = MULTI_SPLIT_FIXED_PAGES
+        # Probe page 0 and page _pps to verify they belong to DIFFERENT students.
+        # Also probe page _pps-1 (last page of first chunk) to verify it belongs
+        # to the SAME student as page 0.  If it doesn't, the chunk is too large
+        # (mixing multiple students in one chunk).
+        _meta0 = _analyze_header_page(0, images[0])
+        _meta_last = _analyze_header_page(_pps - 1, images[_pps - 1]) if _pps > 1 else _meta0
+        _meta_next = _analyze_header_page(_pps, images[_pps])
+        _name0 = (_meta0.get("student_name") or "").replace("+", " ").strip().lower()
+        _roll0 = (_meta0.get("roll_no") or "").strip()
+        _name_last = (_meta_last.get("student_name") or "").replace("+", " ").strip().lower()
+        _roll_last = (_meta_last.get("roll_no") or "").strip()
+        _name_next = (_meta_next.get("student_name") or "").replace("+", " ").strip().lower()
+        _roll_next = (_meta_next.get("roll_no") or "").strip()
+
+        # FAIL-SAFE: if any probe returned no usable data (e.g. 429 / timeout),
+        # we cannot validate the chunk size → fall through to per-page OCR.
+        _has_probe_data = bool(_name0 or _roll0) and bool(_name_next or _roll_next)
+        if _pps > 1:
+            _has_probe_data = _has_probe_data and bool(_name_last or _roll_last)
+        if not _has_probe_data:
+            print(
+                f"[MULTI-SPLIT] Fixed-chunk validation SKIPPED: insufficient probe data "
+                f"(p0: name='{_name0}' roll='{_roll0}', p{_pps-1}: name='{_name_last}' roll='{_roll_last}', "
+                f"p{_pps}: name='{_name_next}' roll='{_roll_next}'). "
+                f"Falling through to per-page OCR."
+            )
+            _chunk_valid = False
+        else:
+            # Check 1: page 0 and page _pps must be DIFFERENT students
+            _next_is_different = True
+            if _roll0 and _roll_next and _roll0 == _roll_next:
+                _next_is_different = False
+            elif _name0 and _name_next and re.sub(r'\s+', '', _name0) == re.sub(r'\s+', '', _name_next):
+                _next_is_different = False
+
+            # Check 2: page 0 and page _pps-1 must be the SAME student
+            _last_is_same = True
+            if _pps > 1:
+                if _roll0 and _roll_last and _roll0 != _roll_last:
+                    _last_is_same = False
+                elif _name0 and _name_last and re.sub(r'\s+', '', _name0) != re.sub(r'\s+', '', _name_last):
+                    _last_is_same = False
+
+            _chunk_valid = _next_is_different and _last_is_same
+            if not _chunk_valid:
+                _reason = []
+                if not _next_is_different:
+                    _reason.append(f"pages 0 and {_pps} belong to same student (chunk too small)")
+                if not _last_is_same:
+                    _reason.append(f"pages 0 and {_pps-1} belong to different students (chunk too large)")
+                print(
+                    f"[MULTI-SPLIT] Fixed-chunk validation FAILED: {'; '.join(_reason)}. "
+                    f"(p0: name='{_name0}' roll='{_roll0}', p{_pps-1}: name='{_name_last}' roll='{_roll_last}', "
+                    f"p{_pps}: name='{_name_next}' roll='{_roll_next}'). "
+                    f"Falling through to per-page OCR."
+                )
+            else:
+                _groups = []
+                _name0, _roll0b = _best_student_identity([_meta0.get("student_name") or ""], [_roll0], 1)
+                _groups.append({
+                    "student_name": _name0,
+                    "roll_no": _roll0b,
+                    "page_indices": list(range(0, _pps)),
+                })
+                _name1, _roll1b = _best_student_identity([_meta_next.get("student_name") or ""], [_roll_next], 2)
+                _groups.append({
+                    "student_name": _name1,
+                    "roll_no": _roll1b,
+                    "page_indices": list(range(_pps, min(_pps * 2, n_pages))),
+                })
+                for _st in range(_pps * 2, n_pages, _pps):
+                    _en = min(_st + _pps, n_pages)
+                    _grp = list(range(_st, _en))
+                    _meta = _analyze_header_page(_st, images[_st])
+                    _name = (_meta.get("student_name") or "").replace("+", " ").strip()
+                    _roll = (_meta.get("roll_no") or "").strip()
+                    _idx = len(_groups) + 1
+                    _best_name, _best_roll = _best_student_identity([_name], [_roll], _idx)
+                    _groups.append({
+                        "student_name": _best_name,
+                        "roll_no": _best_roll,
+                        "page_indices": _grp,
+                    })
+                print(
+                    f"[MULTI-SPLIT] Large-PDF fixed-chunk fast path: "
+                    f"pages_per_student={_pps}, groups={len(_groups)}"
+                )
+                return _groups
+
     # ── Per-page OCR: extract student identity from each page ────────────────
     # Strategy: ask GPT for student_name + roll_no + sheet_page_no on each page,
     # then GROUP pages by roll_no. This is far more robust than boundary detection
     # because the answer sheet template repeats the name/roll header on every page.
     from PIL import ImageStat as _PILStat
     page_roles = []
-    for _i, _img in enumerate(images[:20]):
+    for _i, _img in enumerate(images):
         # ── Pixel-based blank detection (cheap, no API call) ─────────────────
         try:
             _pix_std = _PILStat.Stat(_img.convert('L')).stddev[0]
@@ -6387,40 +8462,7 @@ def _split_multi_student_pdf(pdf_path: str, exam_questions: list = None) -> list
                 "roll_no": "", "sheet_page_no": None})
             print(f"[MULTI-SPLIT] Page {_i}: BLANK (pixel_std={_pix_std:.1f}) — skipped")
             continue
-        _buf = _io.BytesIO()
-        _img.save(_buf, format="PNG")
-        _b64 = base64.b64encode(_buf.getvalue()).decode()
-        _pp = (
-            f"This is page {_i} of a scanned multi-student answer sheet PDF.\n"
-            "Look ONLY at the header area at the very top of the page.\n\n"
-            "Return ONLY this JSON object (no extra text):\n"
-            '{"is_blank":false,"student_name":"","roll_no":"","sheet_page_no":null}\n\n'
-            "Definitions:\n"
-            "  is_blank — true only if the entire page is blank (no writing whatsoever)\n"
-            "  student_name — the HANDWRITTEN text inside the STUDENT NAME box at the top. "
-            "Write it exactly; use space (not '+') between parts. Empty string if unreadable.\n"
-            "  roll_no — the HANDWRITTEN number inside the ROLL NUMBER box at the top. "
-            "Return as a string (e.g. '1', '2'). Empty string if unreadable.\n"
-            "  sheet_page_no — the PRINTED page label in the top-right corner (e.g. 'Page 1' → 1, "
-            "'Page 2' → 2). Return as integer. null if not visible.\n"
-            "  NOTE: Do NOT infer — only report what is clearly visible in the header."
-        )
-        try:
-            _resp = client.chat.completions.create(
-                model="gpt-4o-mini",
-                temperature=0.0,
-                max_tokens=100,
-                messages=[{"role": "user", "content": [
-                    {"type": "text", "text": _pp},
-                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{_b64}", "detail": "high"}},
-                ]}]
-            )
-            _role = _clean_json(_resp.choices[0].message.content)
-            if not isinstance(_role, dict):
-                _role = {}
-        except Exception as _pe:
-            print(f"[MULTI-SPLIT] Page {_i} analysis error: {_pe}")
-            _role = {}
+        _role = _analyze_header_page(_i, _img)
         _role["page"] = _i
         page_roles.append(_role)
         print(f"[MULTI-SPLIT] Page {_i}: {_role}")
@@ -6442,70 +8484,203 @@ def _split_multi_student_pdf(pdf_path: str, exam_questions: list = None) -> list
     _non_blank_page_set = {_r["page"] for _r in _non_blank}
     _all_non_blank_sorted = sorted(_non_blank_page_set)
 
+    def _finalize_groups(_entries: list, _tag: str) -> list:
+        """Ensure grouped sections cover all non-blank pages; recover deterministically if needed."""
+        if not isinstance(_entries, list):
+            _entries = []
+
+        # Normalize page indices and drop empty groups.
+        _norm = []
+        for _idx, _e in enumerate(_entries, 1):
+            _pis = _e.get("page_indices") if isinstance(_e, dict) else []
+            _pis = [p for p in (_pis or []) if isinstance(p, int) and p in _non_blank_page_set]
+            _pis = sorted(set(_pis))
+            if not _pis:
+                continue
+            _name = str((_e or {}).get("student_name", "")).replace("+", " ").strip()
+            _roll = str((_e or {}).get("roll_no", "")).strip()
+            _best_name, _best_roll = _best_student_identity([_name], [_roll], _idx)
+            _norm.append({"student_name": _best_name, "roll_no": _best_roll, "page_indices": _pis})
+
+        # Coverage check.
+        _covered = set()
+        for _e in _norm:
+            _covered.update(_e.get("page_indices", []))
+
+        # If grouping is weak, recover by inferred fixed chunk size from sheet_page_no.
+        _sp = [
+            int(_r.get("sheet_page_no"))
+            for _r in _non_blank
+            if isinstance(_r.get("sheet_page_no"), int) and int(_r.get("sheet_page_no")) > 0
+        ]
+        _pps = max(_sp) if _sp else 0
+        _expected = (len(_all_non_blank_sorted) // _pps) if (_pps and len(_all_non_blank_sorted) % _pps == 0) else 0
+        if _expected >= 2 and len(_norm) < _expected:
+            _chunked = []
+            for _i in range(0, len(_all_non_blank_sorted), _pps):
+                _grp = _all_non_blank_sorted[_i:_i + _pps]
+                if len(_grp) != _pps:
+                    continue
+                _roles = [(_page_role_map.get(p) or {}) for p in _grp]
+                _names = [str(r.get("student_name", "")).replace("+", " ").strip() for r in _roles if str(r.get("student_name", "")).strip()]
+                _rolls = [str(r.get("roll_no", "")).strip() for r in _roles if str(r.get("roll_no", "")).strip()]
+                _name, _roll = _best_student_identity(_names, _rolls, len(_chunked) + 1)
+                _chunked.append({"student_name": _name, "roll_no": _roll, "page_indices": _grp})
+            if len(_chunked) >= _expected:
+                print(
+                    f"[MULTI-SPLIT] {_tag} under-covered groups ({len(_norm)}/{_expected}) — "
+                    f"using inferred chunk recovery (pages_per_student={_pps})."
+                )
+                _norm = _chunked
+                _covered = set(p for e in _norm for p in e.get("page_indices", []))
+
+        # Attach any remaining uncovered non-blank pages so no student pages are dropped.
+        _missing = sorted(_non_blank_page_set - _covered)
+        if _missing:
+            print(f"[MULTI-SPLIT] {_tag} missing pages recovered: {_missing}")
+            for _p in _missing:
+                _r = _page_role_map.get(_p, {})
+                _name, _roll = _best_student_identity(
+                    [str(_r.get("student_name", "")).replace("+", " ").strip()],
+                    [str(_r.get("roll_no", "")).strip()],
+                    len(_norm) + 1,
+                )
+                _norm.append({"student_name": _name, "roll_no": _roll, "page_indices": [_p]})
+
+        return _norm
+
     # ── Strategy 1: sheet_page_no restart detection ───────────────────────────
     _restart_pages = [_r["page"] for _r in _non_blank if _r.get("sheet_page_no") == 1]
     print(f"[MULTI-SPLIT] Detected restart pages (sheet_page_no=1): {_restart_pages}")
 
     if len(_restart_pages) >= 2:
-        # Use restart-page indices as initial student-chunk boundaries
-        _raw_groups: list = []
-        for _i, _start in enumerate(_restart_pages):
-            _end = _restart_pages[_i + 1] if _i + 1 < len(_restart_pages) else n_pages
-            _grp = [p for p in _all_non_blank_sorted if _start <= p < _end]
-            if _grp:
-                _raw_groups.append(_grp)
+        # Build contiguous groups in physical page order. Restart pages are used
+        # as hints, but grouping is driven by contiguous identity so one missed
+        # page label cannot collapse two different students into a single group.
+        result = []
+        _current_pages: list = []
+        _current_key = ""
+        for _r in _non_blank:
+            _name = (_r.get("student_name") or "").replace("+", " ").strip()
+            _roll = (_r.get("roll_no") or "").strip()
+            _key = _roll or re.sub(r'\s+', '', _name.lower())
+            _starts_new = False
+            if _current_pages:
+                _prev_role = _page_role_map[_current_pages[-1]]
+                _prev_key = (_prev_role.get("roll_no") or "").strip() or re.sub(r'\s+', '', ((_prev_role.get("student_name") or "").replace("+", " ").strip().lower()))
+                _sheet_no = _r.get("sheet_page_no")
+                if _sheet_no == 1:
+                    _starts_new = True
+                elif _key and _prev_key and _key != _prev_key:
+                    _starts_new = True
+            if _starts_new and _current_pages:
+                _names = [(_page_role_map[p].get("student_name") or "").replace("+", " ").strip()
+                          for p in _current_pages
+                          if (_page_role_map[p].get("student_name") or "").strip()]
+                _rolls = [(_page_role_map[p].get("roll_no") or "").strip()
+                          for p in _current_pages
+                          if (_page_role_map[p].get("roll_no") or "").strip()]
+                _spnos = [int(_page_role_map[p].get("sheet_page_no") or 0) if str(_page_role_map[p].get("sheet_page_no") or "").strip().isdigit() else 0 for p in _current_pages]
+                _use_spno = (
+                    len(set(_spnos)) == len(_spnos)
+                    and all(_spnos)
+                    and sorted(_spnos) == list(range(1, len(_spnos) + 1))
+                )
+                _srt = sorted(_current_pages) if not _use_spno else sorted(_current_pages, key=lambda p: int(_page_role_map[p].get("sheet_page_no") or 0))
+                _best_name, _best_roll = _best_student_identity(_names, _rolls, len(result) + 1)
+                result.append({
+                    "student_name": _best_name,
+                    "roll_no": _best_roll,
+                    "page_indices": _srt,
+                })
+                _current_pages = []
+                _current_key = ""
+            _current_pages.append(_r["page"])
+            if _key:
+                _current_key = _key
 
-        # Merge micro-groups with the same dominant (name, roll) pair.
-        # This handles false-positive restart pages whose sheet_page_no was
-        # misread as "1": the group's dominant name+roll still matches the
-        # real student, so it gets safely merged back.
-        def _dom_nr(_grp):
-            _names = [re.sub(r'\s+', '', (_page_role_map[p].get("student_name") or "").replace("+", " ").lower().strip())
-                      for p in _grp]
-            _rolls = [(_page_role_map[p].get("roll_no") or "").strip() for p in _grp]
-            _dn = Counter(_names).most_common(1)[0][0] if any(_names) else ""
-            _dr = Counter(_rolls).most_common(1)[0][0] if any(_r for _r in _rolls if _r) else ""
-            return (_dn, _dr)
+        if _current_pages:
+            _names = [
+                (_page_role_map[p].get("student_name") or "").replace("+", " ").strip()
+                for p in _current_pages
+                if (_page_role_map[p].get("student_name") or "").strip()
+            ]
+            _rolls = [
+                (_page_role_map[p].get("roll_no") or "").strip()
+                for p in _current_pages
+                if (_page_role_map[p].get("roll_no") or "").strip()
+            ]
+            _spnos = [
+                int(_page_role_map[p].get("sheet_page_no") or 0)
+                if str(_page_role_map[p].get("sheet_page_no") or "").strip().isdigit()
+                else 0
+                for p in _current_pages
+            ]
+            _use_spno = (
+                len(set(_spnos)) == len(_spnos)
+                and all(_spnos)
+                and sorted(_spnos) == list(range(1, len(_spnos) + 1))
+            )
+            _srt = (
+                sorted(_current_pages)
+                if not _use_spno
+                else sorted(_current_pages, key=lambda p: int(_page_role_map[p].get("sheet_page_no") or 0))
+            )
+            _best_name, _best_roll = _best_student_identity(_names, _rolls, len(result) + 1)
+            result.append({
+                "student_name": _best_name,
+                "roll_no": _best_roll,
+                "page_indices": _srt,
+            })
 
-        from collections import defaultdict as _defaultdict
-        _merged: dict = {}
-        _merge_order: list = []
-        for _rg in _raw_groups:
-            _key_nr = _dom_nr(_rg)
-            if _key_nr not in _merged:
-                _merged[_key_nr] = []
-                _merge_order.append(_key_nr)
-            _merged[_key_nr].extend(_rg)
-
-        _groups_pages = [_merged[k] for k in _merge_order if _merged[k]]
-        print(f"[MULTI-SPLIT] After name+roll merge, {len(_groups_pages)} student group(s): "
-              f"{ {k: len(v) for k, v in zip(_merge_order, _groups_pages)} }")
-
-        if len(_groups_pages) >= 2:
-            result = []
-            for _seq, _grp in enumerate(_groups_pages, 1):
-                _all_names = [(_page_role_map[p].get("student_name") or "").replace("+", " ").strip()
-                              for p in _grp
-                              if (_page_role_map[p].get("student_name") or "").strip()]
-                _all_rolls = [(_page_role_map[p].get("roll_no") or "").strip()
-                              for p in _grp
-                              if (_page_role_map[p].get("roll_no") or "").strip()]
-                # Sort within group by sheet_page_no when all values are unique (reliable OCR).
-                # Fall back to physical PDF order when sheet_page_no has duplicates (OCR errors).
-                _spnos = [(_page_role_map[p].get("sheet_page_no") or 0) for p in _grp]
-                if len(set(_spnos)) == len(_spnos) and all(_spnos):
-                    _srt = sorted(_grp, key=lambda p: _page_role_map[p].get("sheet_page_no"))
-                else:
-                    _srt = sorted(_grp)  # physical PDF order
-                _name = Counter(_all_names).most_common(1)[0][0] if _all_names else f"Student {_seq}"
-                _roll = Counter(_all_rolls).most_common(1)[0][0] if _all_rolls else str(_seq)
-                result.append({"student_name": _name, "roll_no": _roll, "page_indices": _srt})
-            print(f"[MULTI-SPLIT] Grouped by sheet_page_no restart + name/roll merge: "
-                  f"{[(r['student_name'], r['roll_no'], r['page_indices']) for r in result]}")
-            return result
+        result = _finalize_groups(result, "sequential-grouping")
+        print(
+            f"[MULTI-SPLIT] Grouped sequentially by page order + identity: "
+            f"{[(r['student_name'], r['roll_no'], r['page_indices']) for r in result]}"
+        )
+        return result
 
     # ── Strategy 2: group by roll_no (fallback) ───────────────────────────────
     print("[MULTI-SPLIT] sheet_page_no restart detection insufficient — trying roll_no grouping")
+
+    # ── Large-PDF fallback: infer fixed pages-per-student and chunk sequentially ─
+    # For big class uploads (40-50 students), per-page vision can intermittently 429.
+    # If restart detection is weak but we still observed usable sheet_page_no values,
+    # infer pages-per-student and chunk by that size to avoid undercounting students.
+    if n_pages >= 80:
+        _sp = [
+            int(_r.get("sheet_page_no"))
+            for _r in _non_blank
+            if isinstance(_r.get("sheet_page_no"), int) and int(_r.get("sheet_page_no")) > 0
+        ]
+        _pages_per_student = max(_sp) if _sp else 0
+        if 2 <= _pages_per_student <= 12:
+            _start_at = _restart_pages[0] if _restart_pages else (_all_non_blank_sorted[0] if _all_non_blank_sorted else 0)
+            _chunked = []
+            for _st in range(_start_at, n_pages, _pages_per_student):
+                _en = min(_st + _pages_per_student, n_pages)
+                _grp = [p for p in _all_non_blank_sorted if _st <= p < _en]
+                if _grp:
+                    _chunked.append(_grp)
+
+            if len(_chunked) >= 2:
+                _entries = []
+                for _grp in _chunked:
+                    _roles = [(_page_role_map.get(p) or {}) for p in _grp]
+                    _names = [str(r.get("student_name", "")).strip() for r in _roles if str(r.get("student_name", "")).strip()]
+                    _rolls = [str(r.get("roll_no", "")).strip() for r in _roles if str(r.get("roll_no", "")).strip()]
+                    _name = Counter(_names).most_common(1)[0][0] if _names else ""
+                    _roll = Counter(_rolls).most_common(1)[0][0] if _rolls else ""
+                    _entries.append({
+                        "student_name": _name or f"Student {len(_entries)+1}",
+                        "roll_no": _roll,
+                        "page_indices": _grp,
+                    })
+                print(
+                    f"[MULTI-SPLIT] Large-PDF inferred chunk fallback: pages_per_student={_pages_per_student}, "
+                    f"groups={len(_entries)}"
+                )
+                return _entries
     groups = OrderedDict()
     for _r in _non_blank:
         _roll = (_r.get("roll_no") or "").strip()
@@ -6530,9 +8705,9 @@ def _split_multi_student_pdf(pdf_path: str, exam_questions: list = None) -> list
                 _sorted_pages = sorted(_raw_pages, key=lambda p: _page_role_map[p].get("sheet_page_no"))
             else:
                 _sorted_pages = sorted(_raw_pages)
-            _name = Counter(_g["all_names"]).most_common(1)[0][0] if _g["all_names"] else f"Student {_seq}"
-            _roll = _g["roll_no"] or str(_seq)
+            _name, _roll = _best_student_identity(_g["all_names"], [_g["roll_no"]], _seq)
             result.append({"student_name": _name, "roll_no": _roll, "page_indices": _sorted_pages})
+        result = _finalize_groups(result, "roll-grouping")
         print(f"[MULTI-SPLIT] Grouped result: {[(r['student_name'], r['roll_no'], r['page_indices']) for r in result]}")
         return result
 
@@ -6578,11 +8753,11 @@ def _split_multi_student_pdf(pdf_path: str, exam_questions: list = None) -> list
             # Reject single-student result only if n_pages > 2
             # (if GPT-4o still says 1 student for many pages, trust it less)
             if len(_parsed) > 1 or n_pages <= 2:
-                return _parsed
+                return _finalize_groups(_parsed, "all-at-once")
         if isinstance(_parsed, dict):
             for _k in ("students", "data", "results"):
                 if isinstance(_parsed.get(_k), list) and _parsed[_k]:
-                    return _parsed[_k]
+                    return _finalize_groups(_parsed[_k], "all-at-once-dict")
     except Exception as _fe:
         print(f"[MULTI-SPLIT] All-at-once fallback error: {_fe}")
 
@@ -6798,7 +8973,18 @@ def evaluation_status(task_id):
     """
     Poll async evaluation task status.
     States: pending → processing → completed | failed
+    Checks native background-task registry first, then Celery.
     """
+    # ── Check native bg-task registry first ──────────────────────────────────
+    _native = _bg_task_get(task_id)
+    if _native is not None:
+        if _native["status"] == "completed":
+            return jsonify({"status": "completed", "task_id": task_id, **_native["result"]})
+        if _native["status"] == "failed":
+            return jsonify({"status": "failed", "task_id": task_id, "error": _native["error"]}), 500
+        return jsonify({"status": "pending", "task_id": task_id,
+                        "step": "processing multi-student evaluation"})
+
     if not CELERY_OK or not celery_app:
         return jsonify({"error": "Async evaluation not available (Redis not connected)"}), 503
 
@@ -6822,6 +9008,11 @@ def evaluation_status(task_id):
                         "error": str(task.info)}), 500
     return jsonify({"status": task.state, "task_id": task_id})
 
+@app.route("/api/evaluate/multi-student", methods=["OPTIONS"])
+def evaluate_multi_student_options():
+    """Handle preflight OPTIONS request for CORS"""
+    return "", 204
+
 @app.post("/api/evaluate/multi-student")
 @auth()
 @quota('evaluate')
@@ -6843,12 +9034,30 @@ def evaluate_multi_student():
     if not f or not _allowed(f.filename):
         return jsonify({"error": "Only PDF files supported for multi-student mode"}), 400
 
+    # Hard limit: Cloud Run enforces a 32 MiB (33.5 MB) request body limit at the
+    # load-balancer level — requests larger than that never reach this code and the
+    # browser sees "Failed to Fetch".  We reject at 30 MB so the user gets a clear
+    # error message instead of a silent network failure.
+    _MAX_MULTI_BYTES = 30 * 1024 * 1024  # 30 MB  (well below Cloud Run's 32 MiB cap)
+    f.seek(0, 2)  # seek to end
+    _fsize = f.tell()
+    f.seek(0)     # reset
+    if _fsize > _MAX_MULTI_BYTES:
+        _fsize_mb = round(_fsize / 1024 / 1024, 1)
+        return jsonify({
+            "error": (
+                f"File too large ({_fsize_mb} MB). Maximum is 30 MB. "
+                "Please compress the PDF (reduce scan resolution to 150–200 DPI) "
+                "or split large classes into batches of 20–25 students."
+            )
+        }), 413
+
     fn   = secure_filename(f.filename)
     path = UPL_DIR / f"{datetime.utcnow().strftime('%Y%m%dT%H%M%S')}_{fn}"
     f.save(str(path))
     log.info(f"[MULTI-EVAL] Saved: {fn}")
 
-    # ── Async path ────────────────────────────────────────────────────────────
+    # ── Async path: Celery (preferred) ───────────────────────────────────────
     if CELERY_OK:
         try:
             from celery_worker import evaluate_multi_student as _ms_task
@@ -6861,15 +9070,164 @@ def evaluate_multi_student():
                 "message": "Multi-student evaluation queued. Poll /api/evaluate/status/<task_id>.",
             }), 202
         except Exception as _ce:
-            log.warning(f"[MULTI-EVAL] Celery dispatch failed, falling back to sync: {_ce}")
+            log.warning(f"[MULTI-EVAL] Celery dispatch failed, falling back: {_ce}")
 
-    # ── Sync path with parallel student evaluation ────────────────────────────
+    # ── Async path: native background thread (no Celery) ─────────────────────
+    # Important: in-process background threads are unreliable on Cloud Run when
+    # no worker backend exists, because the instance/request lifecycle can stop
+    # progress after returning 202. On Cloud Run without Celery, run sync path.
+    _np = 0
+    try:
+        import fitz as _fitz_peek
+        _doc_peek = _fitz_peek.open(str(path))
+        _np = len(_doc_peek)
+        _doc_peek.close()
+    except Exception:
+        pass
+
+    _is_cloud_run = bool(os.getenv("K_SERVICE", "").strip())
+    _use_native_async = not _is_cloud_run
+    if _use_native_async:
+        _bg_tid = _bg_task_create()
+        log.info(f"[MULTI-EVAL] Native async task {_bg_tid} ({_np}pp)")
+
+        def _bg_run_multi_student(_tid, _pdf_path, _exam, _exam_id, _fname):
+            try:
+                _secs = _split_multi_student_pdf(_pdf_path, exam_questions=_exam.get("questions", []))
+                _all_evals: list = []
+                _failed: list = []
+                _bs = _resolve_multi_eval_batch_size(len(_secs))
+                _ibd = max(0.0, MULTI_EVAL_INTER_BATCH_DELAY)
+                _ea = max(1, MULTI_EVAL_EXTRACT_ATTEMPTS)
+                _va = max(1, MULTI_EVAL_EVAL_ATTEMPTS)
+
+                def _batched(items, size):
+                    for _s in range(0, len(items), size):
+                        yield items[_s:_s + size]
+
+                def _eval_one(_idx, _section):
+                    _sname = _section.get("student_name") or f"Student {_idx + 1}"
+                    _roll  = _section.get("roll_no") or str(_idx + 1)
+                    _raw   = _section.get("raw_text", "")
+                    _ans   = {}; _mode = "multi_student_parallel"; _exerr = ""
+                    if _section.get("page_indices"):
+                        import fitz as _fz2
+                        _tmp = Path(_pdf_path).parent / f"ms_{_idx}_{uuid.uuid4().hex[:6]}.pdf"
+                        try:
+                            _s = _fz2.open(_pdf_path); _d = _fz2.open()
+                            for _pi in _section["page_indices"]:
+                                if _pi < len(_s): _d.insert_pdf(_s, from_page=_pi, to_page=_pi)
+                            _d.save(str(_tmp)); _d.close(); _s.close()
+                            _ans, _mode, _exerr = _extract_answers_with_retry(
+                                str(_tmp), exam_questions=_exam.get("questions", []), exam=_exam, attempts=_ea)
+                        except Exception as _ex:
+                            _exerr = str(_ex)
+                        finally:
+                            try: _tmp.unlink()
+                            except Exception: pass
+                    if not _ans and _raw:
+                        _ans = _parse_raw_answers(_raw); _mode = "multi_student_text"
+                    if not _ans:
+                        return {"status": "failed", "student_name": _sname, "roll_no": _roll,
+                                "reason": _exerr or f"no_answers ({_mode})", "extraction_mode": _mode}
+                    _res, _eerr = _evaluate_answers_with_retry(_exam, _ans, _roll, attempts=_va)
+                    if not _res:
+                        return {"status": "failed", "student_name": _sname, "roll_no": _roll,
+                                "reason": _eerr or "evaluation_failed", "extraction_mode": _mode}
+                    _eid = uuid.uuid4().hex[:10]
+                    _payload = {
+                        "evaluation_id": _eid, "exam_id": _exam_id, "created_at": _now(),
+                        "student_name": _sname, "roll_no": _roll, "parent_email": "",
+                        "file_name": _fname, "file_path": str(_pdf_path),
+                        "page_indices": _section.get("page_indices", []),
+                        "extraction_mode": _mode, "ocr_version": OCR_PIPELINE_VERSION,
+                        "submitted_answers": _ans, "result": _res, "status": "evaluated",
+                    }
+                    evaluations_registry[_eid] = _payload
+                    if not IS_VERCEL:
+                        _save_json(EVAL_DIR / f"{_eid}.json", _payload)
+                    return _payload
+
+                _wc_fn = _multi_student_worker_count
+                for _bi, _batch in enumerate(list(_batched(list(enumerate(_secs)), _bs)), 1):
+                    _wc = min(max(1, _wc_fn(len(_batch))), len(_batch) or 1)
+                    log.info(f"[MULTI-EVAL-BG] Task {_tid} batch {_bi}: students={len(_batch)} workers={_wc}")
+                    with ThreadPoolExecutor(max_workers=_wc) as _pool:
+                        _fts = [_pool.submit(_eval_one, *_item) for _item in _batch]
+                        for _ft in as_completed(_fts):
+                            try:
+                                _p = _ft.result()
+                            except Exception as _ex:
+                                _failed.append({"status": "failed", "student_name": "Unknown",
+                                                "roll_no": "", "reason": f"worker_exception: {_ex}",
+                                                "extraction_mode": "unknown"})
+                                continue
+                            if not _p: continue
+                            if _p.get("status") == "failed":
+                                _failed.append(_p)
+                            else:
+                                _all_evals.append(_p)
+                    if _bi < (len(_secs) // _bs + 1) and _ibd > 0:
+                        _time.sleep(_ibd)
+
+                _save_evals()
+                _tc = len(_all_evals)
+                _avg = round(sum(ev["result"].get("percentage", 0) for ev in _all_evals) / max(_tc, 1), 1)
+                _bg_task_set_result(_tid, {
+                    "detected_student_count": len(_secs),
+                    "student_count": _tc, "class_average": _avg,
+                    "pass_count": sum(1 for ev in _all_evals if ev["result"].get("is_pass")),
+                    "fail_count": _tc - sum(1 for ev in _all_evals if ev["result"].get("is_pass")),
+                    "failed_student_count": len(_failed),
+                    "failed_students": _failed,
+                    "evaluations": _all_evals,
+                    "exam_id": _exam_id,
+                })
+            except Exception as _be:
+                log.error(f"[MULTI-EVAL-BG] Task {_tid} failed: {_be}")
+                _bg_task_set_error(_tid, str(_be))
+
+        _t = threading.Thread(
+            target=_bg_run_multi_student,
+            args=(_bg_tid, str(path), e, exam_id, fn),
+            daemon=True,
+        )
+        _t.start()
+        return jsonify({
+            "async":   True,
+            "task_id": _bg_tid,
+            "status":  "processing",
+            "message": "Multi-student evaluation started. Poll /api/evaluate/status/<task_id>.",
+        }), 202
+    else:
+        log.warning("[MULTI-EVAL] Cloud Run + no Celery: using sync evaluation path")
+
+    # ── Sync path (small class PDFs, ≤ 2 batches) ────────────────────────────
     log.info(f"[MULTI-EVAL] Sync mode: splitting PDF {fn}")
     student_sections = _split_multi_student_pdf(str(path), exam_questions=e.get("questions", []))
     log.info(f"[MULTI-EVAL] Detected {len(student_sections)} students")
 
     all_evaluations = []
+    failed_students = []
 
+    # Adaptive wave scheduler: process class PDFs in batches to reduce OCR TPM spikes.
+    batch_size = _resolve_multi_eval_batch_size(len(student_sections))
+    inter_batch_delay = max(0.0, MULTI_EVAL_INTER_BATCH_DELAY)
+    extract_attempts = max(1, MULTI_EVAL_EXTRACT_ATTEMPTS)
+    eval_attempts = max(1, MULTI_EVAL_EVAL_ATTEMPTS)
+
+    def _batched_pairs(items: list, size: int):
+        for _start in range(0, len(items), size):
+            yield items[_start:_start + size]
+
+    _indexed_sections = list(enumerate(student_sections))
+    _batches = list(_batched_pairs(_indexed_sections, batch_size))
+    log.info(
+        f"[MULTI-EVAL] Scheduling {len(student_sections)} students in {len(_batches)} batch(es): "
+        f"batch_size={batch_size}, inter_batch_delay={inter_batch_delay}s"
+    )
+
+    # Bind attempts selected from runtime config into worker closure.
     def _eval_section(args):
         idx, section = args
         sname    = section.get("student_name") or f"Student {idx + 1}"
@@ -6877,9 +9235,8 @@ def evaluate_multi_student():
         raw_text = section.get("raw_text", "")
         answers  = {}
         mode     = "multi_student_parallel"
+        extract_error = ""
 
-        # Path 1: page_indices available (scanned/handwritten PDFs)
-        # Create temp PDF with student's pages → run through full OCR pipeline
         if section.get("page_indices"):
             import fitz as _fitz_ms
             tmp_pdf = UPL_DIR / f"ms_{idx}_{uuid.uuid4().hex[:6]}.pdf"
@@ -6892,51 +9249,125 @@ def evaluate_multi_student():
                 dst.save(str(tmp_pdf))
                 dst.close()
                 src.close()
-                answers, mode = _extract_answers(str(tmp_pdf), exam_questions=e.get("questions",[]), exam=e)
+                answers, mode, extract_error = _extract_answers_with_retry(
+                    str(tmp_pdf),
+                    exam_questions=e.get("questions", []),
+                    exam=e,
+                    attempts=extract_attempts,
+                )
             except Exception as ex:
                 log.warning(f"[MULTI-EVAL] Page extraction failed for {sname}: {ex}")
+                extract_error = str(ex)
             finally:
-                try: tmp_pdf.unlink()
-                except Exception: pass
+                try:
+                    tmp_pdf.unlink()
+                except Exception:
+                    pass
 
-        # Path 2: raw_text available (typed/printed PDFs)
         if not answers and raw_text:
             answers = _parse_raw_answers(raw_text)
             mode = "multi_student_text"
 
         if not answers:
-            log.warning(f"[MULTI-EVAL] No answers for {sname} — skipping")
-            return None
-        _openai_limiter.wait()
-        result  = _evaluate_answers(e, answers, roll)
+            reason = extract_error or f"no_answers ({mode})"
+            log.warning(f"[MULTI-EVAL] No answers for {sname} ({roll}) — {reason}")
+            return {
+                "status": "failed",
+                "student_name": sname,
+                "roll_no": roll,
+                "reason": reason,
+                "extraction_mode": mode,
+            }
+
+        result, eval_error = _evaluate_answers_with_retry(e, answers, roll, attempts=eval_attempts)
+        if not result:
+            reason = eval_error or "evaluation_failed"
+            log.warning(f"[MULTI-EVAL] Grading failed for {sname} ({roll}) — {reason}")
+            return {
+                "status": "failed",
+                "student_name": sname,
+                "roll_no": roll,
+                "reason": reason,
+                "extraction_mode": mode,
+            }
+
         eval_id = uuid.uuid4().hex[:10]
         payload = {
             "evaluation_id":     eval_id, "exam_id": exam_id, "created_at": _now(),
             "student_name":      sname,   "roll_no": roll,
             "parent_email":      section.get("parent_email", ""), "file_name": fn,
+            "file_path":         str(path),
+            "page_indices":      section.get("page_indices", []),
             "extraction_mode":   mode,
+            "ocr_version":       OCR_PIPELINE_VERSION,
             "submitted_answers": answers, "result": result,
+            "status": "evaluated",
         }
         evaluations_registry[eval_id] = payload
         if not IS_VERCEL:
             _save_json(EVAL_DIR / f"{eval_id}.json", payload)
         return payload
 
-    with ThreadPoolExecutor(max_workers=min(4, len(student_sections) or 1)) as pool:
-        futs = [pool.submit(_eval_section, (i, s)) for i, s in enumerate(student_sections)]
-        for fut in as_completed(futs):
-            p = fut.result()
-            if p:
-                all_evaluations.append(p)
+    for batch_idx, batch in enumerate(_batches, start=1):
+        desired_workers = _multi_student_worker_count(len(batch))
+        if MULTI_EVAL_MAX_WORKERS_OVERRIDE > 0:
+            desired_workers = min(desired_workers, MULTI_EVAL_MAX_WORKERS_OVERRIDE)
+        # Cloud Run memory is shared by Flask + OCR image buffers + model payloads.
+        # Allow 2 concurrent workers on Cloud Run (4 GB instance can handle it).
+        if os.getenv("K_SERVICE", "").strip():
+            desired_workers = min(desired_workers, 2)
+        worker_count = min(max(1, desired_workers), len(batch) or 1)
+        log.info(
+            f"[MULTI-EVAL] Batch {batch_idx}/{len(_batches)}: "
+            f"students={len(batch)}, workers={worker_count}"
+        )
+
+        with ThreadPoolExecutor(max_workers=worker_count) as pool:
+            futs = [pool.submit(_eval_section, pair) for pair in batch]
+            for fut in as_completed(futs):
+                try:
+                    p = fut.result()
+                except Exception as ex:
+                    failed_students.append({
+                        "status": "failed",
+                        "student_name": "Unknown",
+                        "roll_no": "",
+                        "reason": f"worker_exception: {ex}",
+                        "extraction_mode": "unknown",
+                    })
+                    continue
+                if not p:
+                    continue
+                if p.get("status") == "failed":
+                    failed_students.append(p)
+                else:
+                    all_evaluations.append(p)
+
+        if batch_idx < len(_batches) and inter_batch_delay > 0:
+            _time.sleep(inter_batch_delay)
 
     _save_evals()
     total_students = len(all_evaluations)
     avg_pct = round(sum(ev["result"].get("percentage",0) for ev in all_evaluations) / max(total_students,1), 1)
     pass_count = sum(1 for ev in all_evaluations if ev["result"].get("is_pass"))
-    log.info(f"[MULTI-EVAL] Sync complete: {total_students} students, avg={avg_pct}%")
+    log.info(
+        f"[MULTI-EVAL] Sync complete: detected={len(student_sections)} "
+        f"evaluated={total_students} failed={len(failed_students)} avg={avg_pct}%"
+    )
     return jsonify({
+        "detected_student_count": len(student_sections),
         "student_count": total_students, "class_average": avg_pct,
         "pass_count": pass_count, "fail_count": total_students - pass_count,
+        "failed_student_count": len(failed_students),
+        "failed_students": failed_students,
+        "runtime_tuning": {
+            "batch_size": batch_size,
+            "inter_batch_delay_seconds": inter_batch_delay,
+            "extract_attempts": extract_attempts,
+            "eval_attempts": eval_attempts,
+            "max_workers_override": MULTI_EVAL_MAX_WORKERS_OVERRIDE,
+            "batches": len(_batches),
+        },
         "evaluations": all_evaluations, "exam_id": exam_id,
     })
 
@@ -7302,6 +9733,32 @@ def audit_evaluation(eval_id):
         _save_json(EVAL_DIR / f"{eval_id}.json", ev)
     _save_evals()
     return jsonify({"evaluation_id": eval_id, "audit": ev["audit"]})
+
+@app.post("/api/evaluations/<eval_id>/refresh")
+@auth(roles=["tutor","teacher","institute_admin","admin"])
+def refresh_evaluation(eval_id):
+    """Force re-extraction and re-grading for a single evaluation."""
+    ev = (evaluations_registry.get(eval_id)
+          or _mongo_find_one("eval_items", {"evaluation_id": eval_id})
+          or _load_json(EVAL_DIR / f"{eval_id}.json", {}))
+    if not ev:
+        return jsonify({"error": "Evaluation not found"}), 404
+
+    exam = _load_exam(ev.get("exam_id", ""))
+    if not exam:
+        return jsonify({"error": "Exam not found"}), 404
+
+    force = bool((request.json or {}).get("force"))
+    if force:
+        ev["ocr_version"] = "force_refresh"
+
+    refreshed = _refresh_evaluation_for_report(ev, exam)
+    return jsonify({
+        "evaluation_id": eval_id,
+        "answers": len(refreshed.get("submitted_answers") or {}),
+        "extraction_mode": refreshed.get("extraction_mode", ""),
+        "ocr_version": refreshed.get("ocr_version", ""),
+    })
 
 def _generate_evaluation_report_pdf(ev: dict, exam: dict) -> bytes:
     """
@@ -7714,19 +10171,30 @@ def download_evaluation_report(eval_id):
     if not ev:
         ev = _mongo_find_one("eval_items", {"evaluation_id": eval_id})
     if not ev:
+        log.warning(f"[PDF-REPORT] Evaluation {eval_id} not found")
         return jsonify({"error": "Evaluation not found"}), 404
 
     exam = _load_exam(ev.get("exam_id","")) or {}
-    pdf  = _generate_evaluation_report_pdf(ev, exam)
-    if not pdf:
-        return jsonify({"error": "PDF generation failed"}), 500
+    if not exam:
+        log.warning(f"[PDF-REPORT] Exam {ev.get('exam_id','')} not found for evaluation {eval_id}")
+        return jsonify({"error": "Exam not found for this evaluation"}), 404
+    
+    try:
+        ev = _refresh_evaluation_for_report(ev, exam)
+        pdf  = _generate_evaluation_report_pdf(ev, exam)
+        if not pdf:
+            log.error(f"[PDF-REPORT] Generation returned None for evaluation {eval_id}")
+            return jsonify({"error": "PDF generation failed - no data returned"}), 500
 
-    sname    = re.sub(r"[^\w\s-]","", ev.get("student_name","Student"))[:20]
-    filename = f"Report_{sname}_{eval_id}.pdf"
-    from flask import Response
-    return Response(pdf, mimetype="application/pdf",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'}
-    )
+        sname    = re.sub(r"[^\w\s-]","", ev.get("student_name","Student"))[:20]
+        filename = f"Report_{sname}_{eval_id}.pdf"
+        from flask import Response
+        return Response(pdf, mimetype="application/pdf",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'}
+        )
+    except Exception as e:
+        log.error(f"[PDF-REPORT] Error generating PDF for evaluation {eval_id}: {e}", exc_info=True)
+        return jsonify({"error": f"PDF generation failed: {str(e)}"}), 500
 
 @app.get("/api/exams/<exam_id>/class-report")
 @auth(roles=["teacher","tutor","institute_admin","admin"])
@@ -7754,6 +10222,8 @@ def get_class_report(exam_id):
 
     if not evals:
         return jsonify({"error": "No evaluations found for this exam"}), 404
+
+    evals = [_refresh_evaluation_for_report(ev, exam) for ev in evals]
 
     total     = len(evals)
     pcts      = [ev.get("result",{}).get("percentage",0) for ev in evals]
@@ -8992,6 +11462,395 @@ def investors_add():
         existing.append(inv)
         _save_json(_INV_FILE, existing)
     return jsonify({"investor": inv}), 201
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  EVALUATION ENHANCEMENTS — Review Queue & Analytics Endpoints
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.get("/api/review-queue")
+@auth(roles=["tutor", "teacher", "institute_admin"])
+def get_review_queue():
+    """
+    Fetch pending items in the teacher review queue.
+    Items tagged for review: low OCR confidence, borderline marks, illegible handwriting, anomalies.
+    """
+    exam_id = request.args.get("exam_id", "")
+    limit = int(request.args.get("limit", "20"))
+    offset = int(request.args.get("offset", "0"))
+    
+    if not exam_id:
+        return jsonify({"error": "exam_id required"}), 400
+    
+    query = {"exam_id": exam_id, "status": "pending"}
+    
+    if MONGO_OK:
+        try:
+            collection = mongo_db[M_REVIEW_QUEUE]
+            total = collection.count_documents(query)
+            items = list(collection.find(query).sort("created_at", -1).skip(offset).limit(limit))
+            for item in items:
+                item.pop("_id", None)
+            
+            # Categorize items by review reason
+            categorized = {}
+            for item in items:
+                reason_type = item.get("review_reason_type", "other")
+                if reason_type not in categorized:
+                    categorized[reason_type] = []
+                categorized[reason_type].append(item)
+            
+            return jsonify({
+                "total": total,
+                "limit": limit,
+                "offset": offset,
+                "items": items,
+                "categorized": categorized,
+            }), 200
+        except Exception as ex:
+            log.error(f"[REVIEW-QUEUE] Failed to fetch: {ex}")
+            return jsonify({"error": str(ex)}), 500
+    else:
+        return jsonify({"error": "MongoDB not available"}), 503
+
+
+@app.post("/api/review-queue/<review_id>/approve")
+@auth(roles=["tutor", "teacher", "institute_admin"])
+def approve_review_item(review_id: str):
+    """Approve an evaluation from the review queue (teacher decision)."""
+    if not review_id:
+        return jsonify({"error": "review_id required"}), 400
+    
+    data = request.get_json() or {}
+    teacher_comments = data.get("comments", "").strip()
+    action = data.get("action", "approve")  # approve, reject, request_modification
+    
+    if MONGO_OK:
+        try:
+            collection = mongo_db[M_REVIEW_QUEUE]
+            result = collection.update_one(
+                {"review_id": review_id},
+                {"$set": {
+                    "status": action,
+                    "teacher_comments": teacher_comments,
+                    "updated_at": _now(),
+                    "reviewed_by": g.user.get("username", ""),
+                    "reviewed_at": _now(),
+                }}
+            )
+            if result.matched_count == 0:
+                return jsonify({"error": "Review item not found"}), 404
+            
+            log.info(f"[REVIEW-QUEUE] Reviewed {review_id}: {action} by {g.user.get('username')}")
+            return jsonify({"status": action, "message": f"Review item {action}"}), 200
+        except Exception as ex:
+            log.error(f"[REVIEW-QUEUE] Failed to approve {review_id}: {ex}")
+            return jsonify({"error": str(ex)}), 500
+    else:
+        return jsonify({"error": "MongoDB not available"}), 503
+
+
+@app.get("/api/evaluation/analytics/<exam_id>")
+@auth(roles=["tutor", "teacher", "institute_admin"])
+def get_evaluation_analytics(exam_id: str):
+    """
+    Get analytics dashboard for an exam:
+    - Papers processed today/week/month
+    - Average grading time
+    - Accuracy/review percentage
+    - Cost per paper
+    - Teacher correction rate
+    - Most common weak topics
+    """
+    if not exam_id:
+        return jsonify({"error": "exam_id required"}), 400
+    
+    period = request.args.get("period", "today")  # today, week, month
+    
+    if MONGO_OK:
+        try:
+            # Get analytics summary
+            analytics_col = mongo_db[M_ANALYTICS]
+            evals_col = mongo_db[M_EVALS]
+            review_col = mongo_db[M_REVIEW_QUEUE]
+            
+            # Date range based on period
+            now = datetime.utcnow()
+            if period == "today":
+                start_date = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            elif period == "week":
+                start_date = now - timedelta(days=7)
+            else:  # month
+                start_date = now - timedelta(days=30)
+            
+            # Papers processed
+            papers_processed = evals_col.count_documents({
+                "exam_id": exam_id,
+                "created_at": {"$gte": start_date.isoformat()}
+            })
+            
+            # Evaluation scores
+            scores = list(evals_col.aggregate([
+                {
+                    "$match": {
+                        "exam_id": exam_id,
+                        "created_at": {"$gte": start_date.isoformat()}
+                    }
+                },
+                {
+                    "$group": {
+                        "_id": None,
+                        "avg_percentage": {"$avg": "$result.percentage"},
+                        "pass_count": {"$sum": {"$cond": ["$result.is_pass", 1, 0]}},
+                        "fail_count": {"$sum": {"$cond": ["$result.is_pass", 0, 1]}},
+                    }
+                }
+            ]))
+            
+            score_stats = scores[0] if scores else {"avg_percentage": 0, "pass_count": 0, "fail_count": 0}
+            pass_rate = (score_stats["pass_count"] / max(papers_processed, 1)) * 100
+            
+            # Review queue stats
+            review_pending = review_col.count_documents({
+                "exam_id": exam_id,
+                "status": "pending"
+            })
+            review_total = review_col.count_documents({"exam_id": exam_id})
+            accuracy_percent = ((review_total - review_pending) / max(review_total, 1)) * 100 if review_total > 0 else 100
+            
+            # Cost tracking (placeholder - integrate actual API costs)
+            cost_col = mongo_db[M_COST_TRACKER]
+            costs = list(cost_col.aggregate([
+                {"$match": {"exam_id": exam_id, "created_at": {"$gte": start_date.isoformat()}}},
+                {
+                    "$group": {
+                        "_id": None,
+                        "total_cost": {"$sum": "$cost_usd"},
+                        "avg_cost_per_paper": {"$avg": "$cost_usd"},
+                    }
+                }
+            ]))
+            cost_stats = costs[0] if costs else {"total_cost": 0, "avg_cost_per_paper": 0}
+            
+            return jsonify({
+                "exam_id": exam_id,
+                "period": period,
+                "papers_processed": papers_processed,
+                "average_score_percent": round(score_stats.get("avg_percentage", 0), 1),
+                "pass_count": score_stats.get("pass_count", 0),
+                "fail_count": score_stats.get("fail_count", 0),
+                "pass_rate_percent": round(pass_rate, 1),
+                "review_pending": review_pending,
+                "review_completed": review_total - review_pending,
+                "accuracy_review_percent": round(accuracy_percent, 1),
+                "total_cost_usd": round(cost_stats.get("total_cost", 0), 2),
+                "avg_cost_per_paper_usd": round(cost_stats.get("avg_cost_per_paper", 0), 4),
+            }), 200
+        except Exception as ex:
+            log.error(f"[ANALYTICS] Failed to fetch: {ex}")
+            return jsonify({"error": str(ex)}), 500
+    else:
+        return jsonify({"error": "MongoDB not available"}), 503
+
+
+@app.get("/api/evaluation/results/<eval_id>")
+@auth(roles=["tutor", "teacher", "institute_admin"])
+def get_evaluation_result(eval_id: str):
+    """
+    Fetch complete evaluation result with:
+    - Extracted answers with confidence scores
+    - Graded answers with per-question marks
+    - Review queue status (if applicable)
+    - Teacher feedback (if reviewed)
+    """
+    if not eval_id:
+        return jsonify({"error": "eval_id required"}), 400
+    
+    # First check evaluations registry
+    if eval_id in evaluations_registry:
+        result = evaluations_registry[eval_id]
+        result.pop("_id", None) if isinstance(result, dict) and "_id" in result else None
+        return jsonify(result), 200
+    
+    # Then check MongoDB
+    if MONGO_OK:
+        try:
+            evals_col = mongo_db[M_EVALS]
+            result = evals_col.find_one({"evaluation_id": eval_id})
+            if result:
+                result.pop("_id", None)
+                return jsonify(result), 200
+            
+            # Check review queue
+            review_col = mongo_db[M_REVIEW_QUEUE]
+            review_item = review_col.find_one({"evaluation_id": eval_id})
+            if review_item:
+                review_item.pop("_id", None)
+                return jsonify({
+                    "evaluation_id": eval_id,
+                    "status": "in_review",
+                    "review_queue_status": review_item,
+                }), 200
+            
+            return jsonify({"error": "Evaluation not found"}), 404
+        except Exception as ex:
+            log.error(f"[EVAL-RESULT] Failed to fetch {eval_id}: {ex}")
+            return jsonify({"error": str(ex)}), 500
+    else:
+        return jsonify({"error": "Evaluation not found"}), 404
+
+
+@app.route("/api/review-queue", methods=["GET"])
+def api_review_queue():
+    """Fetch review queue for anomalous evaluations.
+    
+    Query params:
+        exam_id: Filter by exam
+        limit: Max items to return (default 10)
+        status: Filter by status (pending, reviewed, escalated)
+    
+    Returns:
+    {
+        "total": int,
+        "items": [...],
+        "categorized": {
+            "anomalies": [...],
+            "borderline": [...],
+            "escalated": [...]
+        }
+    }
+    """
+    try:
+        # Check authorization
+        auth_header = request.headers.get("Authorization", "")
+        if not auth_header.startswith("Bearer "):
+            return jsonify({"error": "Unauthorized"}), 401
+        
+        exam_id = request.args.get("exam_id", "").strip()
+        limit = int(request.args.get("limit", 10))
+        status_filter = request.args.get("status", "").strip()
+        
+        items = []
+        categorized = {"anomalies": [], "borderline": [], "escalated": []}
+        
+        if MONGO_OK:
+            try:
+                review_col = mongo_db[M_REVIEW_QUEUE]
+                query = {}
+                if exam_id:
+                    query["exam_id"] = exam_id
+                if status_filter:
+                    query["status"] = status_filter
+                
+                cursor = review_col.find(query).limit(limit)
+                for doc in cursor:
+                    doc.pop("_id", None)
+                    items.append(doc)
+                    
+                    # Categorize
+                    cat = doc.get("category", "anomalies")
+                    if cat in categorized:
+                        categorized[cat].append(doc)
+                
+            except Exception as ex:
+                log.warning(f"[REVIEW-QUEUE] MongoDB error: {ex}")
+        
+        return jsonify({
+            "total": len(items),
+            "items": items,
+            "categorized": categorized
+        }), 200
+        
+    except Exception as ex:
+        log.error(f"[REVIEW-QUEUE] API error: {ex}")
+        return jsonify({"error": str(ex)}), 500
+
+@app.route("/api/evaluation/analytics/<exam_id>", methods=["GET"])
+def api_evaluation_analytics(exam_id):
+    """Get analytics dashboard for an exam.
+    
+    Query params:
+        period: "today", "week", "month" (default: today)
+    
+    Returns:
+    {
+        "papers_processed": int,
+        "average_score_percent": float,
+        "pass_rate_percent": float,
+        "accuracy_review_percent": float,
+        "avg_cost_per_paper_usd": float,
+        "top_students": [...],
+        "bottom_students": [...]
+    }
+    """
+    try:
+        # Check authorization
+        auth_header = request.headers.get("Authorization", "")
+        if not auth_header.startswith("Bearer "):
+            return jsonify({"error": "Unauthorized"}), 401
+        
+        period = request.args.get("period", "today").lower()
+        
+        papers_processed = 0
+        average_score = 0.0
+        pass_rate = 0.0
+        accuracy = 100.0
+        cost_per_paper = 0.0
+        top_students = []
+        bottom_students = []
+        
+        if MONGO_OK:
+            try:
+                analytics_col = mongo_db[M_ANALYTICS]
+                
+                # Get analytics for period
+                query = {"exam_id": exam_id}
+                docs = list(analytics_col.find(query).limit(100))
+                
+                if docs:
+                    papers_processed = sum(d.get("papers_processed", 0) for d in docs)
+                    avg_scores = [d.get("class_average_percentage", 0) for d in docs if d.get("papers_processed", 0) > 0]
+                    average_score = sum(avg_scores) / len(avg_scores) if avg_scores else 0.0
+                    
+                    # Estimate pass rate (assuming 40% is pass)
+                    pass_threshold = 40.0
+                    pass_rate = (average_score / 100.0 * 100) if average_score > pass_threshold else 0.0
+                    
+                    # Cost estimate (₹100/paper ≈ $1.2 USD)
+                    cost_per_paper = (papers_processed * 0.01 * 1.2) / max(papers_processed, 1)
+                
+                # Get top and bottom students from evaluation records
+                evals_col = mongo_db[M_EVALS]
+                evals = list(evals_col.find({"exam_id": exam_id}).sort("result.percentage", -1).limit(5))
+                top_students = [{
+                    "roll_no": e.get("roll_no", ""),
+                    "name": e.get("student_name", ""),
+                    "score": e.get("result", {}).get("percentage", 0)
+                } for e in evals]
+                
+                evals = list(evals_col.find({"exam_id": exam_id}).sort("result.percentage", 1).limit(5))
+                bottom_students = [{
+                    "roll_no": e.get("roll_no", ""),
+                    "name": e.get("student_name", ""),
+                    "score": e.get("result", {}).get("percentage", 0)
+                } for e in evals]
+                
+            except Exception as ex:
+                log.warning(f"[ANALYTICS] MongoDB error: {ex}")
+        
+        return jsonify({
+            "papers_processed": papers_processed,
+            "average_score_percent": round(average_score, 1),
+            "pass_rate_percent": round(pass_rate, 1),
+            "accuracy_review_percent": round(accuracy, 1),
+            "avg_cost_per_paper_usd": round(cost_per_paper, 4),
+            "top_students": top_students,
+            "bottom_students": bottom_students
+        }), 200
+        
+    except Exception as ex:
+        log.error(f"[ANALYTICS] API error: {ex}")
+        return jsonify({"error": str(ex)}), 500
 
 
 @app.route("/", defaults={"path": ""})
