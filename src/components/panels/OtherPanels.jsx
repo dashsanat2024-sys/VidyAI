@@ -5,23 +5,23 @@ import { apiGet, apiPost, API_BASE } from '../../utils/api'
 
 // ── Role badge colours ─────────────────────────────────────────────────────
 const ROLE_STYLE = {
-  teacher:        { bg: '#d1fae5', color: '#065f46' },
-  student:        { bg: 'var(--indigo3)', color: 'var(--indigo)' },
-  parent:         { bg: '#fce7f3', color: '#9d174d' },
-  institute_admin:{ bg: '#e0f2fe', color: '#0369a1' },
-  admin:          { bg: '#fee2e2', color: '#991b1b' },
+  teacher: { bg: '#d1fae5', color: '#065f46' },
+  student: { bg: 'var(--indigo3)', color: 'var(--indigo)' },
+  parent: { bg: '#fce7f3', color: '#9d174d' },
+  institute_admin: { bg: '#e0f2fe', color: '#0369a1' },
+  admin: { bg: '#fee2e2', color: '#991b1b' },
 }
 
 // ── Institute Manager Panel ────────────────────────────────────────────────
 export function InstitutePanel({ showToast }) {
   const { token } = useAuth()
   const { adminStats } = useApp()
-  const [users,   setUsers]   = useState([])
+  const [users, setUsers] = useState([])
   const [loading, setLoading] = useState(false)
-  const [filter,  setFilter]  = useState('all')
+  const [filter, setFilter] = useState('all')
   const [editing, setEditing] = useState(null)   // user being edited
-  const [editData,setEditData]= useState({})
-  const [saving,  setSaving]  = useState(false)
+  const [editData, setEditData] = useState({})
+  const [saving, setSaving] = useState(false)
   const [activeTab, setActiveTab] = useState('users')
 
   useEffect(() => { fetchUsers() }, [])
@@ -92,13 +92,15 @@ export function InstitutePanel({ showToast }) {
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
             {/* View tabs */}
             <div style={{ display: 'flex', background: 'var(--paper)', borderRadius: 10, padding: 3, gap: 2 }}>
-              {[['users','👥 Users'], ['analytics','📊 Analytics']].map(([tab, label]) => (
+              {[['users', '👥 Users'], ['analytics', '📊 Analytics']].map(([tab, label]) => (
                 <button key={tab} onClick={() => setActiveTab(tab)}
-                  style={{ padding: '6px 14px', borderRadius: 8, border: 'none', cursor: 'pointer',
+                  style={{
+                    padding: '6px 14px', borderRadius: 8, border: 'none', cursor: 'pointer',
                     fontWeight: 700, fontSize: 11, fontFamily: 'var(--sans)',
                     background: activeTab === tab ? '#fff' : 'transparent',
                     color: activeTab === tab ? 'var(--indigo)' : 'var(--muted)',
-                    boxShadow: activeTab === tab ? '0 1px 4px rgba(0,0,0,.08)' : 'none', transition: '.2s' }}>
+                    boxShadow: activeTab === tab ? '0 1px 4px rgba(0,0,0,.08)' : 'none', transition: '.2s'
+                  }}>
                   {label}
                 </button>
               ))}
@@ -118,127 +120,129 @@ export function InstitutePanel({ showToast }) {
 
         {/* Role filter tabs */}
         {activeTab === 'users' && (<>
-        <div style={{ display: 'flex', gap: 4, background: 'var(--paper)', borderRadius: 12, padding: 4, marginBottom: 16, flexWrap: 'wrap' }}>
-          {ALL_FILTER_TABS.map(r => (
-            <button key={r} onClick={() => setFilter(r)}
-              style={{ padding: '8px 16px', borderRadius: 9, border: 'none', cursor: 'pointer', fontWeight: 700, fontSize: 11, fontFamily: 'var(--sans)',
-                background: filter === r ? '#fff' : 'transparent',
-                color: filter === r ? 'var(--text)' : 'var(--muted)',
-                boxShadow: filter === r ? '0 1px 4px rgba(0,0,0,.1)' : 'none', transition: '.2s', textTransform: 'capitalize' }}>
-              {r === 'all' ? `All (${users.length})` : `${r.replace('_', ' ')}s (${users.filter(u => u.role === r).length})`}
-            </button>
-          ))}
-        </div>
-
-        {loading && <div className="card" style={{ padding: 40, textAlign: 'center' }}><span className="spinner" /></div>}
-
-        {!loading && filtered.length === 0 && (
-          <div className="card" style={{ padding: 40, textAlign: 'center' }}>
-            <div style={{ fontSize: 40, marginBottom: 12 }}>👤</div>
-            <p style={{ color: 'var(--muted)', fontSize: 14 }}>
-              {filter === 'all'
-                ? 'No users registered yet. Once users sign up, they will appear here.'
-                : `No ${filter.replace('_',' ')}s found.`}
-            </p>
+          <div style={{ display: 'flex', gap: 4, background: 'var(--paper)', borderRadius: 12, padding: 4, marginBottom: 16, flexWrap: 'wrap' }}>
+            {ALL_FILTER_TABS.map(r => (
+              <button key={r} onClick={() => setFilter(r)}
+                style={{
+                  padding: '8px 16px', borderRadius: 9, border: 'none', cursor: 'pointer', fontWeight: 700, fontSize: 11, fontFamily: 'var(--sans)',
+                  background: filter === r ? '#fff' : 'transparent',
+                  color: filter === r ? 'var(--text)' : 'var(--muted)',
+                  boxShadow: filter === r ? '0 1px 4px rgba(0,0,0,.1)' : 'none', transition: '.2s', textTransform: 'capitalize'
+                }}>
+                {r === 'all' ? `All (${users.length})` : `${r.replace('_', ' ')}s (${users.filter(u => u.role === r).length})`}
+              </button>
+            ))}
           </div>
-        )}
 
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-          {filtered.map((u) => {
-            const rs = ROLE_STYLE[u.role] || { bg: 'var(--paper)', color: 'var(--text)' }
-            const isEditing = editing === u.id
-            return (
-              <div key={u.id} className="card"
-                style={{ padding: '16px 20px', borderLeft: `4px solid ${u.status === 'suspended' ? 'var(--red)' : rs.color}`, opacity: u.status === 'suspended' ? 0.7 : 1 }}>
+          {loading && <div className="card" style={{ padding: 40, textAlign: 'center' }}><span className="spinner" /></div>}
 
-                {/* View mode */}
-                {!isEditing && (
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
-                      {/* Avatar */}
-                      <div style={{ width: 42, height: 42, borderRadius: '50%', background: rs.bg, display: 'grid', placeItems: 'center', fontSize: 18, flexShrink: 0, border: `2px solid ${rs.color}40` }}>
-                        {u.name?.[0]?.toUpperCase() || '?'}
-                      </div>
-                      <div>
-                        <div style={{ fontWeight: 700, fontSize: 14 }}>{u.name}</div>
-                        <div style={{ fontSize: 12, color: 'var(--muted)' }}>{u.email}</div>
-                        {u.institution && <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 1 }}>🏫 {u.institution}</div>}
-                      </div>
-                    </div>
-                    <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                      {u.roll_number && <span style={{ fontSize: 11, color: 'var(--muted)' }}>Roll: {u.roll_number}</span>}
-                      <span style={{ fontSize: 11, color: 'var(--muted)' }}>Joined: {u.joined || '—'}</span>
-                      <span style={{ fontSize: 11, color: u.last_login ? '#059669' : 'var(--muted)' }}>
-                        🕐 {u.last_login
-                          ? new Date(u.last_login).toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })
-                          : 'Never logged in'}
-                      </span>
-                      {u.login_count > 0 && (
-                        <span style={{ fontSize: 11, color: 'var(--muted)' }}>({u.login_count} login{u.login_count !== 1 ? 's' : ''})</span>
-                      )}
-                      <span style={{ padding: '3px 10px', borderRadius: 50, fontSize: 10, fontWeight: 800, background: rs.bg, color: rs.color, textTransform: 'uppercase', letterSpacing: '.4px' }}>
-                        {u.role.replace('_',' ')}
-                      </span>
-                      {u.status === 'suspended' && (
-                        <span style={{ padding: '3px 10px', borderRadius: 50, fontSize: 10, fontWeight: 800, background: '#fee2e2', color: '#991b1b' }}>SUSPENDED</span>
-                      )}
-                      <button onClick={() => startEdit(u)}
-                        style={{ padding: '5px 12px', fontSize: 11, fontWeight: 700, fontFamily: 'var(--sans)', background: 'var(--indigo3)', color: 'var(--indigo)', border: '1px solid var(--indigo2)', borderRadius: 7, cursor: 'pointer' }}>
-                        ✎ Edit
-                      </button>
-                      <button onClick={() => toggleStatus(u)}
-                        style={{ padding: '5px 12px', fontSize: 11, fontWeight: 700, fontFamily: 'var(--sans)', background: u.status === 'suspended' ? '#d1fae5' : '#fee2e2', color: u.status === 'suspended' ? '#065f46' : '#991b1b', border: 'none', borderRadius: 7, cursor: 'pointer' }}>
-                        {u.status === 'suspended' ? '✓ Activate' : '⊘ Suspend'}
-                      </button>
-                    </div>
-                  </div>
-                )}
+          {!loading && filtered.length === 0 && (
+            <div className="card" style={{ padding: 40, textAlign: 'center' }}>
+              <div style={{ fontSize: 40, marginBottom: 12 }}>👤</div>
+              <p style={{ color: 'var(--muted)', fontSize: 14 }}>
+                {filter === 'all'
+                  ? 'No users registered yet. Once users sign up, they will appear here.'
+                  : `No ${filter.replace('_', ' ')}s found.`}
+              </p>
+            </div>
+          )}
 
-                {/* Edit mode */}
-                {isEditing && (
-                  <div>
-                    <div style={{ fontWeight: 700, color: 'var(--indigo)', marginBottom: 12 }}>✎ Editing: {u.email}</div>
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 10, marginBottom: 12 }}>
-                      <div className="fg" style={{ marginBottom: 0 }}>
-                        <label>Full Name</label>
-                        <input className="fi" value={editData.name} onChange={e => setEditData(d => ({ ...d, name: e.target.value }))} />
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {filtered.map((u) => {
+              const rs = ROLE_STYLE[u.role] || { bg: 'var(--paper)', color: 'var(--text)' }
+              const isEditing = editing === u.id
+              return (
+                <div key={u.id} className="card"
+                  style={{ padding: '16px 20px', borderLeft: `4px solid ${u.status === 'suspended' ? 'var(--red)' : rs.color}`, opacity: u.status === 'suspended' ? 0.7 : 1 }}>
+
+                  {/* View mode */}
+                  {!isEditing && (
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+                        {/* Avatar */}
+                        <div style={{ width: 42, height: 42, borderRadius: '50%', background: rs.bg, display: 'grid', placeItems: 'center', fontSize: 18, flexShrink: 0, border: `2px solid ${rs.color}40` }}>
+                          {u.name?.[0]?.toUpperCase() || '?'}
+                        </div>
+                        <div>
+                          <div style={{ fontWeight: 700, fontSize: 14 }}>{u.name}</div>
+                          <div style={{ fontSize: 12, color: 'var(--muted)' }}>{u.email}</div>
+                          {u.institution && <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 1 }}>🏫 {u.institution}</div>}
+                        </div>
                       </div>
-                      <div className="fg" style={{ marginBottom: 0 }}>
-                        <label>Role</label>
-                        <select className="fi sel" value={editData.role} onChange={e => setEditData(d => ({ ...d, role: e.target.value }))}>
-                          {['student','teacher','parent','institute_admin'].map(r => (
-                            <option key={r} value={r}>{r.replace('_',' ')}</option>
-                          ))}
-                        </select>
-                      </div>
-                      <div className="fg" style={{ marginBottom: 0 }}>
-                        <label>Status</label>
-                        <select className="fi sel" value={editData.status} onChange={e => setEditData(d => ({ ...d, status: e.target.value }))}>
-                          <option value="active">Active</option>
-                          <option value="suspended">Suspended</option>
-                        </select>
-                      </div>
-                      <div className="fg" style={{ marginBottom: 0 }}>
-                        <label>Institution</label>
-                        <input className="fi" value={editData.institution} onChange={e => setEditData(d => ({ ...d, institution: e.target.value }))} />
+                      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                        {u.roll_number && <span style={{ fontSize: 11, color: 'var(--muted)' }}>Roll: {u.roll_number}</span>}
+                        <span style={{ fontSize: 11, color: 'var(--muted)' }}>Joined: {u.joined || '—'}</span>
+                        <span style={{ fontSize: 11, color: u.last_login ? '#059669' : 'var(--muted)' }}>
+                          🕐 {u.last_login
+                            ? new Date(u.last_login).toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })
+                            : 'Never logged in'}
+                        </span>
+                        {u.login_count > 0 && (
+                          <span style={{ fontSize: 11, color: 'var(--muted)' }}>({u.login_count} login{u.login_count !== 1 ? 's' : ''})</span>
+                        )}
+                        <span style={{ padding: '3px 10px', borderRadius: 50, fontSize: 10, fontWeight: 800, background: rs.bg, color: rs.color, textTransform: 'uppercase', letterSpacing: '.4px' }}>
+                          {u.role.replace('_', ' ')}
+                        </span>
+                        {u.status === 'suspended' && (
+                          <span style={{ padding: '3px 10px', borderRadius: 50, fontSize: 10, fontWeight: 800, background: '#fee2e2', color: '#991b1b' }}>SUSPENDED</span>
+                        )}
+                        <button onClick={() => startEdit(u)}
+                          style={{ padding: '5px 12px', fontSize: 11, fontWeight: 700, fontFamily: 'var(--sans)', background: 'var(--indigo3)', color: 'var(--indigo)', border: '1px solid var(--indigo2)', borderRadius: 7, cursor: 'pointer' }}>
+                          ✎ Edit
+                        </button>
+                        <button onClick={() => toggleStatus(u)}
+                          style={{ padding: '5px 12px', fontSize: 11, fontWeight: 700, fontFamily: 'var(--sans)', background: u.status === 'suspended' ? '#d1fae5' : '#fee2e2', color: u.status === 'suspended' ? '#065f46' : '#991b1b', border: 'none', borderRadius: 7, cursor: 'pointer' }}>
+                          {u.status === 'suspended' ? '✓ Activate' : '⊘ Suspend'}
+                        </button>
                       </div>
                     </div>
-                    <div style={{ display: 'flex', gap: 8 }}>
-                      <button className="btn-submit indigo" style={{ width: 'auto', padding: '9px 24px', fontSize: 13 }}
-                        onClick={() => saveEdit(u.id)} disabled={saving}>
-                        {saving ? 'Saving…' : '✓ Save Changes'}
-                      </button>
-                      <button className="btn-outline" style={{ padding: '9px 18px', fontSize: 13 }}
-                        onClick={() => setEditing(null)}>
-                        Cancel
-                      </button>
+                  )}
+
+                  {/* Edit mode */}
+                  {isEditing && (
+                    <div>
+                      <div style={{ fontWeight: 700, color: 'var(--indigo)', marginBottom: 12 }}>✎ Editing: {u.email}</div>
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 10, marginBottom: 12 }}>
+                        <div className="fg" style={{ marginBottom: 0 }}>
+                          <label>Full Name</label>
+                          <input className="fi" value={editData.name} onChange={e => setEditData(d => ({ ...d, name: e.target.value }))} />
+                        </div>
+                        <div className="fg" style={{ marginBottom: 0 }}>
+                          <label>Role</label>
+                          <select className="fi sel" value={editData.role} onChange={e => setEditData(d => ({ ...d, role: e.target.value }))}>
+                            {['student', 'teacher', 'parent', 'institute_admin'].map(r => (
+                              <option key={r} value={r}>{r.replace('_', ' ')}</option>
+                            ))}
+                          </select>
+                        </div>
+                        <div className="fg" style={{ marginBottom: 0 }}>
+                          <label>Status</label>
+                          <select className="fi sel" value={editData.status} onChange={e => setEditData(d => ({ ...d, status: e.target.value }))}>
+                            <option value="active">Active</option>
+                            <option value="suspended">Suspended</option>
+                          </select>
+                        </div>
+                        <div className="fg" style={{ marginBottom: 0 }}>
+                          <label>Institution</label>
+                          <input className="fi" value={editData.institution} onChange={e => setEditData(d => ({ ...d, institution: e.target.value }))} />
+                        </div>
+                      </div>
+                      <div style={{ display: 'flex', gap: 8 }}>
+                        <button className="btn-submit indigo" style={{ width: 'auto', padding: '9px 24px', fontSize: 13 }}
+                          onClick={() => saveEdit(u.id)} disabled={saving}>
+                          {saving ? 'Saving…' : '✓ Save Changes'}
+                        </button>
+                        <button className="btn-outline" style={{ padding: '9px 18px', fontSize: 13 }}
+                          onClick={() => setEditing(null)}>
+                          Cancel
+                        </button>
+                      </div>
                     </div>
-                  </div>
-                )}
-              </div>
-            )
-          })}
-        </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
         </>)}
 
         {/* ── Usage Analytics Tab ──────────────────────────────────────── */}
@@ -295,7 +299,7 @@ export function InstitutePanel({ showToast }) {
                     : topUsers.map((u, i) => (
                       <div key={u.uid} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 0', borderBottom: i < topUsers.length - 1 ? '1px solid #f1f5f9' : 'none' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                          <span style={{ fontSize: 16 }}>{['🥇','🥈','🥉'][i] || `${i+1}.`}</span>
+                          <span style={{ fontSize: 16 }}>{['🥇', '🥈', '🥉'][i] || `${i + 1}.`}</span>
                           <span style={{ fontWeight: 600, fontSize: 13 }}>{u.name}</span>
                         </div>
                         <span style={{ fontWeight: 700, color: 'var(--indigo)', fontSize: 13 }}>{u.total} uses</span>
@@ -315,7 +319,7 @@ export function InstitutePanel({ showToast }) {
                       <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
                         <thead>
                           <tr style={{ borderBottom: '2px solid #f1f5f9' }}>
-                            {['Name','Email','Role','Institution','Last Login','Logins'].map(h => (
+                            {['Name', 'Email', 'Role', 'Institution', 'Last Login', 'Logins'].map(h => (
                               <th key={h} style={{ textAlign: 'left', padding: '6px 10px', fontWeight: 700, color: 'var(--muted)', fontSize: 11, textTransform: 'uppercase' }}>{h}</th>
                             ))}
                           </tr>
@@ -427,7 +431,7 @@ export function AnalyticsPanel({ showToast }) {
                 {analytics.top_performers?.map((p, i) => (
                   <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 0', borderBottom: '1px solid #f1f5f9' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                      <span>{['🥇','🥈','🥉','✨','✨'][i] || '✨'}</span>
+                      <span>{['🥇', '🥈', '🥉', '✨', '✨'][i] || '✨'}</span>
                       <span style={{ fontWeight: 600, fontSize: 13 }}>#{p.roll_no}</span>
                     </div>
                     <span style={{ fontWeight: 700, color: 'var(--green)' }}>{p.percentage}%</span>
@@ -447,23 +451,29 @@ export function AdminSettingsPanel({ showToast }) {
   const { token } = useAuth()
   const { refreshSettings } = useApp()
   const [settings, setSettings] = useState({ sidebar: {} })
-  const [loading, setLoading]   = useState(false)
-  const [saving, setSaving]     = useState(false)
+  const [loading, setLoading] = useState(false)
+  const [saving, setSaving] = useState(false)
 
   // Define the sidebar items that can be toggled
   const SIDEBAR_ITEMS = [
-    { id: 'dashboard',            label: 'Dashboard',            group: 'Learn' },
-    { id: 'chat',                 label: 'AI Tutor',              group: 'Learn' },
-    { id: 'curriculum',           label: 'Curriculum Hub',        group: 'Learn' },
-    { id: 'interactive-practice', label: 'Practice Mode',         group: 'Learn' },
-    { id: 'qmaster',              label: 'Question Master',       group: 'Teach' },
-    { id: 'qgen',                 label: 'Quick QGen',            group: 'Teach' },
-    { id: 'eval',                 label: 'Evaluate',              group: 'Teach' },
-    { id: 'reports',              label: 'Reports',               group: 'Teach' },
-    { id: 'institute',            label: 'Institute',             group: 'Manage' },
-    { id: 'analytics',            label: 'Analytics',             group: 'Manage' },
-    { id: 'visitor-log',          label: 'Visitor Log',           group: 'Manage' },
-    { id: 'settings',             label: 'Settings',              group: 'Manage' },
+    { id: 'dashboard', label: 'Dashboard', group: 'Learn' },
+    { id: 'chat', label: 'AI Tutor', group: 'Learn' },
+    { id: 'curriculum', label: 'Curriculum Hub', group: 'Learn' },
+    { id: 'interactive-practice', label: 'Practice Mode', group: 'Learn' },
+    { id: 'free-courses', label: 'SkillUp Hub', group: 'Learn' },
+    { id: 'career-path', label: 'Career Compass', group: 'Learn' },
+    { id: 'degree-hub', label: 'Degree Hub', group: 'Learn' },
+    { id: 'senior-prep', label: 'Entrance Prep', group: 'Learn' },
+    { id: 'qmaster', label: 'Question Master', group: 'Teach' },
+    { id: 'qgen', label: 'Quick QGen', group: 'Teach' },
+    { id: 'eval', label: 'Evaluate', group: 'Teach' },
+    { id: 'reports', label: 'Reports', group: 'Teach' },
+    { id: 'institute', label: 'Institute', group: 'Manage' },
+    { id: 'analytics', label: 'Analytics', group: 'Manage' },
+    { id: 'visitor-log', label: 'Visitor Log', group: 'Manage' },
+    { id: 'quota', label: 'Quota Manager', group: 'Manage' },
+    { id: 'finance', label: 'Finance Manager', group: 'Manage' },
+    { id: 'settings', label: 'Settings', group: 'Manage' },
   ]
 
   useEffect(() => {
@@ -486,9 +496,9 @@ export function AdminSettingsPanel({ showToast }) {
     // If it's undefined or true, it's visible. Toggle to false.
     // If it's false, toggle to true.
     newSidebar[itemId] = newSidebar[itemId] === false ? true : false
-    
+
     setSettings(prev => ({ ...prev, sidebar: newSidebar }))
-    
+
     setSaving(true)
     try {
       const res = await fetch(`${API_BASE}/admin/settings`, {
@@ -538,18 +548,18 @@ export function AdminSettingsPanel({ showToast }) {
                     {SIDEBAR_ITEMS.filter(item => item.group === group).map(item => {
                       const isVisible = settings.sidebar[item.id] !== false
                       return (
-                        <div key={item.id} 
-                          style={{ 
-                            display: 'flex', alignItems: 'center', justifyContent: 'space-between', 
+                        <div key={item.id}
+                          style={{
+                            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
                             padding: '10px 14px', borderRadius: 10, border: '1px solid #e2e8f0',
                             background: isVisible ? '#fff' : '#f8fafc',
                             opacity: isVisible ? 1 : 0.7
                           }}>
                           <span style={{ fontSize: 13, fontWeight: 600 }}>{item.label}</span>
-                          <button 
+                          <button
                             onClick={() => toggleVisibility(item.id)}
                             disabled={saving}
-                            style={{ 
+                            style={{
                               padding: '4px 10px', fontSize: 11, fontWeight: 700, borderRadius: 6, cursor: 'pointer',
                               border: 'none',
                               background: isVisible ? '#d1fae5' : '#fee2e2',
@@ -567,7 +577,7 @@ export function AdminSettingsPanel({ showToast }) {
             </div>
           )}
         </div>
-        
+
         <div style={{ marginTop: 24, fontSize: 12, color: 'var(--muted)', textAlign: 'center' }}>
           Changes are saved automatically and applied on next refresh or login.
         </div>
@@ -580,7 +590,7 @@ export function AdminSettingsPanel({ showToast }) {
 export function VisitorLogPanel({ showToast }) {
   const { token } = useAuth()
   const [visitors, setVisitors] = useState([])
-  const [loading, setLoading]   = useState(false)
+  const [loading, setLoading] = useState(false)
 
   const fetchVisitors = async () => {
     setLoading(true)
@@ -617,35 +627,37 @@ export function VisitorLogPanel({ showToast }) {
           </div>
         ) : (
           <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
-              <thead style={{ background: '#f8fafc', borderBottom: '1px solid #e2e8f0' }}>
-                <tr>
-                  <th style={{ textAlign: 'left', padding: '12px 20px', color: '#64748b', fontWeight: '700', textTransform: 'uppercase', fontSize: '11px' }}>Timestamp</th>
-                  <th style={{ textAlign: 'left', padding: '12px 20px', color: '#64748b', fontWeight: '700', textTransform: 'uppercase', fontSize: '11px' }}>IP / Location</th>
-                  <th style={{ textAlign: 'left', padding: '12px 20px', color: '#64748b', fontWeight: '700', textTransform: 'uppercase', fontSize: '11px' }}>Path</th>
-                  <th style={{ textAlign: 'left', padding: '12px 20px', color: '#64748b', fontWeight: '700', textTransform: 'uppercase', fontSize: '11px' }}>Device / Agent</th>
-                </tr>
-              </thead>
-              <tbody>
-                {visitors.slice(0, 100).map((v, i) => (
-                  <tr key={i} style={{ borderBottom: '1px solid #f1f5f9' }}>
-                    <td style={{ padding: '14px 20px', color: '#0f172a', fontWeight: '600' }}>
-                      {new Date(v.timestamp).toLocaleString()}
-                    </td>
-                    <td style={{ padding: '14px 20px', color: '#64748b' }}>
-                      <div style={{ color: '#0f172a', fontWeight: '500' }}>{v.ip || 'Unknown'}</div>
-                      <div style={{ fontSize: '11px' }}>{v.city ? `${v.city}, ${v.country}` : 'Unknown Location'}</div>
-                    </td>
-                    <td style={{ padding: '14px 20px' }}>
-                      <code style={{ background: '#f1f5f9', padding: '2px 6px', borderRadius: '4px', fontSize: '11px', color: 'var(--indigo)' }}>{v.path || '/'}</code>
-                    </td>
-                    <td style={{ padding: '14px 20px', color: '#64748b', maxWidth: '300px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={v.user_agent}>
-                      {v.user_agent || 'Unknown'}
-                    </td>
+            <div style={{ overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
+              <table style={{ width: '100%', minWidth: '560px', borderCollapse: 'collapse', fontSize: '13px' }}>
+                <thead style={{ background: '#f8fafc', borderBottom: '1px solid #e2e8f0' }}>
+                  <tr>
+                    <th style={{ textAlign: 'left', padding: '12px 20px', color: '#64748b', fontWeight: '700', textTransform: 'uppercase', fontSize: '11px' }}>Timestamp</th>
+                    <th style={{ textAlign: 'left', padding: '12px 20px', color: '#64748b', fontWeight: '700', textTransform: 'uppercase', fontSize: '11px' }}>IP / Location</th>
+                    <th style={{ textAlign: 'left', padding: '12px 20px', color: '#64748b', fontWeight: '700', textTransform: 'uppercase', fontSize: '11px' }}>Path</th>
+                    <th style={{ textAlign: 'left', padding: '12px 20px', color: '#64748b', fontWeight: '700', textTransform: 'uppercase', fontSize: '11px' }}>Device / Agent</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {visitors.slice(0, 100).map((v, i) => (
+                    <tr key={i} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                      <td style={{ padding: '14px 20px', color: '#0f172a', fontWeight: '600' }}>
+                        {new Date(v.timestamp).toLocaleString()}
+                      </td>
+                      <td style={{ padding: '14px 20px', color: '#64748b' }}>
+                        <div style={{ color: '#0f172a', fontWeight: '500' }}>{v.ip || 'Unknown'}</div>
+                        <div style={{ fontSize: '11px' }}>{v.city ? `${v.city}, ${v.country}` : 'Unknown Location'}</div>
+                      </td>
+                      <td style={{ padding: '14px 20px' }}>
+                        <code style={{ background: '#f1f5f9', padding: '2px 6px', borderRadius: '4px', fontSize: '11px', color: 'var(--indigo)' }}>{v.path || '/'}</code>
+                      </td>
+                      <td style={{ padding: '14px 20px', color: '#64748b', maxWidth: '300px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={v.user_agent}>
+                        {v.user_agent || 'Unknown'}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
             {visitors.length > 100 && (
               <div style={{ padding: '16px', textAlign: 'center', background: '#f8fafc', color: '#94a3b8', fontSize: '12px' }}>
                 Showing last 100 visitors. Total: {visitors.length}

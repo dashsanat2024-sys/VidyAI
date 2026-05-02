@@ -2,6 +2,7 @@
 celery_worker.py — Async task definitions for VidyAI / Parvidya
 """
 import os, sys, uuid, logging
+import time as _time
 from pathlib import Path
 from datetime import datetime
 from celery import Celery
@@ -14,10 +15,14 @@ load_dotenv(os.path.join(os.path.dirname(__file__), '..', '.env'))
 log = logging.getLogger("celery_worker")
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+CELERY_TASK_SOFT_TIME_LIMIT = int(os.getenv("CELERY_TASK_SOFT_TIME_LIMIT", "1800") or "1800")
+CELERY_TASK_TIME_LIMIT = int(os.getenv("CELERY_TASK_TIME_LIMIT", "2100") or "2100")
 celery_app = Celery("parvidya_tasks", broker=REDIS_URL, backend=REDIS_URL)
 celery_app.conf.update(
     task_serializer="json", result_serializer="json", accept_content=["json"],
-    task_track_started=True, task_soft_time_limit=480, task_time_limit=600,
+    task_track_started=True,
+    task_soft_time_limit=CELERY_TASK_SOFT_TIME_LIMIT,
+    task_time_limit=CELERY_TASK_TIME_LIMIT,
     worker_prefetch_multiplier=1,
 )
 
@@ -80,6 +85,38 @@ def evaluate_multi_student(self, path, exam):
         sections = fn["split_pdf"](path, exam_questions=exam.get("questions",[]))
         total    = len(sections)
         all_evals = []
+        failures = []
+
+        def _extract_with_retry(file_path, attempts=3, base_delay=1.5):
+            last_mode = "no_answers_extracted"
+            last_err = ""
+            for attempt in range(1, max(1, attempts) + 1):
+                try:
+                    answers, mode = fn["extract"](file_path, exam_questions=exam.get("questions", []), exam=exam)
+                    last_mode = mode
+                    if answers:
+                        return answers, mode, None
+                    last_err = f"empty_answers ({mode})"
+                except Exception as ex:
+                    last_mode = "extract_exception"
+                    last_err = str(ex)
+                    log.warning(f"[TASK-MULTI] OCR retry {attempt}/{attempts} failed for {Path(file_path).name}: {ex}")
+                if attempt < attempts:
+                    _time.sleep(base_delay * attempt)
+            return {}, last_mode, last_err or "no_answers_extracted"
+
+        def _grade_with_retry(answers, roll_no, attempts=2, base_delay=1.0):
+            last_err = "evaluation_failed"
+            for attempt in range(1, max(1, attempts) + 1):
+                try:
+                    return fn["evaluate"](exam, answers, roll_no), None
+                except Exception as ex:
+                    last_err = str(ex)
+                    log.warning(f"[TASK-MULTI] Grading retry {attempt}/{attempts} failed for roll={roll_no}: {ex}")
+                    if attempt < attempts:
+                        _time.sleep(base_delay * attempt)
+            return None, last_err
+
         for idx, section in enumerate(sections):
             self.update_state(state="STARTED",
                 meta={"step": f"student_{idx+1}", "completed": idx, "total": total})
@@ -88,6 +125,7 @@ def evaluate_multi_student(self, path, exam):
             raw   = section.get("raw_text","")
             answers = {}
             mode    = "multi_student_celery"
+            extract_error = ""
 
             # Path 1: page_indices (scanned/handwritten PDFs) — full OCR pipeline
             if section.get("page_indices"):
@@ -102,9 +140,10 @@ def evaluate_multi_student(self, path, exam):
                     dst.save(str(tmp_pdf))
                     dst.close()
                     src.close()
-                    answers, mode = fn["extract"](str(tmp_pdf), exam_questions=exam.get("questions",[]), exam=exam)
+                    answers, mode, extract_error = _extract_with_retry(str(tmp_pdf), attempts=3)
                 except Exception as ex:
                     log.warning(f"[TASK-MULTI] Page extraction failed for {sname}: {ex}")
+                    extract_error = str(ex)
                 finally:
                     try: tmp_pdf.unlink()
                     except: pass
@@ -115,8 +154,24 @@ def evaluate_multi_student(self, path, exam):
                 mode = "multi_student_text"
 
             if not answers:
+                failures.append({
+                    "status": "failed",
+                    "student_name": sname,
+                    "roll_no": roll,
+                    "reason": extract_error or f"no_answers ({mode})",
+                    "extraction_mode": mode,
+                })
                 continue
-            result  = fn["evaluate"](exam, answers, roll)
+            result, eval_error = _grade_with_retry(answers, roll, attempts=2)
+            if not result:
+                failures.append({
+                    "status": "failed",
+                    "student_name": sname,
+                    "roll_no": roll,
+                    "reason": eval_error or "evaluation_failed",
+                    "extraction_mode": mode,
+                })
+                continue
             eval_id = uuid.uuid4().hex[:10]
             payload = {
                 "evaluation_id": eval_id, "exam_id": exam_id, "created_at": fn["now"](),
@@ -124,6 +179,7 @@ def evaluate_multi_student(self, path, exam):
                 "parent_email": section.get("parent_email",""),
                 "file_name": Path(path).name, "extraction_mode": mode,
                 "submitted_answers": answers, "result": result,
+                "status": "evaluated",
             }
             fn["evals_reg"][eval_id] = payload
             if not fn["is_vercel"]:
@@ -133,8 +189,17 @@ def evaluate_multi_student(self, path, exam):
         n   = len(all_evals)
         avg = round(sum(e["result"].get("percentage",0) for e in all_evals)/max(n,1), 1)
         pc  = sum(1 for e in all_evals if e["result"].get("is_pass"))
-        return {"student_count":n,"class_average":avg,"pass_count":pc,
-                "fail_count":n-pc,"evaluations":all_evals,"exam_id":exam_id}
+        return {
+            "detected_student_count": total,
+            "student_count": n,
+            "class_average": avg,
+            "pass_count": pc,
+            "fail_count": n - pc,
+            "failed_student_count": len(failures),
+            "failed_students": failures,
+            "evaluations": all_evals,
+            "exam_id": exam_id,
+        }
     except Exception as e:
         log.error(f"[TASK-MULTI] {e}", exc_info=True); raise
 

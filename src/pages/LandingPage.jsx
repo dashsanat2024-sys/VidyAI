@@ -1,7 +1,10 @@
 import Logo from '../components/shared/Logo'
+import LangToggle from '../components/shared/LangToggle'
 
 import { useState, useEffect, useRef } from 'react'
 import AuthModal from '../components/auth/AuthModal'
+import { useAuth } from '../context/AuthContext'
+import { useLang } from '../context/LangContext'
 import { apiPost } from '../utils/api'
 
 const BOARDS = ['CBSE','ICSE / ISC','Maharashtra Board','Tamil Nadu Board','Karnataka Board','Kerala Board','UP Board','Gujarat Board','Rajasthan Board','West Bengal Board','Telangana Board','NIOS']
@@ -33,11 +36,13 @@ const INR_TO_USD = 0.012
 const ANNUAL_INCREASE_RATE = 0.1
 
 const PRICING_PLANS = [
+  // ── STUDENTS ──
   {
     id: 'free-student',
     name: 'Free — Student',
     price: 'INR 0 / month forever',
     approxUsd: '$0 / month',
+    anchor: null,
     summary: 'For individual students discovering Arthavi and entering the paid funnel.',
     includes: [
       '3 chapter loads/month (any board)',
@@ -61,7 +66,8 @@ const PRICING_PLANS = [
     badge: 'MOST POPULAR',
     price: 'INR 149 / month',
     approxUsd: '~$1.79 / month',
-    annual: 'INR 1,499/year (2 months free)',
+    annual: 'INR 999/year — save 44%',
+    anchor: 'Costs less than one private tuition session per month',
     summary: 'Full access for Class 9–12 board and entrance preparation.',
     includes: [
       'Unlimited chapters across 35+ boards',
@@ -78,59 +84,64 @@ const PRICING_PLANS = [
     cta: 'Upgrade to Student Pro',
     role: 'student',
   },
+  // ── TEACHERS ──
   {
-    id: 'school-starter',
-    name: 'School Starter',
-    price: 'INR 999 / month',
-    approxUsd: '~$11.99 / month',
-    annual: 'Schools up to 300 students',
-    summary: 'Entry institutional plan with core teacher + evaluation workflows.',
+    id: 'teacher-basic',
+    name: 'Teacher Basic',
+    price: 'INR 499 / month',
+    approxUsd: '~$5.99 / month',
+    annual: 'INR 4,999/year (save 2 months)',
+    anchor: 'Fastest early revenue — fastest to close',
+    summary: 'For individual teachers who want to cut evaluation time and generate better question papers.',
     includes: [
-      '10 teacher/tutor accounts',
-      '300 student accounts',
-      'Question Master with unlimited paper generation',
-      'AI evaluation up to 200 answer sheets/month',
+      '1 teacher account',
+      'Question Master — unlimited paper generation',
+      'AI evaluation up to 100 answer sheets/month',
       'Parent email reports after each evaluation',
-      'Exam ID system with answer key management',
-      'School admin dashboard + basic analytics',
+      'Exam ID + answer key management',
+      'Basic student performance analytics',
     ],
     excludes: [
+      'Student accounts',
       'Bulk ZIP evaluation upload',
-      'Multi-student single PDF evaluation',
-      'Custom school branding on reports',
+      'Custom report branding',
     ],
-    cta: 'Start School Starter',
-    role: 'school_admin',
+    cta: 'Start Teacher Plan',
+    role: 'teacher',
   },
   {
-    id: 'school-growth',
-    name: 'School Growth',
-    badge: 'MOST POPULAR',
-    price: 'INR 2,499 / month',
-    approxUsd: '~$29.99 / month',
-    annual: 'Schools up to 800 students',
-    summary: 'Full-featured institutional plan with priority delivery and support.',
+    id: 'teacher-pro',
+    name: 'Teacher Pro',
+    badge: 'BEST FOR TEACHERS',
+    price: 'INR 1,499 / month',
+    approxUsd: '~$17.99 / month',
+    annual: 'INR 14,999/year (save 2 months)',
+    anchor: null,
+    summary: 'For serious teachers, tutors, and home educators managing multiple classes.',
     includes: [
-      'Unlimited teacher/tutor accounts',
-      '800 student accounts',
+      '1 teacher account',
+      'Unlimited paper generation (Question Master)',
       'Unlimited AI answer sheet evaluation',
-      'Bulk ZIP evaluation support',
+      'Bulk ZIP evaluation upload',
       'Multi-student single PDF evaluation',
-      'Business-hours phone support',
-      'Custom branding on printed reports',
-      'Quarterly performance review call',
-      'Priority bug fixes and feature requests',
+      'Up to 60 student accounts included',
+      'Branded question papers with name/logo',
+      'Parent email reports after each evaluation',
+      'Full student performance dashboard',
+      'Priority WhatsApp support',
     ],
     excludes: [],
-    cta: 'Book Growth Demo',
-    role: 'school_admin',
+    cta: 'Upgrade to Teacher Pro',
+    role: 'teacher',
   },
+  // ── COACHING ──
   {
     id: 'coaching',
     name: 'Coaching Institute',
     price: 'INR 99 / student / month',
     approxUsd: '~$1.19 / student / month',
     annual: 'Minimum 20 students (INR 1,980/month)',
+    anchor: '500 students → ₹59,400/month revenue for Arthavi',
     summary: 'Scalable per-student pricing for JEE, NEET, and board coaching.',
     includes: [
       'Full Student Pro access for each enrolled student',
@@ -147,12 +158,14 @@ const PRICING_PLANS = [
     cta: 'Get Coaching Plan',
     role: 'institute',
   },
+  // ── ENTERPRISE ──
   {
     id: 'enterprise',
     name: 'Enterprise & Government',
     price: 'Custom pricing',
     approxUsd: 'Contact sales',
     annual: 'For 5+ schools, district deployments, and govt partnerships',
+    anchor: null,
     summary: 'MOU and tender compliant deployment for chains, districts, and agencies.',
     includes: [
       'Custom school, teacher, and student allocations',
@@ -213,6 +226,20 @@ const DEMO_CONTENT = {
       correct: 0,
       explanation: "Using Euclid's division: 91 = 26×3 + 13, then 26 = 13×2 + 0. So HCF = 13. Options B and C are the original numbers; D (1) is trivially common but not the highest.",
     },
+    mcqs: [
+      { q: 'The HCF of 26 and 91 is:', opts: ['13', '26', '91', '7'], correct: 0, explanation: "91 = 26×3 + 13; 26 = 13×2 + 0. By Euclid's algorithm, HCF = 13." },
+      { q: 'Which of the following is irrational?', opts: ['√4', '√9', '√2', '22/7'], correct: 2, explanation: '√4 = 2 and √9 = 3 are rational. 22/7 is rational. √2 = 1.41421… is non-terminating, non-repeating — irrational.' },
+      { q: 'LCM(12, 18) = ?', opts: ['6', '24', '36', '72'], correct: 2, explanation: '12 = 2²×3; 18 = 2×3². LCM = 2²×3² = 36. Cross-check: 12×18 = 216 = HCF(6) × LCM(36) ✓' },
+      { q: "Euclid's Division Lemma: a = bq + r, where r satisfies:", opts: ['0 ≤ r < a', '0 ≤ r < b', 'r > b', '0 < r ≤ b'], correct: 1, explanation: 'The remainder r must be ≥ 0 and strictly less than the divisor b. When r = 0, b divides a exactly.' },
+      { q: 'If HCF(a, b) = 4 and LCM(a, b) = 48, then a × b = ?', opts: ['192', '44', '52', '12'], correct: 0, explanation: 'For any two numbers: HCF × LCM = a × b. So a × b = 4 × 48 = 192.' },
+    ],
+    sampleQuestions: [
+      "What is Euclid's Division Algorithm and how do I use it to find HCF?",
+      'How do I prove that √2 is irrational?',
+      'What is the Fundamental Theorem of Arithmetic?',
+      'How are HCF and LCM related to each other?',
+      'Explain the difference between rational and irrational numbers with examples.',
+    ],
     questions: [
       { n: 1, type: 'MCQ (1 mark)',           q: 'The product of two numbers is 1680 and their HCF is 12. Their LCM is:', opts: ['140', '120', '180', '200'], ans: 'A) 140' },
       { n: 2, type: 'Short Answer (2 marks)', q: 'Prove that √2 is irrational using contradiction.', ans: 'Assume √2 = p/q in lowest terms. Then p² = 2q², so p is even. Let p = 2k → q is also even. Contradiction — p, q not coprime.' },
@@ -241,6 +268,20 @@ const DEMO_CONTENT = {
       correct: 1,
       explanation: 'Decomposition breaks one compound into simpler substances. Water decomposes into H₂ and O₂. Option A is neutralisation; C is displacement; D is combination.',
     },
+    mcqs: [
+      { q: 'Which of the following is an example of a decomposition reaction?', opts: ['NaOH + HCl → NaCl + H₂O', '2H₂O → 2H₂ + O₂', 'Fe + CuSO₄ → FeSO₄ + Cu', 'CaO + H₂O → Ca(OH)₂'], correct: 1, explanation: 'Decomposition: one compound breaks into simpler substances. A=neutralisation, C=displacement, D=combination.' },
+      { q: '2Mg + O₂ → 2MgO is an example of which type of reaction?', opts: ['Decomposition', 'Displacement', 'Combination', 'Double Displacement'], correct: 2, explanation: 'Two or more substances combine to form a single product — this is a combination (synthesis) reaction.' },
+      { q: 'CaCO₃ → CaO + CO₂ (on heating) is classified as:', opts: ['Combination', 'Decomposition', 'Displacement', 'Redox'], correct: 1, explanation: 'Calcium carbonate breaks into two simpler substances when heated — thermal decomposition reaction.' },
+      { q: 'Respiration is classified as a _______ reaction.', opts: ['Combination', 'Reversible', 'Exothermic', 'Endothermic'], correct: 2, explanation: 'Respiration releases energy as heat, making it an exothermic reaction, just like combustion.' },
+      { q: 'Zinc reacts with dilute H₂SO₄ to produce:', opts: ['ZnO and water', 'ZnSO₄ and H₂ gas', 'Zn(OH)₂ and SO₂', 'ZnS and H₂O'], correct: 1, explanation: 'Zn + H₂SO₄ → ZnSO₄ + H₂↑ — zinc displaces hydrogen from dilute sulfuric acid.' },
+    ],
+    sampleQuestions: [
+      'What is the difference between exothermic and endothermic reactions?',
+      'How do you balance a chemical equation step by step?',
+      'What are the different types of chemical reactions with examples?',
+      'Explain oxidation and reduction reactions with an example.',
+      'What is the Law of Conservation of Mass and how does it apply to reactions?',
+    ],
     questions: [
       { n: 1, type: 'MCQ (1 mark)',           q: 'Which gas is released as a by-product of photosynthesis?', opts: ['CO₂', 'N₂', 'O₂', 'H₂'], ans: 'C) O₂' },
       { n: 2, type: 'Short Answer (2 marks)', q: 'Define chlorophyll and state its role in photosynthesis.', ans: 'Green pigment in chloroplasts that absorbs sunlight for the light reactions of photosynthesis.' },
@@ -269,6 +310,20 @@ const DEMO_CONTENT = {
       correct: 2,
       explanation: "Lencho had asked God for exactly 100 pesos. His faith was so absolute that when only 70 arrived, he assumed the post office staff must have stolen the remaining 30 pesos.",
     },
+    mcqs: [
+      { q: "Why did Lencho call the post office employees 'a bunch of crooks'?", opts: ["They didn't deliver his letter", 'They opened his letter without permission', 'He received 70 pesos instead of 100', 'They laughed at his letter'], correct: 2, explanation: 'His faith in God was absolute — he believed God sent exactly 100 pesos, so the missing 30 must have been stolen by the postal workers.' },
+      { q: "What destroyed Lencho's crop?", opts: ['Drought', 'Floods', 'Hailstorm', 'Locusts'], correct: 2, explanation: 'A sudden hailstorm (large hailstones, not rain) turned his corn fields into a white blanket, destroying everything.' },
+      { q: 'What did Lencho initially compare the large raindrops to?', opts: ['Silver coins', 'New coins', 'Pearls', 'Diamonds'], correct: 1, explanation: "Lencho compared the large drops to 'new coins' — the ten-cent pieces he needed to buy his crops." },
+      { q: "What is the central literary device in 'A Letter to God'?", opts: ['Personification', 'Symbolism', 'Dramatic irony', 'Alliteration'], correct: 2, explanation: "Dramatic irony: readers know the postal workers are the helpers, but Lencho attributes help to God and accuses the same people of theft." },
+      { q: 'How did the postmaster collect money for Lencho?', opts: ['From government funds', 'From his own salary and employee donations', 'He borrowed from a bank', 'He used postal stamps'], correct: 1, explanation: "The postmaster donated part of his own salary and also collected contributions from his colleagues as an act of charity on behalf of 'God'." },
+    ],
+    sampleQuestions: [
+      "What is the central theme of 'A Letter to God'?",
+      'Describe the character of Lencho and what his faith tells us about him.',
+      'What is dramatic irony? Explain how it works in this story.',
+      'Why do you think the postmaster helped Lencho? What does this reveal about human nature?',
+      'How did Lencho react when he received the money? What does this say about blind faith?',
+    ],
     questions: [
       { n: 1, type: 'MCQ (1 mark)',           q: 'What did Lencho initially compare the raindrops to?', opts: ['Silver coins', 'New coins', 'Pearls', 'Diamonds'], ans: 'B) New coins' },
       { n: 2, type: 'Short Answer (2 marks)', q: "Why was the postmaster surprised when he read Lencho's first letter?", ans: "A man wrote directly to God with complete faith that God would respond. The postmaster admired his unshakeable belief and decided to help." },
@@ -297,6 +352,20 @@ const DEMO_CONTENT = {
       correct: 2,
       explanation: "The Congress of Vienna, led by conservative powers Britain, Russia, Prussia, and Austria, aimed to restore Europe's pre-Napoleon monarchies and suppress liberal-nationalist ideas.",
     },
+    mcqs: [
+      { q: 'The Congress of Vienna (1815) was primarily aimed at:', opts: ['Unifying Germany under Prussia', 'Dismantling the Ottoman Empire', 'Restoring conservative governments across Europe', 'Creating a League of Nations'], correct: 2, explanation: "Metternich's Congress of Vienna restored pre-Napoleon monarchies and suppressed liberal-nationalist ideas across Europe." },
+      { q: 'German unification was completed in the year:', opts: ['1848', '1861', '1871', '1815'], correct: 2, explanation: 'After the Franco-Prussian War, Bismarck proclaimed the unified German Empire at Versailles in 1871.' },
+      { q: 'Who led the armed volunteers (Redshirts) through Southern Italy?', opts: ['Bismarck', 'Cavour', 'Mazzini', 'Garibaldi'], correct: 3, explanation: 'Giuseppe Garibaldi led the Redshirts who conquered southern Italy and handed territories to King Victor Emmanuel II.' },
+      { q: "'Blood and Iron' policy is associated with:", opts: ['Garibaldi', 'Mazzini', 'Bismarck', 'Metternich'], correct: 2, explanation: 'Bismarck of Prussia believed unification required military strength (blood) and industrial power (iron) over idealist speeches.' },
+      { q: 'The allegorical female figure representing the German nation was called:', opts: ['Marianne', 'Germania', 'Britannia', 'Italia'], correct: 1, explanation: 'Germania was depicted with a sword and oak crown, symbolising German national strength and unity.' },
+    ],
+    sampleQuestions: [
+      'How did the French Revolution contribute to the rise of nationalism in Europe?',
+      'What role did Bismarck play in German unification?',
+      'What was the Congress of Vienna and what were its outcomes?',
+      'Who were Garibaldi and Cavour and how did they unify Italy?',
+      'What is the difference between a nation and a nation-state?',
+    ],
     questions: [
       { n: 1, type: 'MCQ (1 mark)',           q: 'German unification was completed in which year?', opts: ['1848', '1861', '1871', '1815'], ans: 'C) 1871' },
       { n: 2, type: 'Short Answer (2 marks)', q: "What role did Bismarck play in German unification?", ans: "As Prussian Chancellor, Bismarck used 'blood and iron' — three wars (Denmark, Austria, France) to unify German states under Prussian leadership by 1871." },
@@ -331,8 +400,9 @@ function DemoSection({ onRegister }) {
   const [chLoading, setChLoading] = useState(false)
   const [chFlipIdx, setChFlipIdx] = useState(null)
   // Practice
-  const [prSelected, setPrSelected] = useState(null)
-  const [prAnswered, setPrAnswered] = useState(false)
+  const [prSubject, setPrSubject] = useState('')
+  const [prAnswers, setPrAnswers] = useState({})
+  const [prSubmitted, setPrSubmitted] = useState(false)
   // Tutor
   const [tutMsg, setTutMsg] = useState('')
   const [tutMessages, setTutMessages] = useState([...DEMO_CHAT_INIT])
@@ -347,6 +417,9 @@ function DemoSection({ onRegister }) {
 
   useEffect(() => { tutEndRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [tutMessages, tutLoading])
 
+  // When user selects a subject in Curriculum Hub, auto-populate Practice tab
+  useEffect(() => { if (chSubject && !prSubmitted) setPrSubject(chSubject) }, [chSubject])
+
   const markUsed = (feature) => {
     const updated = { ...used, [feature]: true }
     setUsed(updated)
@@ -357,10 +430,6 @@ function DemoSection({ onRegister }) {
     if (used.curriculum) { setGate('curriculum'); return }
     setChTool(tool); setChLoading(true); setChResult(null)
     setTimeout(() => { setChLoading(false); setChResult(tool); markUsed('curriculum') }, 1800)
-  }
-  const submitPractice = () => {
-    if (prSelected === null || prAnswered || used.practice) return
-    setPrAnswered(true); markUsed('practice')
   }
   const sendTutorMsg = () => {
     const msg = tutMsg.trim()
@@ -529,42 +598,86 @@ function DemoSection({ onRegister }) {
               <div className="lp-demo-panel-hdr">
                 <div>
                   <div className="lp-demo-panel-title">✏️ Question Practice</div>
-                  <div className="lp-demo-panel-hint">Select your answer and get instant AI feedback</div>
+                  <div className="lp-demo-panel-hint">
+                    {prSubject ? `${prSubject} · 5 practice questions` : 'Select a subject to load questions'}
+                  </div>
                 </div>
                 {used.practice ? <span className="lp-demo-badge-used">✓ Demo Used</span> : <span className="lp-demo-badge-free">1 free attempt</span>}
               </div>
-              <div className="lp-demo-practice-card">
-                <div className="lp-demo-practice-meta">
-                  <span>CBSE · Class 10 · Science</span>
-                  <span>Chapter 1: Chemical Reactions</span>
-                  <span className="lp-demo-type-pill">MCQ · 1 Mark</span>
-                </div>
-                <p className="lp-demo-practice-q">{DEMO_CONTENT['Science'].mcq.q}</p>
-                <div className="lp-demo-practice-opts">
-                  {DEMO_CONTENT['Science'].mcq.opts.map((o, i) => (
-                    <div key={i}
-                      className={['lp-demo-pr-opt', prSelected === i ? 'lp-pr-selected' : '', prAnswered && i === DEMO_CONTENT['Science'].mcq.correct ? 'lp-pr-correct' : '', prAnswered && prSelected === i && i !== DEMO_CONTENT['Science'].mcq.correct ? 'lp-pr-wrong' : ''].join(' ').trim()}
-                      onClick={() => !prAnswered && !used.practice && setPrSelected(i)}>
-                      <span className="lp-demo-pr-letter">{String.fromCharCode(65 + i)}</span>
-                      <span>{o}</span>
-                      {prAnswered && i === DEMO_CONTENT['Science'].mcq.correct && <span className="lp-pr-icon lp-pr-check">✓</span>}
-                      {prAnswered && prSelected === i && i !== DEMO_CONTENT['Science'].mcq.correct && <span className="lp-pr-icon lp-pr-cross">✗</span>}
-                    </div>
-                  ))}
-                </div>
-                {!prAnswered
-                  ? <button className="lp-demo-submit-btn" onClick={submitPractice} disabled={prSelected === null || used.practice}>Submit Answer →</button>
-                  : (
-                    <div className="lp-demo-pr-feedback">
-                      <div className={`lp-demo-pr-verdict${prSelected === DEMO_CONTENT['Science'].mcq.correct ? ' lp-verdict-ok' : ' lp-verdict-no'}`}>
-                        {prSelected === DEMO_CONTENT['Science'].mcq.correct ? '🎉 Correct! Well done!' : `❌ Not quite — the correct answer is ${String.fromCharCode(65 + DEMO_CONTENT['Science'].mcq.correct)}`}
-                      </div>
-                      <div className="lp-demo-expl">💡 {DEMO_CONTENT['Science'].mcq.explanation}</div>
-                      <div className="lp-demo-nudge" style={{ marginTop: 12 }}>Practice hundreds more questions? <button onClick={() => setGate('practice')}>Sign up free →</button></div>
-                    </div>
-                  )
-                }
+              <div style={{ padding: '12px 32px 16px', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                <select className="lp-demo-select"
+                  value={prSubject}
+                  onChange={e => { setPrSubject(e.target.value); setPrAnswers({}); setPrSubmitted(false) }}
+                  disabled={used.practice}>
+                  <option value="">— Select Subject —</option>
+                  {['Science', 'Mathematics', 'English', 'Social Science'].map(s => <option key={s}>{s}</option>)}
+                </select>
+                {!prSubject && chSubject && (
+                  <button className="lp-demo-tool-btn"
+                    style={{ padding: '6px 14px', fontSize: 12 }}
+                    onClick={() => setPrSubject(chSubject)}>
+                    Use "{chSubject}" from Curriculum Hub →
+                  </button>
+                )}
               </div>
+              {!prSubject ? (
+                <div className="lp-demo-empty">
+                  <div className="lp-demo-empty-icon">✏️</div>
+                  <p>Select a subject above to load 5 practice questions.
+                    {chSubject && <> You picked <strong>{chSubject}</strong> in Curriculum Hub — click the button above.</>}
+                  </p>
+                </div>
+              ) : (
+                <div style={{ padding: '0 32px 28px' }}>
+                  {(DEMO_CONTENT[prSubject]?.mcqs || []).map((mcq, qi) => {
+                    const answered = prAnswers[qi] !== undefined
+                    const correct = prSubmitted && prAnswers[qi] === mcq.correct
+                    const wrong = prSubmitted && answered && prAnswers[qi] !== mcq.correct
+                    return (
+                      <div key={qi} style={{ marginBottom: 18, padding: 16, borderRadius: 10, background: prSubmitted ? (correct ? '#f0fdf4' : wrong ? '#fef2f2' : '#f8fafc') : '#f8fafc', border: `1.5px solid ${prSubmitted ? (correct ? '#86efac' : wrong ? '#fca5a5' : '#e2e8f0') : '#e2e8f0'}` }}>
+                        <div style={{ fontWeight: 600, fontSize: 14, color: '#1e293b', marginBottom: 10 }}>
+                          <span style={{ color: 'var(--indigo)', marginRight: 6 }}>Q{qi + 1}.</span>{mcq.q}
+                        </div>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                          {mcq.opts.map((opt, oi) => {
+                            const isSel = prAnswers[qi] === oi
+                            const isRight = prSubmitted && oi === mcq.correct
+                            const isWrong = prSubmitted && isSel && oi !== mcq.correct
+                            return (
+                              <label key={oi} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 10px', borderRadius: 7, cursor: prSubmitted || used.practice ? 'default' : 'pointer', background: isRight ? '#dcfce7' : isWrong ? '#fee2e2' : isSel ? '#eef2ff' : 'white', border: `1px solid ${isRight ? '#86efac' : isWrong ? '#fca5a5' : isSel ? '#a5b4fc' : '#e2e8f0'}`, fontSize: 13 }}>
+                                <input type="radio" name={`q${qi}`} value={oi} checked={isSel} disabled={prSubmitted || used.practice}
+                                  onChange={() => setPrAnswers(a => ({ ...a, [qi]: oi }))} style={{ accentColor: 'var(--indigo)' }} />
+                                <span style={{ fontWeight: 600, color: 'var(--indigo)', marginRight: 4 }}>{String.fromCharCode(65 + oi)})</span>
+                                {opt}
+                                {isRight && <span style={{ marginLeft: 'auto', color: '#16a34a', fontWeight: 700 }}>✓</span>}
+                                {isWrong && <span style={{ marginLeft: 'auto', color: '#dc2626', fontWeight: 700 }}>✗</span>}
+                              </label>
+                            )
+                          })}
+                        </div>
+                        {prSubmitted && (
+                          <div style={{ marginTop: 8, fontSize: 12, color: '#475569', background: '#f1f5f9', borderRadius: 6, padding: '6px 10px' }}>
+                            💡 {mcq.explanation}
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
+                  {!prSubmitted
+                    ? <button className="lp-demo-submit-btn"
+                        onClick={() => { if (Object.keys(prAnswers).length === 0 || used.practice) return; setPrSubmitted(true); markUsed('practice') }}
+                        disabled={Object.keys(prAnswers).length === 0 || used.practice}>
+                        Check My Answers →
+                      </button>
+                    : (
+                      <div className="lp-demo-nudge" style={{ marginTop: 8 }}>
+                        {`Score: ${(DEMO_CONTENT[prSubject]?.mcqs || []).filter((m, i) => prAnswers[i] === m.correct).length} / 5 correct! `}
+                        <button onClick={() => setGate('practice')}>Sign up for unlimited practice →</button>
+                      </div>
+                    )
+                  }
+                </div>
+              )}
             </div>
           )}
           {/* AI TUTOR */}
@@ -573,10 +686,26 @@ function DemoSection({ onRegister }) {
               <div className="lp-demo-panel-hdr" style={{ padding: '24px 32px 16px', borderBottom: '1px solid #F0EAFF', margin: 0 }}>
                 <div>
                   <div className="lp-demo-panel-title">🤖 AI Tutor — Arthavi</div>
-                  <div className="lp-demo-panel-hint">Ask one question — trained on your entire syllabus</div>
+                  <div className="lp-demo-panel-hint">
+                    {chSubject ? `Tutoring context: ${chSubject} · ask anything about this subject` : 'Ask one question — trained on your entire syllabus'}
+                  </div>
                 </div>
                 {used.tutor ? <span className="lp-demo-badge-used">✓ Demo Used</span> : <span className="lp-demo-badge-free">1 free message</span>}
               </div>
+              {!chSubject && (
+                <div style={{ padding: '10px 32px', background: '#faf7ff', borderBottom: '1px solid #F0EAFF', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', fontSize: 13, color: '#6b7280' }}>
+                  <span>💡 Select a subject in</span>
+                  <button className="lp-demo-tool-btn" style={{ padding: '4px 10px', fontSize: 12 }} onClick={() => setTab('curriculum')}>Curriculum Hub →</button>
+                  <span>to get subject-specific starter questions here.</span>
+                </div>
+              )}
+              {chSubject && !used.tutor && tutMessages.length <= 1 && DEMO_CONTENT[chSubject]?.sampleQuestions && (
+                <div style={{ padding: '10px 32px 12px', borderBottom: '1px solid #F0EAFF', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  {DEMO_CONTENT[chSubject].sampleQuestions.slice(0, 3).map(q => (
+                    <button key={q} className="chip selected" style={{ fontSize: 12 }} onClick={() => setTutMsg(q)}>{q}</button>
+                  ))}
+                </div>
+              )}
               <div className="lp-demo-chat-wrap">
                 <div className="lp-demo-chat-msgs">
                   {tutMessages.map((m, i) => (
@@ -597,7 +726,7 @@ function DemoSection({ onRegister }) {
                 </div>
                 <div className="lp-demo-chat-bar">
                   <input className="lp-demo-chat-inp"
-                    placeholder={used.tutor ? 'Sign up for unlimited AI tutoring!' : 'Ask Arthavi anything… e.g. "Explain Real Numbers"'}
+                    placeholder={used.tutor ? 'Sign up for unlimited AI tutoring!' : chSubject ? `Ask about ${chSubject}…` : 'Ask Arthavi anything… e.g. "Explain Real Numbers"'}
                     value={tutMsg}
                     onChange={e => setTutMsg(e.target.value)}
                     onKeyDown={e => e.key === 'Enter' && sendTutorMsg()}
@@ -717,13 +846,16 @@ function useFadeIn() {
   return ref
 }
 
-export default function LandingPage() {
+export default function LandingPage({ onUpgrade }) {
+  const { token } = useAuth()
+  const { t, td } = useLang()
   const [modalOpen, setModalOpen] = useState(false)
   const [modalForm, setModalForm] = useState('login')
   const [modalRole, setModalRole] = useState('student')
   const [mobileMenu, setMobileMenu] = useState(false)
   const [scrolled, setScrolled] = useState(false)
   const [coachingStudents, setCoachingStudents] = useState(20)
+  const [pendingPlan, setPendingPlan] = useState(null)
   const pageRef = useFadeIn()
 
   const openModal = (form = 'login', role = 'student') => {
@@ -747,16 +879,17 @@ export default function LandingPage() {
           <Logo size={60} full />
         </a>
         <div className="lp-nav-links">
-          <a href="#roles">For Schools</a>
-          <a href="#features">Features</a>
-          <a href="#how">How it Works</a>
-          <a href="#pricing">Pricing</a>
-          <a href="#demo" style={{ color:'#6B52B0', fontWeight:700 }}>Try Demo ✨</a>
-          <a href="#boards">Boards</a>
+          <a href="#roles">{t('nav.for_schools')}</a>
+          <a href="#features">{t('nav.features')}</a>
+          <a href="#how">{t('nav.how_it_works')}</a>
+          <a href="#pricing">{t('nav.pricing')}</a>
+          <a href="#demo" style={{ color:'#6B52B0', fontWeight:700 }}>{t('nav.try_demo')}</a>
+          <a href="#boards">{t('nav.boards')}</a>
         </div>
         <div className="lp-nav-actions">
-          <button className="lp-btn-ghost" onClick={() => openModal('login')}>Sign In</button>
-          <button className="lp-btn-primary" onClick={() => openModal('register')}>Get Started Free →</button>
+          <LangToggle />
+          <button className="lp-btn-ghost" onClick={() => openModal('login')}>{t('nav.sign_in')}</button>
+          <button className="lp-btn-primary" onClick={() => openModal('register')}>{t('nav.get_started')}</button>
         </div>
         <button className="lp-hamburger" onClick={() => setMobileMenu(true)} aria-label="Open menu">
           <span/><span/><span/>
@@ -775,13 +908,14 @@ export default function LandingPage() {
               {['#roles','#features','#how','#pricing','#demo','#boards'].map((h, i) => (
                 <a key={h} href={h} onClick={() => setMobileMenu(false)}
                   style={h === '#demo' ? { color:'#6B52B0', background:'#F0EAFF' } : {}}>
-                  {['For Schools','Features','How it Works','Pricing','Try Demo ✨','Boards'][i]}
+                  {[t('nav.for_schools'),t('nav.features'),t('nav.how_it_works'),t('nav.pricing'),t('nav.try_demo'),t('nav.boards')][i]}
                 </a>
               ))}
             </nav>
             <div className="lp-mobile-btns">
-              <button className="lp-btn-ghost" style={{ width:'100%' }} onClick={() => { setMobileMenu(false); openModal('login') }}>Sign In</button>
-              <button className="lp-btn-primary" style={{ width:'100%' }} onClick={() => { setMobileMenu(false); openModal('register') }}>Get Started Free →</button>
+              <div style={{ display:'flex', justifyContent:'center', marginBottom:8 }}><LangToggle /></div>
+              <button className="lp-btn-ghost" style={{ width:'100%' }} onClick={() => { setMobileMenu(false); openModal('login') }}>{t('nav.sign_in')}</button>
+              <button className="lp-btn-primary" style={{ width:'100%' }} onClick={() => { setMobileMenu(false); openModal('register') }}>{t('nav.get_started')}</button>
             </div>
           </div>
         </div>
@@ -797,33 +931,34 @@ export default function LandingPage() {
         <div className="lp-hero-inner">
           <div className="lp-hero-badge lp-fade">
             <span className="lp-badge-dot"/>
-            🇮🇳 Built for Indian Schools — CBSE, ICSE &amp; State Boards
+            {t('hero.badge')}
           </div>
           <h1 className="lp-h1 lp-fade">
-            Give Every Student<br/>
-            a <span className="lp-gradient-text">Personal AI Tutor.</span>
+            {t('hero.h1_line1')}<br/>
+            {t('hero.h1_line2')}<span className="lp-gradient-text">{t('hero.h1_highlight')}</span>
           </h1>
           <div className="lp-hero-chips lp-fade">
-            <span className="lp-chip">✅ End Tuition Stress</span>
-            <span className="lp-chip">⚡ 90% Less Teacher Workload</span>
-            <span className="lp-chip">📊 Real-Time Progress Tracking</span>
+            <span className="lp-chip">{t('hero.chip1')}</span>
+            <span className="lp-chip">{t('hero.chip2')}</span>
+            <span className="lp-chip">{t('hero.chip3')}</span>
+            <span className="lp-chip">{t('hero.chip4')}</span>
           </div>
           <p className="lp-hero-sub lp-fade">
-            Arthavi combines learning, testing, evaluation, and progress tracking into one intelligent platform — built specifically for Indian schools (CBSE, ICSE &amp; all State Boards).
+            {t('hero.sub')}
           </p>
           <div className="lp-hero-ctas lp-fade">
-            <button className="lp-btn-hero-primary" onClick={() => openModal('register', 'student')}>
-              🚀 Start Learning Free
+            <button className="lp-btn-hero-primary" onClick={() => openModal('register', 'school_admin')}>
+              {t('hero.cta_school')}
             </button>
             <a className="lp-btn-try-demo" href="#demo">
-              ✨ Try Live Demo
+              {t('hero.cta_demo')}
             </a>
-            <button className="lp-btn-hero-sec" onClick={() => openModal('register', 'school_admin')}>
-              🏫 Book Demo
+            <button className="lp-btn-hero-sec" onClick={() => openModal('register', 'student')}>
+              {t('hero.cta_student')}
             </button>
           </div>
           <div className="lp-stats lp-fade">
-            {STATS.map(s => (
+            {td('stats').map(s => (
               <div key={s.label} className="lp-stat">
                 <div className="lp-stat-num">{s.num}</div>
                 <div className="lp-stat-label">{s.label}</div>
@@ -913,6 +1048,32 @@ export default function LandingPage() {
         </div>
       </section>
 
+      {/* ════════════════════ SCHOOL PAIN ════════════════════ */}
+      <section className="lp-section lp-bg-white" id="pain">
+        <div className="lp-section-inner">
+          <div className="lp-section-eyebrow">THE REAL PROBLEM</div>
+          <h2 className="lp-h2">Schools Are Still<br/>Running on Manual Work</h2>
+          <p className="lp-section-sub">Every teacher, admin and parent faces the same bottlenecks — Arthavi solves all three.</p>
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(240px,1fr))', gap:24, marginTop:48 }}>
+            <div style={{ padding:'32px 28px', borderRadius:20, border:'2px solid #fee2e2', background:'#fff5f5', textAlign:'center' }}>
+              <div style={{ fontSize:36, marginBottom:14 }}>⏰</div>
+              <div style={{ fontWeight:800, fontSize:17, color:'#991b1b', marginBottom:10 }}>Time Lost</div>
+              <p style={{ fontSize:14, color:'#6b7280', lineHeight:1.7 }}>Teachers spend 5–10 hours every week manually checking answer papers — time that could go to actual teaching.</p>
+            </div>
+            <div style={{ padding:'32px 28px', borderRadius:20, border:'2px solid #fde68a', background:'#fffbeb', textAlign:'center' }}>
+              <div style={{ fontSize:36, marginBottom:14 }}>🔁</div>
+              <div style={{ fontWeight:800, fontSize:17, color:'#92400e', marginBottom:10 }}>Repetitive Work</div>
+              <p style={{ fontSize:14, color:'#6b7280', lineHeight:1.7 }}>Question papers are manually created from scratch every single exam. Same effort, every time, for every subject.</p>
+            </div>
+            <div style={{ padding:'32px 28px', borderRadius:20, border:'2px solid #bfdbfe', background:'#eff6ff', textAlign:'center' }}>
+              <div style={{ fontSize:36, marginBottom:14 }}>📭</div>
+              <div style={{ fontWeight:800, fontSize:17, color:'#1e40af', marginBottom:10 }}>No Visibility</div>
+              <p style={{ fontSize:14, color:'#6b7280', lineHeight:1.7 }}>Parents and admins have no real-time insight into student performance until results arrive — weeks too late.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
       {/* ════════════════════ PROBLEM ════════════════════ */}
       <section className="lp-section lp-bg-cream" id="problem">
         <div className="lp-section-inner">
@@ -949,7 +1110,7 @@ export default function LandingPage() {
             One Platform. Every Academic Need Solved.
           </p>
           <p style={{ color:'rgba(255,255,255,.65)', maxWidth:620, margin:'20px auto 0', fontSize:16, lineHeight:1.85 }}>
-            Arthavi is an AI-powered education system designed specifically for Indian K-12 students, parents, and schools — covering CBSE, ICSE, and all State Boards. No tuition fees. No stress. Just intelligent learning.
+            Arthavi is an AI-powered education system designed for Indian K-12 students, teachers, and schools. One platform for evaluation, practice, learning, and reporting — no tuition fees, no manual overhead.
           </p>
         </div>
       </section>
@@ -992,13 +1153,122 @@ export default function LandingPage() {
           <h2 className="lp-h2">Six Ways Arthavi<br/>Changes Education</h2>
           <p className="lp-section-sub">Every benefit is real, measurable, and immediate — for students, parents, and teachers alike.</p>
           <div className="lp-features-grid">
-            {FEATURES.map((f, i) => (
+            {td('features').map((f, i) => (
               <div key={f.label} className="lp-feature-card lp-fade" style={{ animationDelay: `${i * 0.06}s` }}>
                 <div className="lp-feature-icon" style={{ background: f.color }}>{f.icon}</div>
                 <div className="lp-feature-name">{f.label}</div>
                 <p className="lp-feature-desc">{f.desc}</p>
               </div>
             ))}
+          </div>
+        </div>
+      </section>
+
+      {/* ════════════════════ SPECIALIZED LEARNING PATHS ════════════════════ */}
+      <section className="lp-section lp-bg-paper" id="specialized">
+        <div className="lp-section-inner">
+          <div className="lp-section-eyebrow">SPECIALIZED LEARNING PATHS</div>
+          <h2 className="lp-h2">Beyond the Syllabus —<br/>Prepare for Life After School</h2>
+          <p className="lp-section-sub">Arthavi doesn't just help with board exams. Discover India's most comprehensive tools for entrance exams, degree prep, career planning, and skill development.</p>
+          <div className="lp-sp-grid">
+
+            {/* Entrance Prep */}
+            <div className="lp-sp-card lp-sp-entrance lp-fade">
+              <div className="lp-sp-card-header">
+                <div className="lp-sp-icon">🎯</div>
+                <div>
+                  <div className="lp-sp-name">Entrance Prep</div>
+                  <div className="lp-sp-tagline">JEE · NEET · Unlimited AI Practice</div>
+                </div>
+              </div>
+              <ul className="lp-sp-list">
+                <li>Chapter-wise MCQs for JEE Main, JEE Advanced &amp; NEET UG</li>
+                <li>AI generates unlimited new questions — never run out of practice</li>
+                <li>Previous Year Questions with Most Repeated &amp; High Probability tags</li>
+                <li>Audio notes + AI Doubt Solver for every chapter</li>
+                <li>Weak area detection, revision mode &amp; daily target tracker</li>
+              </ul>
+              <div className="lp-sp-tags">
+                <span>JEE Main</span><span>JEE Advanced</span><span>NEET UG</span><span>AI Practice</span>
+              </div>
+              <button className="lp-sp-cta lp-sp-cta-entrance" onClick={() => openModal('register', 'student')}>
+                Start Entrance Prep →
+              </button>
+            </div>
+
+            {/* Career Compass */}
+            <div className="lp-sp-card lp-sp-career lp-fade" style={{ animationDelay:'0.1s' }}>
+              <div className="lp-sp-card-header">
+                <div className="lp-sp-icon">🧭</div>
+                <div>
+                  <div className="lp-sp-name">Career Compass</div>
+                  <div className="lp-sp-tagline">Explore · Plan · Achieve Your Goal</div>
+                </div>
+              </div>
+              <ul className="lp-sp-list">
+                <li>9 major career sectors: Civil Services, Defence, Banking, Railways &amp; more</li>
+                <li>Detailed eligibility, exam calendars &amp; salary ranges for every path</li>
+                <li>Free study material links from UPSC, NTA, SWAYAM &amp; official govt sites</li>
+                <li>Built-in MCQ coaching practice for each career path</li>
+                <li>Personal progress tracker to stay on target</li>
+              </ul>
+              <div className="lp-sp-tags">
+                <span>UPSC</span><span>SSC</span><span>Banking</span><span>State Jobs</span>
+              </div>
+              <button className="lp-sp-cta lp-sp-cta-career" onClick={() => openModal('register', 'student')}>
+                Explore Career Paths →
+              </button>
+            </div>
+
+            {/* Degree Hub */}
+            <div className="lp-sp-card lp-sp-degree lp-fade" style={{ animationDelay:'0.2s' }}>
+              <div className="lp-sp-card-header">
+                <div className="lp-sp-icon">🎓</div>
+                <div>
+                  <div className="lp-sp-name">Degree Hub</div>
+                  <div className="lp-sp-tagline">AI-Powered Degree Prep System</div>
+                </div>
+              </div>
+              <ul className="lp-sp-list">
+                <li>Full AI engine for BCA, BSc CS, BCom, BA Economics, BBA &amp; more</li>
+                <li>AI Smart Notes — auto-generate chapter summaries unit by unit</li>
+                <li>Practice MCQs with smart weak-area detection across all subjects</li>
+                <li>AI Mock Tests — unit tests, subject mocks with instant grading</li>
+                <li>AI Doubt Solver — chat with AI on any concept, derivation or problem</li>
+                <li>AI Study Planner — personalised day-by-day exam schedule</li>
+              </ul>
+              <div className="lp-sp-tags">
+                <span>BCA</span><span>BCom</span><span>BSc CS</span><span>AI Doubt</span><span>Mock Tests</span>
+              </div>
+              <button className="lp-sp-cta lp-sp-cta-degree" onClick={() => openModal('register', 'student')}>
+                Open Degree Hub →
+              </button>
+            </div>
+
+            {/* SkillUp Hub */}
+            <div className="lp-sp-card lp-sp-skill lp-fade" style={{ animationDelay:'0.3s' }}>
+              <div className="lp-sp-card-header">
+                <div className="lp-sp-icon">🎓</div>
+                <div>
+                  <div className="lp-sp-name">SkillUp Hub</div>
+                  <div className="lp-sp-tagline">1000+ Free Courses &amp; Certifications</div>
+                </div>
+              </div>
+              <ul className="lp-sp-list">
+                <li>Curated free courses from Google, Microsoft, NPTEL, SWAYAM &amp; more</li>
+                <li>AI/ML, Cloud, Data Science, Cybersecurity, Web Dev &amp; Digital Marketing</li>
+                <li>Free certificates from top companies &amp; government platforms</li>
+                <li>Track enrolled, in-progress and completed courses in one place</li>
+                <li>India-first — includes SWAYAM, iGOT, PMKVY &amp; Skill India programs</li>
+              </ul>
+              <div className="lp-sp-tags">
+                <span>AI &amp; ML</span><span>Cloud</span><span>Govt Certs</span><span>Free</span>
+              </div>
+              <button className="lp-sp-cta lp-sp-cta-skill" onClick={() => openModal('register', 'student')}>
+                Browse Free Courses →
+              </button>
+            </div>
+
           </div>
         </div>
       </section>
@@ -1073,16 +1343,15 @@ export default function LandingPage() {
       {/* ════════════════════ PRICING ════════════════════ */}
       <section className="lp-section lp-bg-paper" id="pricing">
         <div className="lp-section-inner">
-          <div className="lp-section-eyebrow">SECTION 5 — PRICING MODEL</div>
-          <h2 className="lp-h2">Simple, India-First Pricing<br/>for Students and Institutions</h2>
+          <div className="lp-section-eyebrow">PRICING</div>
+          <h2 className="lp-h2">Simple, Scalable Pricing<br/>for Students and Schools</h2>
           <p className="lp-section-sub" style={{ maxWidth: 820 }}>
-            All prices are in INR. At INR 1 = ${(1 * INR_TO_USD).toFixed(3)}, student plans sit around $1.20–$6/month per user globally while staying accessible locally.
-            Prices are reviewed quarterly and revised by {Math.round(ANNUAL_INCREASE_RATE * 100)}% annually as the brand compounds value.
+            Starts at less than ₹1 per student per day. All prices in INR — reviewed annually. Paid plans feel like a no-brainer.
           </p>
 
           <div className="lp-pricing-philosophy">
-            <strong>Pricing Philosophy:</strong> Free should be genuinely useful to drive word-of-mouth. Paid plans should feel like a no-brainer.
-            A school at INR 999/month pays less than one teacher&apos;s daily tutoring rate.
+            💡 <strong>Pricing Philosophy:</strong> Free should be genuinely useful to drive word-of-mouth. Paid plans should feel like a no-brainer. Schools pay per student per year — every student added goes directly to Arthavi revenue.
+            <br/><em style={{ color:'#6b52b0', fontWeight:600 }}>"Costs less than one private tuition session per month" — true for every plan.</em>
           </div>
 
           <div className="lp-pricing-grid">
@@ -1094,6 +1363,9 @@ export default function LandingPage() {
                 <p className="lp-price-usd">{plan.approxUsd}</p>
                 {plan.annual && <p className="lp-price-note">{plan.annual}</p>}
                 <p className="lp-price-summary">{plan.summary}</p>
+                {plan.anchor && (
+                  <p style={{ fontSize:12, color:'#6b52b0', fontWeight:700, background:'#f0eaff', borderRadius:8, padding:'7px 12px', margin:'0' }}>💡 {plan.anchor}</p>
+                )}
 
                 <div className="lp-price-list-wrap">
                   <p className="lp-price-list-title">Included</p>
@@ -1115,10 +1387,20 @@ export default function LandingPage() {
                   className={plan.badge ? 'lp-btn-primary' : 'lp-btn-ghost'}
                   onClick={() => {
                     if (plan.id === 'enterprise') {
-                      window.location.href = 'mailto:sales@arthavi.com?subject=Enterprise%20Pricing%20Inquiry'
+                      window.location.href = 'mailto:sales@arthavi.in?subject=Enterprise%20Pricing%20Inquiry'
                       return
                     }
-                    openModal('register', plan.role)
+                    if (plan.id === 'free-student') {
+                      openModal('register', plan.role)
+                      return
+                    }
+                    // Paid plan
+                    if (token) {
+                      onUpgrade && onUpgrade(plan)
+                    } else {
+                      setPendingPlan(plan)
+                      openModal('register', plan.role)
+                    }
                   }}
                 >
                   {plan.cta}
@@ -1149,10 +1431,54 @@ export default function LandingPage() {
               </strong>
             </div>
           </div>
+
+          {/* School per-student/year pricing */}
+          <div style={{ marginTop:52 }}>
+            <div style={{ textAlign:'center', marginBottom:32 }}>
+              <div style={{ display:'inline-block', padding:'4px 14px', borderRadius:100, background:'#eff6ff', color:'#1d4ed8', fontSize:12, fontWeight:700, letterSpacing:'.06em', marginBottom:12 }}>SCHOOL PLANS — PER STUDENT</div>
+              <h3 style={{ fontSize:22, fontWeight:800, color:'#1e293b', margin:'0 0 8px' }}>Per-Student Pricing for Schools</h3>
+              <p style={{ fontSize:14, color:'#6b7280' }}>500 students at ₹200 = <strong style={{ color:'#1e293b' }}>₹1 lakh/year</strong>. At ₹500 = <strong style={{ color:'#1e293b' }}>₹2.5 lakh/year</strong>. Pay only for enrolled students.</p>
+            </div>
+            <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(220px,1fr))', gap:20, maxWidth:780, margin:'0 auto' }}>
+              <div style={{ padding:'28px 24px', borderRadius:18, border:'1.5px solid #e2e8f0', background:'#fff', textAlign:'center' }}>
+                <div style={{ fontWeight:800, fontSize:16, marginBottom:6 }}>Starter</div>
+                <div style={{ fontSize:12, color:'#6b7280', marginBottom:16 }}>Small schools &amp; pilots</div>
+                <div style={{ fontSize:28, fontWeight:900, color:'#1e293b', lineHeight:1.1 }}>₹200</div>
+                <div style={{ fontSize:12, color:'#6b7280', marginBottom:4 }}>per student / year</div>
+                <div style={{ fontSize:11, color:'#16a34a', fontWeight:700, marginBottom:16 }}>300 students → ₹60,000/yr</div>
+                <ul style={{ listStyle:'none', padding:0, margin:'0 0 20px', display:'flex', flexDirection:'column', gap:8, textAlign:'left' }}>
+                  {['Up to 300 students','AI evaluation (200 sheets/mo)','Question paper generation','Parent email reports'].map(f => <li key={f} style={{ fontSize:13, color:'#374151', paddingLeft:18, position:'relative' }}><span style={{ position:'absolute', left:0, color:'#16a34a', fontWeight:800 }}>✓</span>{f}</li>)}
+                </ul>
+                <button style={{ width:'100%', padding:'10px', borderRadius:10, border:'1.5px solid #e2e8f0', background:'#fff', fontWeight:700, fontSize:13, cursor:'pointer' }} onClick={() => openModal('register', 'school_admin')}>Get Started</button>
+              </div>
+              <div style={{ padding:'28px 24px', borderRadius:18, border:'2px solid #6366f1', background:'linear-gradient(135deg,#eff6ff,#eef2ff)', textAlign:'center', position:'relative' }}>
+                <div style={{ position:'absolute', top:-12, left:'50%', transform:'translateX(-50%)', background:'#4f46e5', color:'#fff', borderRadius:100, padding:'3px 14px', fontSize:11, fontWeight:800 }}>★ MOST POPULAR</div>
+                <div style={{ fontWeight:800, fontSize:16, marginBottom:6 }}>Growth</div>
+                <div style={{ fontSize:12, color:'#6b7280', marginBottom:16 }}>Mid-size schools</div>
+                <div style={{ fontSize:28, fontWeight:900, color:'#1e293b', lineHeight:1.1 }}>₹350</div>
+                <div style={{ fontSize:12, color:'#6b7280', marginBottom:4 }}>per student / year</div>
+                <div style={{ fontSize:11, color:'#4f46e5', fontWeight:700, marginBottom:16 }}>500 students → ₹1,75,000/yr</div>
+                <ul style={{ listStyle:'none', padding:0, margin:'0 0 20px', display:'flex', flexDirection:'column', gap:8, textAlign:'left' }}>
+                  {['Up to 800 students','Unlimited AI evaluation','Bulk ZIP evaluation upload','Custom report branding','Priority support'].map(f => <li key={f} style={{ fontSize:13, color:'#374151', paddingLeft:18, position:'relative' }}><span style={{ position:'absolute', left:0, color:'#4f46e5', fontWeight:800 }}>✓</span>{f}</li>)}
+                </ul>
+                <button style={{ width:'100%', padding:'10px', borderRadius:10, border:'none', background:'#4f46e5', color:'#fff', fontWeight:700, fontSize:13, cursor:'pointer' }} onClick={() => openModal('register', 'school_admin')}>Book Demo</button>
+              </div>
+              <div style={{ padding:'28px 24px', borderRadius:18, border:'1.5px solid #e2e8f0', background:'#fff', textAlign:'center' }}>
+                <div style={{ fontWeight:800, fontSize:16, marginBottom:6 }}>Premium</div>
+                <div style={{ fontSize:12, color:'#6b7280', marginBottom:16 }}>Large schools &amp; groups</div>
+                <div style={{ fontSize:28, fontWeight:900, color:'#1e293b', lineHeight:1.1 }}>₹500</div>
+                <div style={{ fontSize:12, color:'#6b7280', marginBottom:4 }}>per student / year</div>
+                <div style={{ fontSize:11, color:'#b45309', fontWeight:700, marginBottom:16 }}>500 students → ₹2,50,000/yr</div>
+                <ul style={{ listStyle:'none', padding:0, margin:'0 0 20px', display:'flex', flexDirection:'column', gap:8, textAlign:'left' }}>
+                  {['Unlimited students','Dedicated account manager','On-site teacher training','Custom AI fine-tuning','SLA + priority uptime'].map(f => <li key={f} style={{ fontSize:13, color:'#374151', paddingLeft:18, position:'relative' }}><span style={{ position:'absolute', left:0, color:'#d97706', fontWeight:800 }}>✓</span>{f}</li>)}
+                </ul>
+                <button style={{ width:'100%', padding:'10px', borderRadius:10, border:'1.5px solid #fde68a', background:'#fffbeb', fontWeight:700, fontSize:13, cursor:'pointer' }} onClick={() => { window.location.href='mailto:sales@arthavi.in?subject=School%20Premium%20Plan' }}>Contact Sales</button>
+              </div>
+            </div>
+            <p style={{ textAlign:'center', marginTop:18, fontSize:12, color:'#94a3b8' }}>All school plans include student + teacher accounts, admin dashboard, parent reports &amp; onboarding support.</p>
+          </div>
         </div>
       </section>
-
-      {/* ════════════════════ WHY ARTHAVI ════════════════════ */}
       <section className="lp-section lp-bg-paper" id="why">
         <div className="lp-section-inner" style={{ textAlign:'center' }}>
           <div className="lp-section-eyebrow">WHY ARTHAVI</div>
@@ -1181,7 +1507,7 @@ export default function LandingPage() {
           <h2 className="lp-h2" style={{ color:'#fff' }}>Up and Running<br/>in Four Steps</h2>
           <p className="lp-section-sub" style={{ color:'rgba(255,255,255,.65)' }}>No setup, no installation. Works on mobile, tablet and desktop.</p>
           <div className="lp-steps">
-            {STEPS.map((s, i) => (
+            {td('steps').map((s, i) => (
               <div key={s.n} className="lp-step lp-fade" style={{ animationDelay: `${i * 0.1}s` }}>
                 <div className="lp-step-num">{s.n}</div>
                 <div className="lp-step-title">{s.title}</div>
@@ -1232,15 +1558,15 @@ export default function LandingPage() {
       {/* ════════════════════ CTA BANNER ════════════════════ */}
       <section className="lp-cta-banner">
         <div className="lp-cta-inner">
-          <h2 className="lp-cta-heading">Education Shouldn't Be Expensive, Stressful, or Inefficient.</h2>
-          <p className="lp-cta-sub">Arthavi makes it simple, affordable, and intelligent. Free to start — no credit card required.</p>
+          <h2 className="lp-cta-heading">Start Your Free 30-Day School Pilot</h2>
+          <p className="lp-cta-sub">No cost. No commitment. See results in weeks — less evaluation time, better student performance, full parent visibility.</p>
           <div className="lp-cta-btns">
-            <button className="lp-btn-primary lp-btn-xl" onClick={() => openModal('register', 'student')}>
-              🎒 Start Free as Student
+            <button className="lp-btn-primary lp-btn-xl" onClick={() => openModal('register', 'school_admin')}>
+              🏫 Start Free School Pilot
             </button>
             <button className="lp-btn-ghost lp-btn-xl" style={{ color:'#fff', borderColor:'rgba(255,255,255,.4)' }}
-              onClick={() => openModal('register', 'school_admin')}>
-              🏫 Book School Demo →
+              onClick={() => openModal('register', 'student')}>
+              🎒 Start as Student →
             </button>
           </div>
         </div>
@@ -1272,12 +1598,24 @@ export default function LandingPage() {
           </div>
           <div className="lp-footer-bottom">
             <p>© 2026 Arthavi. All rights reserved. Smart Learning with AI.</p>
-            <p>support@arthavi.com</p>
+            <p>hello@arthavi.in</p>
           </div>
         </div>
       </footer>
 
-      <AuthModal isOpen={modalOpen} onClose={() => setModalOpen(false)} defaultForm={modalForm} defaultRole={modalRole} />
+      <AuthModal
+        isOpen={modalOpen}
+        onClose={() => { setModalOpen(false); setPendingPlan(null) }}
+        defaultForm={modalForm}
+        defaultRole={modalRole}
+        onSuccess={() => {
+          if (pendingPlan) {
+            sessionStorage.setItem('arthavi_pending_plan', JSON.stringify(pendingPlan))
+          }
+          setPendingPlan(null)
+          setModalOpen(false)
+        }}
+      />
 
       <style>{`
         #lp * { box-sizing:border-box; }
@@ -1424,6 +1762,39 @@ export default function LandingPage() {
         .lp-feature-icon { width:52px; height:52px; border-radius:14px; display:grid; place-items:center; font-size:24px; margin-bottom:16px; }
         .lp-feature-name { font-family:var(--serif,serif); font-size:17px; color:#1A1A1A; margin-bottom:8px; }
         .lp-feature-desc { font-size:13px; color:#6B7280; line-height:1.65; }
+
+        /* ── SPECIALIZED PATHS ── */
+        .lp-sp-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(300px,1fr)); gap:24px; margin-top:52px; }
+        .lp-sp-card { background:#fff; border-radius:22px; padding:32px; border:1px solid #D4D9E4; display:flex; flex-direction:column; gap:20px; transition:.3s; }
+        .lp-sp-card:hover { transform:translateY(-6px); box-shadow:0 20px 50px rgba(107,82,176,.16); }
+        .lp-sp-card-header { display:flex; align-items:center; gap:16px; }
+        .lp-sp-icon { width:56px; height:56px; border-radius:16px; display:grid; place-items:center; font-size:28px; flex-shrink:0; }
+        .lp-sp-entrance .lp-sp-icon { background:linear-gradient(135deg,#EDE9FE,#DDD6FE); }
+        .lp-sp-career  .lp-sp-icon { background:linear-gradient(135deg,#DCFCE7,#BBF7D0); }
+        .lp-sp-skill   .lp-sp-icon { background:linear-gradient(135deg,#FEF9C3,#FDE68A); }
+        .lp-sp-degree  .lp-sp-icon { background:linear-gradient(135deg,#DBEAFE,#BFDBFE); }
+        .lp-sp-name { font-family:var(--serif,serif); font-size:20px; color:#1A1A1A; margin-bottom:2px; }
+        .lp-sp-tagline { font-size:12px; color:#6B7280; font-weight:600; letter-spacing:.02em; }
+        .lp-sp-list { list-style:none; padding:0; margin:0; display:flex; flex-direction:column; gap:10px; flex:1; }
+        .lp-sp-list li { font-size:13.5px; color:#374151; line-height:1.65; padding-left:22px; position:relative; }
+        .lp-sp-list li::before { content:'✓'; position:absolute; left:0; font-weight:800; }
+        .lp-sp-entrance .lp-sp-list li::before { color:#6B52B0; }
+        .lp-sp-career  .lp-sp-list li::before { color:#16A34A; }
+        .lp-sp-skill   .lp-sp-list li::before { color:#D97706; }
+        .lp-sp-degree  .lp-sp-list li::before { color:#1D4ED8; }
+        .lp-sp-tags { display:flex; gap:8px; flex-wrap:wrap; }
+        .lp-sp-tags span { padding:4px 12px; border-radius:100px; font-size:11px; font-weight:700; border:1.5px solid; }
+        .lp-sp-entrance .lp-sp-tags span { background:#F0EAFF; color:#6B52B0; border-color:#DDD6FE; }
+        .lp-sp-career  .lp-sp-tags span { background:#F0FDF4; color:#15803D; border-color:#BBF7D0; }
+        .lp-sp-skill   .lp-sp-tags span { background:#FFFBEB; color:#B45309; border-color:#FDE68A; }
+        .lp-sp-degree  .lp-sp-tags span { background:#EFF6FF; color:#1D4ED8; border-color:#BFDBFE; }
+        .lp-sp-cta { padding:13px 24px; border:none; border-radius:12px; font-family:var(--sans); font-size:14px; font-weight:700; cursor:pointer; transition:.2s; align-self:flex-start; }
+        .lp-sp-cta:hover { transform:translateY(-2px); box-shadow:0 8px 24px rgba(0,0,0,.16); }
+        .lp-sp-cta-entrance { background:linear-gradient(135deg,#6B52B0,#4A3890); color:#fff; }
+        .lp-sp-cta-career   { background:linear-gradient(135deg,#16A34A,#15803D); color:#fff; }
+        .lp-sp-cta-skill    { background:linear-gradient(135deg,#D97706,#B45309); color:#fff; }
+        .lp-sp-cta-degree   { background:linear-gradient(135deg,#2563EB,#1D4ED8); color:#fff; }
+        @media(max-width:700px){ .lp-sp-grid{ grid-template-columns:1fr; } .lp-sp-card{ padding:24px 20px; } }
 
         /* ── PRICING ── */
         .lp-pricing-philosophy {

@@ -163,11 +163,27 @@ export default function ChatPanel({ showToast }) {
   }
 
   const quickPrompts = [
-    'Summarise the key concepts',
-    'Give me 5 important questions',
+    'What are the main topics in this chapter?',
+    'Give me 5 practice exam questions',
     'Explain the hardest topic simply',
     'What should I focus on for exams?',
+    'Summarise the key concepts',
   ]
+
+  const [sampleQs, setSampleQs] = useState(quickPrompts)
+  const [sampleQsLoading, setSampleQsLoading] = useState(false)
+
+  useEffect(() => {
+    if (!selectedSyl) { setSampleQs(quickPrompts); return }
+    setSampleQsLoading(true)
+    fetch(`${API_BASE}/syllabi/${selectedSyl}/sample-questions`, {
+      headers: { Authorization: `Bearer ${token}` }
+    })
+      .then(r => r.json())
+      .then(d => { if (d.questions?.length) setSampleQs(d.questions.slice(0, 5)) })
+      .catch(() => {})
+      .finally(() => setSampleQsLoading(false))
+  }, [selectedSyl])
 
   const selectedName = syllabi.find(s => s.id === selectedSyl)?.name || ''
 
@@ -259,9 +275,12 @@ export default function ChatPanel({ showToast }) {
                     : 'Select a syllabus above and ask any question. Arthavi answers using your materials.'}
                 </p>
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, justifyContent: 'center' }}>
-                  {quickPrompts.map(p => (
-                    <button key={p} className="chip selected" onClick={() => setInput(p)}>{p}</button>
-                  ))}
+                  {sampleQsLoading
+                    ? <span style={{ fontSize: 13, color: 'var(--muted)' }}>Loading sample questions…</span>
+                    : sampleQs.map(p => (
+                        <button key={p} className="chip selected" onClick={() => setInput(p)}>{p}</button>
+                      ))
+                  }
                 </div>
               </div>
             )}
@@ -287,6 +306,15 @@ export default function ChatPanel({ showToast }) {
             <button className="btn-saffron" onClick={sendChat} style={{ borderRadius: 50, padding: '11px 22px' }}>
               Send →
             </button>
+          </div>
+          <div style={{ padding: '8px 16px 12px', display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+            {sampleQsLoading
+              ? <span style={{ fontSize: 12, color: 'var(--muted)' }}>Loading suggestions…</span>
+              : sampleQs.map(p => (
+                  <button key={p} className="chip" style={{ fontSize: 12 }}
+                    onClick={() => { setInput(p) }}>{p}</button>
+                ))
+            }
           </div>
         </div>
       </div>

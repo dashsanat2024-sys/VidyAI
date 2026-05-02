@@ -8,16 +8,15 @@ import { useAuth } from './AuthContext'
 import { apiGet } from '../utils/api'
 
 const AppCtx = createContext(null)
-
 export function AppProvider({ children }) {
   const { token, me, isLoggedIn } = useAuth()
   const [activePanel, setActivePanelState] = useState('dashboard')
-  const [refreshKey,  setRefreshKey]       = useState(0)
+  const [refreshKey, setRefreshKey] = useState(0)
 
   // Data layers
-  const [syllabi,      setSyllabi]      = useState([])
-  const [docs,         setDocs]         = useState([])
-  const [adminStats,   setAdminStats]   = useState({})
+  const [syllabi, setSyllabi] = useState([])
+  const [docs, setDocs] = useState([])
+  const [adminStats, setAdminStats] = useState({})
   const [platformSettings, setPlatformSettings] = useState({ sidebar: {} })
   const [activeSyllabus, setActiveSyllabus] = useState(null)
 
@@ -27,9 +26,6 @@ export function AppProvider({ children }) {
 
   const navigateTo = useCallback((id) => {
     setActivePanelState(id)
-    if (typeof window !== 'undefined') {
-      window.__appSetPanel = setActivePanelState
-    }
   }, [])
 
   const addSyllabus = useCallback((syl) => {

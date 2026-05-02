@@ -78,7 +78,7 @@ function StudentDashboard({ me, syllabi, docs, navigate }) {
           Good day, {me?.name?.split(' ')[0] || 'Student'}! 👋
         </h3>
         <p style={{ color: 'var(--muted)', fontSize: 14 }}>
-          {syllabi.length} syllabi loaded · {docs.length} documents available. Ready to study?
+          Start with Curriculum Hub &rarr; AI Tutor &rarr; Practice &mdash; then unlock goals &amp; skills.
         </p>
       </div>
       <div className="stats-grid">
@@ -87,11 +87,15 @@ function StudentDashboard({ me, syllabi, docs, navigate }) {
         <StatCard label="Practice Sessions" value="0" />
         <StatCard label="Learning Streak"   value="1 Day" />
       </div>
-      <h3 style={{ marginBottom: 14, fontFamily: 'var(--serif)' }}>Quick Access</h3>
+      <h3 style={{ marginBottom: 14, fontFamily: 'var(--serif)' }}>Your Learning Path</h3>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: 14 }}>
-        <QuickCard icon="🏛️" title="Curriculum Hub"      desc="Official NCERT & state board chapters with AI tools." onClick={() => navigate('curriculum')} badge="Start Here" />
-        <QuickCard icon="💬" title="AI Study Chat"        desc="Chat with your uploaded textbooks." onClick={() => navigate('chat')} />
-        <QuickCard icon="🎯" title="Question Practice"    desc="AI-generated practice questions." onClick={() => navigate('interactive-practice')} />
+        <QuickCard icon="📚" title="Curriculum Hub"     desc="Official chapters with AI summaries, flashcards & audio." onClick={() => navigate('curriculum')} badge="Step 1" />
+        <QuickCard icon="💬" title="AI Tutor"           desc="Chat with your textbooks — ask any doubt instantly." onClick={() => navigate('chat')} badge="Step 2" />
+        <QuickCard icon="🎯" title="Practice Mode"      desc="AI-generated questions with instant feedback." onClick={() => navigate('interactive-practice')} badge="Step 3" />
+        <QuickCard icon="🚀" title="Entrance Prep"      desc="JEE / NEET / UPSC mock tests and prep material." onClick={() => navigate('senior-prep')} />
+        <QuickCard icon="🏛️" title="Degree Hub"         desc="College decision tools, NAAC ratings, comparisons." onClick={() => navigate('degree-hub')} />
+        <QuickCard icon="🎓" title="SkillUp Hub"        desc="Free and premium courses from top platforms." onClick={() => navigate('free-courses')} />
+        <QuickCard icon="🧭" title="Career Compass"     desc="Career paths, skill gaps, personalised roadmap." onClick={() => navigate('career-path')} />
       </div>
       <HowToGuide steps={STEPS} role="a Student" />
     </>
@@ -125,13 +129,13 @@ function TeacherDashboard({ me, syllabi, docs, navigate }) {
         <StatCard label="Syllabi Loaded"    value={syllabi.length} />
         <StatCard label="Avg. Class Score"  value="N/A" />
       </div>
-      <h3 style={{ marginBottom: 14, fontFamily: 'var(--serif)' }}>Teaching Tools</h3>
+      <h3 style={{ marginBottom: 14, fontFamily: 'var(--serif)' }}>Teacher Toolkit</h3>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: 14 }}>
-        <QuickCard icon="🏛️" title="Curriculum Hub"    desc="Load NCERT chapters, AI summaries, audio lessons." onClick={() => navigate('curriculum')} />
-        <QuickCard icon="🖋️" title="Question Master"   desc="Create, print, and save exam papers." onClick={() => navigate('qmaster')} badge="Key Tool" />
-        <QuickCard icon="📋" title="Evaluation Central" desc="AI-grade answer sheets and email parent reports." onClick={() => navigate('eval')} />
-        <QuickCard icon="💬" title="AI Study Chat"     desc="AI tutor using your uploaded documents." onClick={() => navigate('chat')} />
-        <QuickCard icon="🎯" title="Question Practice" desc="Live interactive practice sessions." onClick={() => navigate('interactive-practice')} />
+        <QuickCard icon="✨" title="Quick QGen"         desc="Instantly generate questions from any topic." onClick={() => navigate('qgen')} badge="Start Here" />
+        <QuickCard icon="📋" title="Question Master"    desc="Create, print, and save complete exam papers." onClick={() => navigate('qmaster')} />
+        <QuickCard icon="📊" title="Evaluate"           desc="AI-grade answer sheets, scores and feedback." onClick={() => navigate('eval')} />
+        <QuickCard icon="📈" title="Reports"            desc="Print school-quality parent performance reports." onClick={() => navigate('reports')} />
+        <QuickCard icon="📚" title="Curriculum Hub"     desc="AI summaries, flashcards and audio lesson prep." onClick={() => navigate('curriculum')} />
       </div>
       <HowToGuide steps={STEPS} role="a Teacher" />
     </>
@@ -162,11 +166,11 @@ function ParentDashboard({ me, navigate }) {
         <StatCard label="Study Streak"    value="1 Day" />
         <StatCard label="Pending Reports" value="0" />
       </div>
-      <h3 style={{ marginBottom: 14, fontFamily: 'var(--serif)' }}>Parent Tools</h3>
+      <h3 style={{ marginBottom: 14, fontFamily: 'var(--serif)' }}>Your Child at a Glance</h3>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 14 }}>
-        <QuickCard icon="📈" title="Child Progress"    desc="Detailed performance analytics and exam history." onClick={() => navigate('analytics')} badge="Start Here" />
-        <QuickCard icon="📋" title="Exam Reports"      desc="View and download AI-generated evaluation reports." onClick={() => navigate('eval')} />
-        <QuickCard icon="💬" title="AI Study Support"  desc="AI-powered tutoring to support home learning." onClick={() => navigate('chat')} />
+        <QuickCard icon="📈" title="Progress Reports"   desc="View exam scores, grades and performance history." onClick={() => navigate('reports')} badge="Start Here" />
+        <QuickCard icon="📉" title="Performance Charts"  desc="Detailed analytics and performance trends over time." onClick={() => navigate('analytics')} />
+        <QuickCard icon="💬" title="AI Study Support"   desc="AI-powered tutoring to support home learning." onClick={() => navigate('chat')} />
       </div>
       <div className="card" style={{ padding: 22, marginTop: 20, borderLeft: '4px solid var(--saffron)', display: 'flex', gap: 14 }}>
         <span style={{ fontSize: 28 }}>📩</span>
@@ -281,12 +285,13 @@ function SchoolAdminDashboard({ me, adminStats, navigate, token, showToast }) {
         <StatCard label="Storage Used"   value={`${stats.storage_gb ?? '0.0'} GB`} />
       </div>
 
-      <h3 style={{ marginBottom: 14, fontFamily: 'var(--serif)' }}>Quick Access</h3>
+      <h3 style={{ marginBottom: 14, fontFamily: 'var(--serif)' }}>Institute Tools</h3>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: 14, marginBottom: 24 }}>
         <QuickCard icon="🏢" title="Campus Directory"   desc="Manage teachers and students." onClick={() => navigate('institute')} />
-        <QuickCard icon="📈" title="School Analytics"   desc="Class performance and trends." onClick={() => navigate('analytics')} />
-        <QuickCard icon="🖋️" title="Question Master"   desc="Create and manage exam papers." onClick={() => navigate('qmaster')} />
-        <QuickCard icon="📋" title="Evaluation Central" desc="Bulk AI grading and parent reports." onClick={() => navigate('eval')} />
+        <QuickCard icon="📉" title="School Analytics"   desc="Class performance and usage trends." onClick={() => navigate('analytics')} />
+        <QuickCard icon="📊" title="Bulk Evaluate"       desc="AI-grade class answer sheets in one upload." onClick={() => navigate('eval')} />
+        <QuickCard icon="📈" title="School Reports"      desc="Generate and share parent performance reports." onClick={() => navigate('reports')} badge="Reports" />
+        <QuickCard icon="📋" title="Question Master"    desc="Create and manage exam papers." onClick={() => navigate('qmaster')} />
       </div>
 
       {/* ── App Settings ─────────────────────────────────────────────── */}
@@ -471,12 +476,14 @@ function PlatformAdminDashboard({ me, adminStats, navigate, token, showToast }) 
         <StatCard label="Storage Used"   value={`${stats.storage_gb ?? '0.0'} GB`} />
       </div>
 
-      <h3 style={{ marginBottom: 14, fontFamily: 'var(--serif)' }}>Quick Access</h3>
+      <h3 style={{ marginBottom: 14, fontFamily: 'var(--serif)' }}>Platform Control</h3>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: 14, marginBottom: 24 }}>
-        <QuickCard icon="🏢" title="All Users"           desc="Manage every user across all institutions." onClick={() => navigate('institute')} badge="Global" />
-        <QuickCard icon="📈" title="Platform Analytics"  desc="Platform-wide performance and usage trends." onClick={() => navigate('analytics')} />
-        <QuickCard icon="🖋️" title="Question Master"     desc="Create and manage exam papers." onClick={() => navigate('qmaster')} />
-        <QuickCard icon="📋" title="Evaluation Central"  desc="AI grading and parent reports." onClick={() => navigate('eval')} />
+        <QuickCard icon="🏢" title="All Institutions"    desc="Manage every institution and their users." onClick={() => navigate('institute')} badge="Global" />
+        <QuickCard icon="📉" title="Platform Analytics"  desc="Platform-wide performance and usage trends." onClick={() => navigate('analytics')} />
+        <QuickCard icon="👥" title="Visitor Logs"         desc="See who's visiting and exploring the platform." onClick={() => navigate('visitor-log')} />
+        <QuickCard icon="🛡" title="Quota Manager"        desc="Manage API quotas and usage caps per institute." onClick={() => navigate('quota')} />
+        <QuickCard icon="📊" title="Evaluate"             desc="AI grading and parent reports." onClick={() => navigate('eval')} />
+        <QuickCard icon="📈" title="Reports"              desc="Platform-wide reports and exports." onClick={() => navigate('reports')} />
       </div>
 
       {/* ── Institutions List ──────────────────────────────────────────── */}

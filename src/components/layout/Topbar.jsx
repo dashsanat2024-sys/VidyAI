@@ -1,23 +1,12 @@
 import { useApp } from '../../context/AppContext'
+import { useLang } from '../../context/LangContext'
 import Logo from '../shared/Logo'
-
-const PANEL_TITLES = {
-  dashboard:              'Dashboard',
-  curriculum:             'Curriculum Hub',
-  chat:                   'AI Study Chat',
-  qgen:                   'Question Generator',
-  eval:                   'Evaluation Central',
-  qmaster:                'Question Master',
-  'interactive-practice': 'Question Practice',
-  institute:              'Institute Manager',
-  analytics:              'Analytics',
-  syllabus:               'Syllabus',
-  practice:               'Practice',
-}
+import LangToggle from '../shared/LangToggle'
 
 export default function Topbar({ onMenuClick }) {
   const { activePanel, activeSyllabus } = useApp()
-  const title = PANEL_TITLES[activePanel] || 'Page'
+  const { t } = useLang()
+  const title = t(`panel.${activePanel}`) || 'Page'
 
   return (
     <div className="topbar">
@@ -35,7 +24,10 @@ export default function Topbar({ onMenuClick }) {
         </div>
       )}
 
-      {/* Paarthivi wordmark in topbar (desktop) */}
+      {/* Language toggle */}
+      <LangToggle />
+
+      {/* Arthavi wordmark in topbar (desktop) */}
       <div className="topbar-brand" style={{
         display: 'flex', alignItems: 'center', gap: 8,
         paddingLeft: 16, borderLeft: '1px solid rgba(107,82,176,.15)',

@@ -9,100 +9,145 @@
  *   Institute     → Manage teachers/students, bulk eval, analytics
  *   Admin         → Full system control
  */
-import { useApp }  from '../../context/AppContext'
+import { useApp } from '../../context/AppContext'
 import { useAuth } from '../../context/AuthContext'
 import Logo from '../shared/Logo'
 
 // ─── Role→ which item IDs are visible (ordered) ────────────────────────────
 const ROLE_NAV = {
   student: [
-    { group: 'Learn', items: [
-      { id: 'dashboard',            icon: '🏠', label: 'Dashboard'         },
-      { id: 'curriculum',           icon: '📚', label: 'Curriculum Hub',   badge: 'Start Here' },
-      { id: 'chat',                 icon: '💬', label: 'AI Tutor'          },
-      { id: 'interactive-practice', icon: '🎯', label: 'Practice Mode'     },
-    ]},
-    { group: 'Goal', items: [
-      { id: 'senior-prep',  icon: '🚀', label: 'Entrance Prep'  },
-      { id: 'degree-hub',   icon: '🏛️', label: 'Degree Hub'     },
-    ]},
-    { group: 'Grow', items: [
-      { id: 'free-courses', icon: '🎓', label: 'SkillUp Hub'    },
-      { id: 'career-path',  icon: '🧭', label: 'Career Compass' },
-    ]},
+    {
+      group: 'Learn', items: [
+        { id: 'dashboard', icon: '🏠', label: 'Dashboard' },
+        { id: 'curriculum', icon: '📚', label: 'Curriculum Hub', badge: 'Start Here' },
+        { id: 'chat', icon: '💬', label: 'AI Tutor' },
+        { id: 'interactive-practice', icon: '🎯', label: 'Practice Mode' },
+      ]
+    },
+    {
+      group: 'Goal', items: [
+        { id: 'senior-prep', icon: '🚀', label: 'Entrance Prep' },
+        { id: 'degree-hub', icon: '🏛️', label: 'Degree Hub' },
+      ]
+    },
+    {
+      group: 'Grow', items: [
+        { id: 'free-courses', icon: '🎓', label: 'SkillUp Hub' },
+        { id: 'career-path', icon: '🧭', label: 'Career Compass' },
+      ]
+    },
   ],
 
   teacher: [
-    { group: 'Create', items: [
-      { id: 'dashboard', icon: '🏠', label: 'Dashboard'       },
-      { id: 'qgen',      icon: '✨', label: 'Quick QGen',     badge: 'Fast' },
-      { id: 'qmaster',   icon: '📋', label: 'Question Master' },
-    ]},
-    { group: 'Teach', items: [
-      { id: 'curriculum',           icon: '📚', label: 'Curriculum Hub'  },
-      { id: 'interactive-practice', icon: '🎯', label: 'Assign Practice' },
-    ]},
-    { group: 'Evaluate', items: [
-      { id: 'eval',    icon: '📊', label: 'Evaluate'  },
-      { id: 'reports', icon: '📈', label: 'Reports'   },
-    ]},
+    {
+      group: 'Create', items: [
+        { id: 'dashboard', icon: '🏠', label: 'Dashboard' },
+        { id: 'qgen', icon: '✨', label: 'Quick QGen', badge: 'Fast' },
+        { id: 'qmaster', icon: '📋', label: 'Question Master' },
+      ]
+    },
+    {
+      group: 'Teach', items: [
+        { id: 'curriculum', icon: '📚', label: 'Curriculum Hub' },
+        { id: 'interactive-practice', icon: '🎯', label: 'Assign Practice' },
+      ]
+    },
+    {
+      group: 'Evaluate', items: [
+        { id: 'eval', icon: '📊', label: 'Evaluate' },
+        { id: 'reports', icon: '📈', label: 'Reports' },
+      ]
+    },
   ],
 
   parent: [
-    { group: 'My Child', items: [
-      { id: 'dashboard', icon: '🏠', label: 'Dashboard'           },
-      { id: 'reports',   icon: '📈', label: 'Progress Reports',   badge: 'Key' },
-      { id: 'analytics', icon: '📉', label: 'Performance Charts'  },
-    ]},
-    { group: 'Support', items: [
-      { id: 'chat', icon: '💬', label: 'AI Study Support' },
-    ]},
+    {
+      group: 'My Child', items: [
+        { id: 'dashboard', icon: '🏠', label: 'Dashboard' },
+        { id: 'reports', icon: '📈', label: 'Progress Reports', badge: 'Key' },
+        { id: 'analytics', icon: '📉', label: 'Performance Charts' },
+      ]
+    },
+    {
+      group: 'Support', items: [
+        { id: 'chat', icon: '💬', label: 'AI Study Support' },
+      ]
+    },
   ],
 
   institute_admin: [
-    { group: 'Overview', items: [
-      { id: 'dashboard',  icon: '🏠', label: 'Dashboard'        },
-      { id: 'institute',  icon: '🏫', label: 'Campus Directory' },
-      { id: 'analytics',  icon: '📉', label: 'School Analytics' },
-    ]},
-    { group: 'Academics', items: [
-      { id: 'qmaster',    icon: '📋', label: 'Question Master' },
-      { id: 'eval',       icon: '📊', label: 'Bulk Evaluate'   },
-      { id: 'reports',    icon: '📈', label: 'School Reports'  },
-    ]},
-    { group: 'Manage', items: [
-      { id: 'visitor-log', icon: '👥', label: 'Visitor Log'    },
-      { id: 'quota',       icon: '🛡',  label: 'Quota Manager' },
-      { id: 'settings',    icon: '⚙️', label: 'Settings'       },
-    ]},
+    {
+      group: 'Overview', items: [
+        { id: 'dashboard', icon: '🏠', label: 'Dashboard' },
+        { id: 'institute', icon: '🏫', label: 'Campus Directory' },
+        { id: 'analytics', icon: '📉', label: 'School Analytics' },
+      ]
+    },
+    {
+      group: 'Academics', items: [
+        { id: 'qmaster', icon: '📋', label: 'Question Master' },
+        { id: 'eval', icon: '📊', label: 'Bulk Evaluate' },
+        { id: 'reports', icon: '📈', label: 'School Reports' },
+      ]
+    },
+    {
+      group: 'Manage', items: [
+        { id: 'visitor-log', icon: '👥', label: 'Visitor Log' },
+        { id: 'quota', icon: '🛡', label: 'Quota Manager' },
+        { id: 'settings', icon: '⚙️', label: 'Settings' },
+      ]
+    },
   ],
 
   admin: [
-    { group: 'Overview', items: [
-      { id: 'dashboard',  icon: '🏠', label: 'Dashboard'        },
-      { id: 'analytics',  icon: '📉', label: 'Analytics'        },
-      { id: 'visitor-log',icon: '👥', label: 'Visitor Logs'     },
-    ]},
-    { group: 'Institutes', items: [
-      { id: 'institute',  icon: '🏫', label: 'Institute Manager' },
-      { id: 'quota',      icon: '🛡',  label: 'Quota Manager'    },
-    ]},
-    { group: 'Finance', items: [
-      { id: 'finance',    icon: '💹', label: 'Finance Manager',  badge: 'New' },
-    ]},
-    { group: 'System', items: [
-      { id: 'settings',   icon: '⚙️', label: 'Settings'          },
-      // Full access — teachers' tools also accessible
-      { id: 'qmaster',    icon: '📋', label: 'Question Master'   },
-      { id: 'eval',       icon: '📊', label: 'Evaluate'          },
-      { id: 'reports',    icon: '📈', label: 'Reports'           },
-    ]},
+    {
+      group: 'Overview', items: [
+        { id: 'dashboard', icon: '🏠', label: 'Dashboard' },
+        { id: 'analytics', icon: '📉', label: 'Analytics' },
+        { id: 'visitor-log', icon: '👥', label: 'Visitor Logs' },
+      ]
+    },
+    {
+      group: 'Learn', items: [
+        { id: 'curriculum', icon: '📚', label: 'Curriculum Hub' },
+        { id: 'chat', icon: '💬', label: 'AI Tutor' },
+        { id: 'interactive-practice', icon: '🎯', label: 'Practice Mode' },
+      ]
+    },
+    {
+      group: 'Grow', items: [
+        { id: 'free-courses', icon: '🎓', label: 'SkillUp Hub' },
+        { id: 'career-path', icon: '🧭', label: 'Career Compass' },
+        { id: 'degree-hub', icon: '🏛️', label: 'Degree Hub' },
+        { id: 'senior-prep', icon: '🚀', label: 'Entrance Prep' },
+      ]
+    },
+    {
+      group: 'Institutes', items: [
+        { id: 'institute', icon: '🏫', label: 'Institute Manager' },
+        { id: 'quota', icon: '🛡', label: 'Quota Manager' },
+      ]
+    },
+    {
+      group: 'Academics', items: [
+        { id: 'qmaster', icon: '📋', label: 'Question Master' },
+        { id: 'qgen', icon: '✨', label: 'Quick QGen' },
+        { id: 'eval', icon: '📊', label: 'Evaluate' },
+        { id: 'reports', icon: '📈', label: 'Reports' },
+      ]
+    },
+    {
+      group: 'System', items: [
+        { id: 'finance', icon: '💹', label: 'Finance Manager', badge: 'New' },
+        { id: 'settings', icon: '⚙️', label: 'Settings' },
+      ]
+    },
   ],
 }
 
 export default function Sidebar({ isOpen, onClose, onUpgrade }) {
   const { activePanel, setActivePanel, platformSettings } = useApp()
-  const { me: user, logout }           = useAuth()
+  const { me: user, logout } = useAuth()
   const role = user?.role || 'student'
 
   const navigate = (id) => {
@@ -126,10 +171,14 @@ export default function Sidebar({ isOpen, onClose, onUpgrade }) {
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
             <Logo size={56} />
             <div>
-              <div style={{ color: '#fff', fontWeight: '800', fontSize: '14px',
-                lineHeight: 1.2 }}>Arthavi</div>
-              <div style={{ color: 'rgba(255,255,255,.45)', fontSize: '10px',
-                textTransform: 'uppercase', letterSpacing: '1px' }}>Smart Learning</div>
+              <div style={{
+                color: '#fff', fontWeight: '800', fontSize: '14px',
+                lineHeight: 1.2
+              }}>Arthavi</div>
+              <div style={{
+                color: 'rgba(255,255,255,.45)', fontSize: '10px',
+                textTransform: 'uppercase', letterSpacing: '1px'
+              }}>Smart Learning</div>
             </div>
           </div>
         </div>
@@ -145,7 +194,7 @@ export default function Sidebar({ isOpen, onClose, onUpgrade }) {
             {{
               student: '👨‍🎓 Student',
               teacher: '🧑‍🏫 Teacher',
-              parent:  '👨‍👩‍👧 Parent',
+              parent: '👨‍👩‍👧 Parent',
               institute_admin: '🏫 Institute',
               admin: '⚙️ Admin',
             }[role] || role}

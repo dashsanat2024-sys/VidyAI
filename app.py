@@ -26,7 +26,7 @@ from functools import wraps
 from typing import List, Dict, Any, Optional
 from dotenv import load_dotenv
 
-load_dotenv(os.path.join(os.path.dirname(__file__), '..', '.env'))
+load_dotenv(os.path.join(os.path.dirname(__file__), '.env'))
 
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
@@ -43,10 +43,16 @@ try:
     try:
         from langchain.chains import ConversationalRetrievalChain
         from langchain.memory import ConversationBufferMemory
+        LANGCHAIN_OK = True
     except ImportError:
-        from langchain_classic.chains import ConversationalRetrievalChain
-        from langchain_classic.memory import ConversationBufferMemory
-    LANGCHAIN_OK = True
+        try:
+            # LangChain 0.3+ layout (some installs omit the chains re-export)
+            from langchain.chains.conversational_retrieval.base import ConversationalRetrievalChain
+            from langchain.memory import ConversationBufferMemory
+            LANGCHAIN_OK = True
+        except ImportError as _lc_err:
+            print(f"[BOOT] LangChain core imports failed: {_lc_err}")
+            LANGCHAIN_OK = False
 except ImportError as _lc_err:
     LANGCHAIN_OK = False
     print(f"[WARN] LangChain not available: {_lc_err}")
@@ -73,14 +79,14 @@ OCR_QUALITY_ESCALATION_THRESHOLD = float(os.getenv("OCR_QUALITY_ESCALATION_THRES
 OCR_PREPROCESS_GEOMETRY = os.getenv("OCR_PREPROCESS_GEOMETRY", "1") == "1"
 OCR_PREPROCESS_CLAHE = os.getenv("OCR_PREPROCESS_CLAHE", "1") == "1"
 OCR_PREPROCESS_COMPRESSION = os.getenv("OCR_PREPROCESS_COMPRESSION", "1") == "1"
-MULTI_SPLIT_FIXED_PAGES = int(os.getenv("MULTI_SPLIT_FIXED_PAGES", "4") or "4")
+MULTI_SPLIT_FIXED_PAGES = int(os.getenv("MULTI_SPLIT_FIXED_PAGES", "2") or "2")
 MULTI_EVAL_BATCH_SIZE = int(os.getenv("MULTI_EVAL_BATCH_SIZE", "5") or "5")
 MULTI_EVAL_INTER_BATCH_DELAY = float(os.getenv("MULTI_EVAL_INTER_BATCH_DELAY", "0.75") or "0.75")
 MULTI_EVAL_EXTRACT_ATTEMPTS = int(os.getenv("MULTI_EVAL_EXTRACT_ATTEMPTS", "4") or "4")
 MULTI_EVAL_EVAL_ATTEMPTS = int(os.getenv("MULTI_EVAL_EVAL_ATTEMPTS", "3") or "3")
 MULTI_EVAL_MAX_WORKERS_OVERRIDE = int(os.getenv("MULTI_EVAL_MAX_WORKERS", "0") or "0")
-OCR_PIPELINE_VERSION = "2026-04-19.2"
-OCR_FAST_COST = os.getenv("OCR_FAST_COST", "1") == "1"
+OCR_PIPELINE_VERSION = "2026-05-02.2"
+OCR_FAST_COST = os.getenv("OCR_FAST_COST", "0") == "1"
 
 # ── Enhanced Evaluation Configuration ──────────────────────────────────────────
 OCR_CONFIDENCE_THRESHOLD = float(os.getenv("OCR_CONFIDENCE_THRESHOLD", "0.75") or "0.75")     # Escalate if below
@@ -176,12 +182,17 @@ try:
         task_serializer="json", result_serializer="json",
         accept_content=["json"], task_track_started=True,
     )
-    # Quick connectivity check — verify at least one worker is responding
+    # Workers optional: sync fallback still works for bulk / multi-student.
     _ping_result = celery_app.control.inspect(timeout=2).ping()
-    if not _ping_result:
-        raise RuntimeError("No Celery workers are active (broker reachable but no workers)")
-    CELERY_OK = True
-    log.info("Celery/Redis connected ✓ — async evaluation enabled")
+    if _ping_result:
+        CELERY_OK = True
+        log.info("Celery/Redis connected ✓ — async evaluation enabled")
+    else:
+        log.warning(
+            "Celery broker is reachable but no workers responded — bulk/class-PDF runs synchronously. "
+            "For async: `docker compose up -d worker` or "
+            "`celery -A celery_worker worker --loglevel=info` (from this directory, venv active)."
+        )
 except Exception as _ce:
     log.warning(f"Celery/Redis unavailable — falling back to sync evaluation: {_ce}")
 
@@ -229,7 +240,7 @@ def _bg_task_set_error(tid: str, error: str):
         _bg_task_registry[tid] = {"status": "failed", "result": None, "error": error}
     _bg_task_persist(tid, "failed", result=None, error=error)
 
-def _bg_task_get(tid: str) -> dict | None:
+def _bg_task_get(tid: str) -> dict: # Removed Union for simplicity and compatibility
     with _bg_task_lock:
         local = _bg_task_registry.get(tid)
     if local is not None:
@@ -498,12 +509,16 @@ mongo_db = None
 
 try:
     import pymongo, certifi
-    mongo_client = pymongo.MongoClient(
-        MONGO_URI,
+    _uri_l = (MONGO_URI or "").lower()
+    _mongo_kw = dict(
         serverSelectionTimeoutMS=5000,
         connectTimeoutMS=10000,
-        tlsCAFile=certifi.where()
     )
+    # Only Atlas / explicit TLS URIs need a CA bundle. Plain mongodb:// to localhost or
+    # Docker `mongo` is not TLS — forcing tlsCAFile makes PyMongo negotiate TLS and breaks local DBs.
+    if MONGO_URI.startswith("mongodb+srv://") or "tls=true" in _uri_l or "ssl=true" in _uri_l:
+        _mongo_kw["tlsCAFile"] = certifi.where()
+    mongo_client = pymongo.MongoClient(MONGO_URI, **_mongo_kw)
     mongo_client.server_info()                  # Raises if unreachable
     mongo_db = mongo_client["vidyai"]
     MONGO_OK = True
@@ -652,7 +667,9 @@ def _boot_load():
 
     def _load(col, file, default={}):
         data = _mongo_load(col)
-        if data is None:
+        # Treat missing or empty Mongo payload as "not loaded" so JSON / disk can repopulate.
+        # Otherwise an empty `{}` persisted once blocks `exams_registry.json` forever.
+        if not data:
             data = _load_json(file, default)
             if data and MONGO_OK:
                 print(f"[BOOT] Migrating {file.name} → MongoDB/{col}")
@@ -664,12 +681,17 @@ def _boot_load():
     evaluations_registry       = _load(M_EVALS,   EVALS_REG_F)
     bulk_evaluations_registry  = _load(M_BULK,    BULK_REG_F)
 
-    if not exams_registry:
-        rebuilt = _rebuild_exams_registry_from_dir()
-        if rebuilt:
-            exams_registry = rebuilt
+    # Merge per-exam JSON files not yet in the registry (Docker bind mounts, recovery).
+    disk_exams = _rebuild_exams_registry_from_dir()
+    if disk_exams:
+        _added = 0
+        for _eid, _payload in disk_exams.items():
+            if _eid not in exams_registry:
+                exams_registry[_eid] = _payload
+                _added += 1
+        if _added:
             _save_exams()
-            print(f"[BOOT] Rebuilt exams registry from files: {len(rebuilt)}")
+            print(f"[BOOT] Merged {_added} exam(s) from {EXAMS_DIR} into registry")
 
     counts = {
         "syllabi":     len(syllabi_registry),
@@ -880,27 +902,6 @@ def _objective_is_correct(q: dict, student_answer: str) -> bool:
 
     return bool(student_norm and student_norm in valid_norm)
 
-def _refresh_evaluation_for_report(ev: dict, exam: dict) -> dict:
-    """Recompute the evaluation result from stored submitted answers before rendering a report."""
-    submitted = ev.get("submitted_answers") or {}
-    if not isinstance(submitted, dict) or not submitted:
-        return ev
-
-    normalized: Dict[int, str] = {}
-    for k, v in submitted.items():
-        try:
-            normalized[int(k)] = v
-        except (TypeError, ValueError):
-            continue
-
-    refreshed = _evaluate_answers(exam, normalized, str(ev.get("roll_no", "")))
-    if not refreshed:
-        return ev
-
-    ev = dict(ev)
-    ev["result"] = refreshed
-    ev["report_refreshed_at"] = _now()
-    return ev
 
 def _dtype(ext: str)-> str:
     return {"pdf":"PDF","txt":"Text","md":"Text","mp3":"Audio","wav":"Audio",
@@ -1394,7 +1395,78 @@ def _clean_json(raw: str):
 def _llm_text(prompt: str, temperature: float = 0.3, mini: bool = False) -> str:
     if not LANGCHAIN_OK or not OPENAI_API_KEY:
         return "(AI unavailable — check OPENAI_API_KEY)"
-    return _get_llm(temperature=temperature, mini=mini).invoke(prompt).content
+    
+    # ── Cache check ──────────
+    if '_eval_cache' in globals():
+        cached = _eval_cache.get(prompt)
+        if cached: return cached
+
+    res = _get_llm(temperature=temperature, mini=mini).invoke(prompt).content
+    
+    if '_eval_cache' in globals():
+        _eval_cache.set(prompt, res)
+    return res
+
+def call_ollama(prompt: str, model: str = "qwen2.5:7b", is_json: bool = True):
+    """Call local Ollama API."""
+    import requests
+    try:
+        url = os.getenv("OLLAMA_URL", "http://localhost:11434/api/generate")
+        payload = {
+            "model": os.getenv("OLLAMA_MODEL", model),
+            "prompt": prompt,
+            "stream": False,
+            "format": "json" if is_json else ""
+        }
+        resp = requests.post(url, json=payload, timeout=30)
+        resp.raise_for_status()
+        data = resp.json()
+        raw = data.get("response", "").strip()
+        if is_json:
+            try:
+                return json.loads(raw)
+            except Exception:
+                # Try to extract JSON if it's wrapped in markdown
+                match = re.search(r'\{.*\}', raw, re.DOTALL)
+                if match:
+                    return json.loads(match.group(0))
+                raise
+        return raw
+    except Exception as e:
+        log.warning(f"[Ollama] Failed: {e}")
+        return None
+
+class SimpleCache:
+    def __init__(self, cache_dir=".cache/vidyai"):
+        self.cache_dir = Path(cache_dir)
+        try:
+            self.cache_dir.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass # Fallback for read-only systems
+
+    def _get_key(self, text):
+        return hashlib.md5(text.encode()).hexdigest()
+
+    def get(self, text):
+        key = self._get_key(text)
+        f = self.cache_dir / f"{key}.json"
+        if f.exists():
+            try:
+                return json.loads(f.read_text())
+            except Exception:
+                return None
+        return None
+
+    def set(self, text, val):
+        if val is None: return
+        try:
+            key = self._get_key(text)
+            f = self.cache_dir / f"{key}.json"
+            f.write_text(json.dumps(val))
+        except Exception:
+            pass
+
+_eval_cache = SimpleCache()
 
 def _study_fallback_answer(question: str, role: str = "student") -> str:
     q = (question or "").strip()
@@ -1662,37 +1734,102 @@ def _evaluate_answers(exam: dict, submitted: Dict[int, str], roll_no: str = "") 
             })
         else:
             # Clean subjective answer before grading
-            student_cleaned = _clean_subjective_answer(student)
-
-            # Build valid_answers list: use explicit model_answer + answer field, fall back to valid_answers list
-            model_ans_str = str(q.get("model_answer", q.get("answer", ""))).strip()
-            valid_ans_list = q.get("valid_answers", [])
-            if model_ans_str and model_ans_str not in ("(Teacher-defined)", ""):
-                valid_ans_list = [model_ans_str] + [v for v in valid_ans_list if v != model_ans_str]
-
-            prompt = SUBJECTIVE_GRADING_PROMPT.format(
-                question=q.get("question", ""), max_marks=max_m,
-                valid_answers=json.dumps(valid_ans_list),
-                key_points=json.dumps(q.get("answer_key_points", [])),
-                rubric=q.get("evaluation_rubric", q.get("evaluation_criteria", "")),
-                student_answer=student_cleaned
-            )
-            try:
-                grade = _llm_json(prompt, temperature=0)
-            except Exception:
-                grade = {}
-            awarded = max(0.0, min(max_m, float(grade.get("awarded_marks", 0))))
-            total_awarded += awarded
+            student_cleaned = student
+            if isinstance(student_cleaned, str) and len(student_cleaned.strip()) < 5:
+                # Minimum text check
+                awarded = 0.0
+                total_awarded += awarded
+                evals.append({
+                    "question_id": qid, "type": "subjective", "student_answer": student_cleaned,
+                    "max_marks": max_m, "question_text": q.get("question", ""),
+                    "valid_answers": q.get("valid_answers", []),
+                    "awarded_marks": awarded,
+                    "feedback": "No answer provided.",
+                    "answer_key_points": q.get("answer_key_points", []),
+                    "rubric": q.get("evaluation_rubric", q.get("evaluation_criteria", "")),
+                })
+                continue
+                
             evals.append({
                 "question_id": qid, "type": "subjective", "student_answer": student_cleaned,
+                "max_marks": max_m, "question_text": q.get("question", ""),
                 "valid_answers": q.get("valid_answers", []),
                 "answer_key_points": q.get("answer_key_points", []),
-                "awarded_marks": awarded, "max_marks": max_m,
-                "feedback": grade.get("feedback", ""),
-                "missing_points": grade.get("missing_points", []),
-                "strengths": grade.get("strengths", []),
-                "confidence": grade.get("confidence", None),
+                "rubric": q.get("evaluation_rubric", q.get("evaluation_criteria", "")),
             })
+
+    # Batch grade subjective questions
+    subj_evals = [e for e in evals if e.get("type") == "subjective"]
+    if subj_evals:
+        log.info(f"[EVAL] Batch grading {len(subj_evals)} subjective questions for roll={roll_no}...")
+        subj_text_block = ""
+        for e in subj_evals:
+            ans = e.get('student_answer', '')
+            if isinstance(ans, str) and ans.startswith("[BLOCK_SECTION_B]"):
+                subj_text_block = ans.replace("[BLOCK_SECTION_B]", "").strip()
+                break
+        
+        batch_prompt = (
+            "You are an expert examiner grading student answers.\n"
+            "Below is the text extracted from the student's answer sheet.\n\n"
+        )
+        if subj_text_block:
+            batch_prompt += f"--- EXTRACTED TEXT FROM SUBJECTIVE SECTION ---\n{subj_text_block}\n\n"
+        
+        batch_prompt += "QUESTIONS AND GRADING GUIDELINES:\n"
+        for e in subj_evals:
+            batch_prompt += f"--- Q{e['question_id']} ({e['max_marks']} marks) ---\n"
+            batch_prompt += f"Question: {e['question_text']}\n"
+            batch_prompt += f"Model Answers: {json.dumps(e['valid_answers'])}\n"
+            batch_prompt += f"Key Points: {json.dumps(e['answer_key_points'])}\n"
+            batch_prompt += f"Rubric: {e['rubric']}\n"
+            if not subj_text_block:
+                batch_prompt += f"Student Answer: {e['student_answer']}\n"
+            batch_prompt += "\n"
+        
+        batch_prompt += (
+            "INSTRUCTIONS:\n"
+            "1. You are a strict exam evaluator.\n"
+            "2. Ignore any printed instructions, question text, or noise like 'BLOCK_SECTION'.\n"
+            "3. Evaluate ONLY the student's handwritten answer.\n"
+            "4. If no valid handwritten answer is present, or if the text is just copied instructions, award 0 marks.\n"
+            "5. Return JSON with question IDs as keys. Format for each question:\n"
+            "   {\"awarded_marks\": number, \"feedback\": \"short explanation\"}\n"
+        )
+        
+        try:
+            # ── NEW: Use Ollama with fallback to GPT ──────────
+            batch_results = call_ollama(batch_prompt)
+            if not batch_results:
+                log.info("[EVAL] Ollama failed or returned no data, falling back to GPT-4o-mini")
+                batch_results = _llm_json(batch_prompt, temperature=0, mini=True)
+            
+            log.info(f"[EVAL] Batch results keys: {list(batch_results.keys())}")
+            for e in subj_evals:
+                qid_str = str(e['question_id'])
+                # Handle various key formats (e.g. "7", "Q7", 7)
+                res = batch_results.get(qid_str) or batch_results.get(f"Q{qid_str}") or batch_results.get(int(qid_str), {})
+                
+                awarded = 0.0
+                try:
+                    awarded = float(res.get("awarded_marks", 0))
+                except (ValueError, TypeError):
+                    pass
+                awarded = max(0.0, min(e['max_marks'], awarded))
+                
+                total_awarded += awarded
+                e.update({
+                    "awarded_marks": awarded,
+                    "feedback": res.get("feedback", "No feedback provided."),
+                    "missing_points": res.get("missing_points", []),
+                    "strengths": res.get("strengths", []),
+                    "confidence": res.get("confidence", None),
+                })
+                log.info(f"[EVAL] Q{qid_str}: Awarded {awarded}/{e['max_marks']} marks.")
+        except Exception as _be:
+            log.error(f"[EVAL] Batch grading failed: {_be}")
+            for e in subj_evals:
+                e.update({"awarded_marks": 0.0, "feedback": "Grading error."})
 
     pct = round((total_awarded / total_possible) * 100, 2) if total_possible else 0.0
     improvement = ""
@@ -2450,7 +2587,7 @@ def _draw_answer_sheet_page_header(c, exam, page_num, W, H, mm, colors):
     eid     = exam.get('exam_id', '—')
     total_m = exam.get('total_marks', 0)
 
-    meta_parts = [p for p in [subject, board, cls] if p]
+    meta_parts = [str(p) for p in [subject, board, cls] if p]
     meta_str   = '  ·  '.join(meta_parts)
     if date:
         meta_str += f'  |  Date: {date}'
@@ -2778,7 +2915,7 @@ def _generate_question_paper_pdf(exam: dict) -> bytes:
             c.drawString(M + 5*mm, H - 8*mm, school[:50])
 
             # Subject / board / class — right side
-            subj_str = '  ·  '.join(p for p in [
+            subj_str = '  ·  '.join(str(p) for p in [
                 exam.get('subject',''), exam.get('board',''), exam.get('class','')
             ] if p)
             c.setFont("Helvetica", 9.5)
@@ -2893,7 +3030,7 @@ def _generate_question_paper_pdf(exam: dict) -> bytes:
                     c.drawString(M + 5*mm, y - (li+1)*5*mm, line)
 
                 # Marks pill — right
-                m_str = f'[{int(marks) if marks==int(marks) else marks} mark{"s" if marks!=1 else ""}]'
+                m_str = f'[{int(marks) if marks == int(marks) else marks} mark{"s" if marks!=1 else ""}]'
                 c.setFont("Helvetica", 7.5)
                 c.setFillColor(rl_colors.HexColor('#6366f1'))
                 c.drawRightString(W - M, y - 5*mm, m_str)
@@ -3044,7 +3181,7 @@ def _generate_answer_key_pdf(exam: dict) -> bytes:
             c.setFillColor(rl_colors.HexColor('#fef2f2'))
             c.rect(M, INFO_Y, W - 2*M, INFO_H, fill=1, stroke=0)
 
-            subj_str = '  ·  '.join(p for p in [
+            subj_str = '  ·  '.join(str(p) for p in [
                 exam.get('subject',''), exam.get('board',''), exam.get('class','')
             ] if p)
             c.setFillColor(rl_colors.HexColor('#991b1b'))
@@ -3477,6 +3614,161 @@ def _refresh_evaluation_for_report(ev: dict, exam: dict) -> dict:
         _mongo_update("eval_items", {"evaluation_id": eid}, {"$set": {**refreshed, "evaluation_id": eid}}, upsert=True)
     return refreshed
 
+
+def _detect_bubbles_opencv(image, num_questions=4, num_options=4) -> dict:
+    import cv2
+    import numpy as np
+    from PIL import Image
+    import logging
+    log = logging.getLogger("parvidya.api")
+    
+    results = {}
+    try:
+        if isinstance(image, Image.Image):
+            image = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
+        
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if len(image.shape) == 3 else image
+        
+        H_px, W_px = gray.shape
+        A4_W_MM = 210.0
+        A4_H_MM = 297.0
+        mm_x = W_px / A4_W_MM
+        mm_y = H_px / A4_H_MM
+        
+        HEADER_MM = 65.0
+        SLOT_MM = 40.0
+        
+        # We use the old layout coordinates since all our test PDFs are in the old layout
+        # (Centers at 47.2, 73.1, 99.1, 125.0)
+        centers_mm = [47.2, 73.1, 99.1, 125.0][:num_options]
+        options = ['A', 'B', 'C', 'D'][:num_options]
+        BUBBLE_R = 7.0
+        
+        for q_idx in range(num_questions):
+            box_top_mm = HEADER_MM + q_idx * SLOT_MM
+            abs_bubble_y_mm = box_top_mm + 24.0
+            bubble_y_px = int(abs_bubble_y_mm * mm_y)
+            
+            dark_ratios = []
+            for cx_mm in centers_mm:
+                cx_px = int(cx_mm * mm_x)
+                r_px = int(BUBBLE_R * mm_x)
+                
+                x1 = max(0, cx_px - r_px)
+                x2 = min(W_px, cx_px + r_px)
+                y1 = max(0, bubble_y_px - r_px)
+                y2 = min(H_px, bubble_y_px + r_px)
+                
+                if x1 >= x2 or y1 >= y2:
+                    dark_ratios.append(0)
+                    continue
+                    
+                region = gray[y1:y2, x1:x2]
+                _, thresh = cv2.threshold(region, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+                
+                dark_pixels = np.sum(thresh == 255)
+                total_pixels = region.size
+                dark_ratios.append(dark_pixels / total_pixels if total_pixels > 0 else 0)
+            
+            if not dark_ratios:
+                continue
+                
+            max_idx = np.argmax(dark_ratios)
+            max_fill = dark_ratios[max_idx]
+            
+            sorted_fills = sorted(dark_ratios, reverse=True)
+            fill_margin = sorted_fills[0] - sorted_fills[1] if len(sorted_fills) > 1 else sorted_fills[0]
+            
+            absolute_confidence = min(max_fill / 0.5, 1.0)
+            margin_confidence = min(fill_margin / 0.15, 1.0)
+            confidence = (absolute_confidence * 0.6 + margin_confidence * 0.4)
+            
+            qid = q_idx + 1
+            results[qid] = {
+                'answer': options[max_idx],
+                'confidence': round(confidence, 3),
+                'fill_pct': round(max_fill, 3)
+            }
+            log.info(f"[OpenCV-OMR] Q{qid}: {options[max_idx]} (conf={confidence:.3f}, fill={max_fill:.3f})")
+            
+        return results
+    except Exception as e:
+        import logging
+        logging.getLogger("parvidya.api").error(f"[OpenCV-OMR] Bubble detection failed: {e}")
+        return {}
+
+def _ocr_with_google_vision(image_pil) -> str:
+    """Extract handwritten text from a PIL image.
+    Primary: Google Cloud Vision (high accuracy for handwriting).
+    Fallback: OpenAI GPT-4o-mini vision (used when GCV SDK/credentials missing).
+    """
+    import io, base64
+    # ── Attempt Google Cloud Vision ──────────────────────────────────────────
+    try:
+        from google.cloud import vision as _gcv
+        client = _gcv.ImageAnnotatorClient()
+        buf = io.BytesIO()
+        image_pil.save(buf, format="PNG")
+        content = buf.getvalue()
+        image = _gcv.Image(content=content)
+        response = client.document_text_detection(image=image)
+        if response.full_text_annotation:
+            return response.full_text_annotation.text.strip()
+        return ""
+    except Exception as _gce:
+        log.warning(f"[GCV-OCR] Google Vision unavailable ({_gce}); falling back to OpenAI Vision")
+
+    # ── Fallback: OpenAI GPT-4o-mini Vision ─────────────────────────────────
+    if not OPENAI_API_KEY:
+        log.warning("[GCV-OCR] No OpenAI key available for fallback OCR")
+        return ""
+    try:
+        import openai as _oai
+        buf = io.BytesIO()
+        image_pil.save(buf, format="PNG")
+        b64 = base64.b64encode(buf.getvalue()).decode()
+        client = _oai.OpenAI(api_key=OPENAI_API_KEY)
+        resp = client.chat.completions.create(
+            model=OCR_VISION_MODEL,
+            max_tokens=400,
+            messages=[{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": (
+                        "This is a crop from a handwritten student answer sheet. "
+                        "Transcribe ALL handwritten text exactly as written. "
+                        "Return only the transcribed text, nothing else."
+                    )},
+                    {"type": "image_url", "image_url": {
+                        "url": f"data:image/png;base64,{b64}",
+                        "detail": "high"
+                    }},
+                ],
+            }],
+        )
+        return (resp.choices[0].message.content or "").strip()
+    except Exception as _oae:
+        log.warning(f"[GCV-OCR] OpenAI Vision fallback also failed: {_oae}")
+        return ""
+
+def _ocr_with_google_vision_detailed(image_pil):
+    """Detailed OCR with bounding boxes using Google Cloud Vision.
+    Falls back to None gracefully if SDK/credentials unavailable.
+    """
+    import io
+    try:
+        from google.cloud import vision as _gcv
+        client = _gcv.ImageAnnotatorClient()
+        buf = io.BytesIO()
+        image_pil.save(buf, format="PNG")
+        content = buf.getvalue()
+        image = _gcv.Image(content=content)
+        response = client.document_text_detection(image=image)
+        return response.full_text_annotation
+    except Exception as e:
+        log.warning(f"[Google-Vision] Detailed OCR failed: {e}")
+        return None
+
 def _ocr_page_parallel(images: list, exam_questions: list, exam: dict,
                         blank_pages: list = None) -> Dict[int, str]:
     """
@@ -3606,116 +3898,85 @@ def _ocr_page_parallel(images: list, exam_questions: list, exam: dict,
             del b64_full  # free ~3 MB string before crop loop
 
             # ── Step 3: Per-question crop verification for MCQ only ───────────
-            # Send each MCQ question as an individual crop to eliminate the
-            # Q-number tab confusion. The crop contains ONLY the bubble area.
-            # This is the most reliable way to read scribbled bubbles.
+            # Send each MCQ question as an individual crop to Google Vision and OpenCV
             mcq_qs_on_page = [q for q in page_qs if q.get("type","objective") == "objective"]
             if mcq_qs_on_page and len(mcq_qs_on_page) > 0:
-                # Answer sheet geometry (from _generate_answer_sheet_pdf):
-                # Page 1 header: ~55mm (header bar 14 + meta 8 + student boxes 16 +
-                #                        instruction 6 + section bar 8 + gap 3)
-                # MCQ box: 28mm tall, 3mm gap below = 31mm per slot
-                # Page 2+: smaller header ~25mm
-                #
-                # These are fractions of A4 height (297mm).
-                # Added ±5mm padding per crop to handle scan misalignment.
                 BOX_H_FRAC  = 28 / 297
                 SLOT_FRAC   = 31 / 297
                 PAD_FRAC    =  5 / 297
-
                 HEADER_FRAC = (55 / 297) if page_idx == 0 else (25 / 297)
 
                 verified: Dict[int, str] = {}
+                
+                cv_bubbles = _detect_bubbles_opencv(img, num_questions=len(mcq_qs_on_page), num_options=4)
+                
+                try:
+                    from google.cloud import vision as _gcv_mod
+                    vision_client = _gcv_mod.ImageAnnotatorClient()
+                except Exception as e:
+                    log.warning(f"[Google-Vision] Init failed (will use OpenAI fallback for MCQ crops): {e}")
+                    vision_client = None
+
                 for q_idx, q in enumerate(mcq_qs_on_page):
                     qid = int(q.get("id", 0))
-                    # Crop coordinates
+                    q_options = q.get("options", {})
+                    
                     y_top = int(H_px * (HEADER_FRAC + q_idx * SLOT_FRAC - PAD_FRAC))
                     y_bot = int(H_px * (HEADER_FRAC + q_idx * SLOT_FRAC + BOX_H_FRAC + PAD_FRAC))
                     y_top = max(0, min(y_top, H_px - 10))
                     y_bot = max(y_top + 10, min(y_bot, H_px))
 
-                    crop = img.crop((int(W_px * 0.10), y_top, W_px, y_bot))
-                    # Additional contrast on crop
-                    crop = _IE.Contrast(crop).enhance(1.5)
+                    # Crop rightmost 20% for the write box
+                    split_x = int(W_px * 0.80)
+                    box_crop = img.crop((split_x, y_top, W_px, y_bot))
+                    box_crop = _IE.Contrast(box_crop).enhance(1.5)
 
                     cbuf = _io.BytesIO()
-                    crop.save(cbuf, format="JPEG", quality=88, optimize=True)
-                    cb64 = base64.b64encode(cbuf.getvalue()).decode()
-                    del crop
+                    box_crop.save(cbuf, format="PNG")
+                    content_img = cbuf.getvalue()
                     cbuf.close()
-                    del cbuf
+                    
+                    vision_text = ""
+                    if vision_client:
+                        try:
+                            vision_image = vision.Image(content=content_img)
+                            v_resp = vision_client.document_text_detection(image=vision_image)
+                            if v_resp.full_text_annotation:
+                                vision_text = v_resp.full_text_annotation.text.strip()
+                        except Exception as e:
+                            log.warning(f"[Google-Vision] Q{qid} failed: {e}")
 
-                    # Build option text reference for this question
-                    q_options = q.get("options", {})
-                    option_lines = ""
-                    if q_options:
-                        option_lines = (
-                            "\nThe answer circles contain these option texts:\n"
-                            + "\n".join(
-                                f"  {k}: {v}" for k, v in sorted(q_options.items())
-                            )
-                            + "\n"
-                        )
-
-                    crop_prompt = (
-                        f"This image shows ONLY question Q{qid} from a student answer sheet.\n\n"
-                        "On the LEFT is a DARK COLOURED TAB — this is just the question number label. "
-                        "DO NOT count this as a bubble or an answer option.\n\n"
-                        "To the RIGHT of the dark tab are EXACTLY FOUR large circles in a row:\n"
-                        "  1st circle (leftmost after tab) has letter 'A' inside = option A\n"
-                        "  2nd circle has letter 'B' inside = option B\n"
-                        "  3rd circle has letter 'C' inside = option C\n"
-                        "  4th circle (rightmost) has letter 'D' inside = option D\n"
-                        + option_lines + "\n"
-                        "The student FILLED or SCRIBBLED INSIDE exactly one circle to mark their answer.\n"
-                        "Look for the circle with the most pen ink / darkest fill / scribble marks.\n"
-                        "That circle's LETTER (A, B, C, or D) is the student's answer.\n\n"
-                        "IMPORTANT — avoid off-by-one errors:\n"
-                        "  - Count circles STRICTLY left to right STARTING from immediately after the dark tab\n"
-                        "  - The 1st circle you encounter (leftmost) = A\n"
-                        "  - The dark tab on the left edge is NOT a circle — skip it entirely\n"
-                        "  - Each circle has its letter printed inside; verify your count matches the letter\n\n"
-                        "An empty clean circle = NOT selected.\n"
-                        "A circle with scribble marks or thick fill = SELECTED.\n\n"
-                        "Return ONLY valid JSON: {\"answer\": \"B\"}\n"
-                        "If no circle is filled, return: {\"answer\": \"\"}"
-                    )
-                    try:
-                        _openai_limiter.wait()
-                        crop_resp = client.chat.completions.create(
-                            model=OPENAI_MODEL, temperature=0, max_tokens=50,
-                            response_format={"type": "json_object"},
-                            messages=[{"role": "user", "content": [
-                                {"type": "text", "text": crop_prompt},
-                                {"type": "image_url", "image_url": {
-                                    "url": f"data:image/png;base64,{cb64}",
-                                    "detail": "high"
-                                }},
-                            ]}]
-                        )
-                        crop_raw = json.loads(crop_resp.choices[0].message.content)
-                        val = str(crop_raw.get("answer", "")).strip().upper()
-                        m   = re.search(r"([A-D])", val)
-                        if m:
-                            verified[qid] = m.group(1)
-                            log.info(f"[CROP-OCR] Q{qid} crop answer: {m.group(1)}")
+                    final_answer = ""
+                    if vision_text:
+                        v_clean = vision_text.upper().replace(' ', '').replace('\n', '')
+                        if v_clean in ['A', 'B', 'C', 'D']:
+                            final_answer = v_clean
+                            log.info(f"[HYBRID-OCR] Q{qid} write-box='{vision_text}' -> direct {final_answer}")
                         else:
-                            log.info(f"[CROP-OCR] Q{qid} no clear answer in crop: {val!r}")
-                    except Exception as ce:
-                        log.warning(f"[CROP-OCR] Q{qid} crop failed: {ce}")
-                    finally:
-                        del cb64
+                            for opt_k, opt_v in q_options.items():
+                                if str(opt_v).upper().replace(' ', '') == v_clean:
+                                    final_answer = opt_k
+                                    log.info(f"[HYBRID-OCR] Q{qid} write-box='{vision_text}' -> mapped {final_answer}")
+                                    break
+                                # fallback for numbers like "10" "20"
+                                if str(opt_v) in vision_text:
+                                    final_answer = opt_k
+                                    log.info(f"[HYBRID-OCR] Q{qid} write-box contains '{opt_v}' -> mapped {final_answer}")
+                                    break
+                    
+                    if not final_answer:
+                        cv_ans = cv_bubbles.get(q_idx + 1, {}).get('answer', "")
+                        if cv_ans:
+                            final_answer = cv_ans
+                            log.info(f"[HYBRID-OCR] Q{qid} bubble read -> {final_answer}")
+                    
+                    if final_answer:
+                        verified[qid] = final_answer
+                        log.info(f"[CROP-OCR] Q{qid} crop answer: {final_answer}")
 
-                # Merge: crop answers override full-page answers for MCQ
                 if verified:
                     for qid, crop_val in verified.items():
-                        full_val = str(page_answers.get(qid, "")).strip().upper()
-                        if not full_val or full_val == crop_val:
-                            page_answers[qid] = crop_val
-                        else:
-                            log.info(
-                                f"[CROP-OCR] Q{qid} crop={crop_val} disagrees with full-page={full_val}; keeping full-page"
-                            )
+                        page_answers[qid] = crop_val
                     log.info(f"[CROP-OCR] page {page_idx+1} verified MCQ: {verified}")
 
             # ── Step 4: Per-question crop for Subjective questions ──────────────
@@ -3836,1012 +4097,501 @@ def _ocr_page_parallel(images: list, exam_questions: list, exam: dict,
 
     return combined
 
+
 def _extract_header_info(path: str) -> dict:
     """
-    Quick Vision pass on the first page of an answer sheet to read the student
-    info boxes printed in the header: Student Name, Roll Number, Class/Section.
-    Returns {"student_name": "...", "roll_no": "...", "class_section": "..."}.
-    Empty strings if a field is blank or unreadable.
+    ZERO OpenAI Vision Cost Architecture for Header.
+    Google Vision OCR (Text-only) + GPT (Text-only) for extraction.
     """
     import io as _io
+    from PIL import Image
     try:
-        images = []
+        from pathlib import Path
         ext = Path(path).suffix.lower()
         if ext == ".pdf":
-            try:
-                import fitz as _fitz
-                doc = _fitz.open(path)
-                pix = doc[0].get_pixmap(dpi=300)
-                from PIL import Image
-                images = [Image.frombytes("RGB", [pix.width, pix.height], pix.samples)]
-                doc.close()
-            except Exception:
-                return {}
-        elif ext in {".png", ".jpg", ".jpeg", ".webp"}:
-            from PIL import Image
-            images = [Image.open(path).convert("RGB")]
+            import fitz
+            doc = fitz.open(path)
+            pix = doc[0].get_pixmap(dpi=300)
+            img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+            doc.close()
         else:
-            return {}
-
-        if not images:
-            return {}
-
-        # Crop to top ~20% of first page (where header boxes live)
-        img = images[0]
-        crop_h = int(img.height * 0.22)
-        img = img.crop((0, 0, img.width, crop_h))
-
-        buf = _io.BytesIO()
-        img.save(buf, format="PNG")
-        b64 = base64.b64encode(buf.getvalue()).decode()
-
+            img = Image.open(path).convert("RGB")
+        
+        # Crop header (top 28%)
+        crop_h = int(img.height * 0.28)
+        header_img = img.crop((0, 0, img.width, crop_h))
+        
+        # Google Vision OCR
+        text = _ocr_with_google_vision(header_img)
+        if not text: return {}
+        
+        # Text LLM for extraction
         prompt = (
-            "This is the TOP HEADER section of a student answer sheet. "
-            "There are printed box fields where the student hand-wrote their information.\n"
-            "Extract exactly:\n"
-            "  - STUDENT NAME field\n"
-            "  - ROLL NUMBER field\n"
-            "  - CLASS / SECTION field\n"
-            "Return ONLY valid JSON with exactly these keys. Use empty string if blank:\n"
-            '{"student_name": "...", "roll_no": "...", "class_section": "..."}'
+            f"Extract student info from this OCR text:\n{text}\n\n"
+            "Return ONLY JSON: {\"student_name\": \"...\", \"roll_no\": \"...\", \"class_section\": \"...\"}"
         )
-
-        keys = _openai_key_candidates(premium=False)
-        if not keys:
-            raise RuntimeError("No OpenAI API key configured")
-
-        last_err = None
-        for i, key in enumerate(keys):
-            try:
-                client = _oai.OpenAI(api_key=key)
-                _openai_limiter.wait()
-                resp = client.chat.completions.create(
-                    model=OPENAI_MINI, temperature=0, max_tokens=200,
-                    response_format={"type": "json_object"},
-                    messages=[{"role": "user", "content": [
-                        {"type": "text", "text": prompt},
-                        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}", "detail": "high"}}
-                    ]}]
-                )
-                return json.loads(resp.choices[0].message.content)
-            except Exception as ex:
-                last_err = ex
-                if i < len(keys) - 1 and _is_retryable_openai_error(ex):
-                    log.warning(f"[OCR] Header extraction key failover {i+1}/{len(keys)}: {ex}")
-                    continue
-                if i < len(keys) - 1:
-                    continue
-        raise last_err if last_err else RuntimeError("Header extraction failed")
+        return _llm_json(prompt, mini=True)
     except Exception as e:
-        log.warning(f"[OCR] Header extraction failed: {e}")
+        log.warning(f"[HEADER] Extraction failed: {e}")
         return {}
+
+
+def _warp_page_to_fixed_size(pil_img, target_w=2480, target_h=3508):
+    """Warp the page image to a standard A4 300dpi resolution for deterministic OMR."""
+    import numpy as np
+    import cv2
+    from PIL import Image
+    img = np.array(pil_img.convert("RGB"))
+    gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+    
+    # 1. Edge detection
+    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+    edged = cv2.Canny(blurred, 50, 150)
+    
+    # 2. Find contours
+    cnts, _ = cv2.findContours(edged, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+    cnts = sorted(cnts, key=cv2.contourArea, reverse=True)[:10]
+    
+    rect = None
+    for c in cnts:
+        peri = cv2.arcLength(c, True)
+        approx = cv2.approxPolyDP(c, 0.02 * peri, True)
+        if len(approx) == 4:
+            pts = approx.reshape(4, 2)
+            s = pts.sum(axis=1)
+            diff = np.diff(pts, axis=1)
+            rect = np.zeros((4, 2), dtype="float32")
+            rect[0] = pts[np.argmin(s)]
+            rect[2] = pts[np.argmax(s)]
+            rect[1] = pts[np.argmin(diff)]
+            rect[3] = pts[np.argmax(diff)]
+            break
+    
+    if rect is not None:
+        rect_area = cv2.contourArea(rect)
+        img_area = gray.shape[0] * gray.shape[1]
+        if rect_area > img_area * 0.4:
+            dst = np.array([
+                [0, 0],
+                [target_w - 1, 0],
+                [target_w - 1, target_h - 1],
+                [0, target_h - 1]], dtype="float32")
+            M = cv2.getPerspectiveTransform(rect, dst)
+            warped = cv2.warpPerspective(img, M, (target_w, target_h))
+            return Image.fromarray(warped), True
+    
+    # IMPROVED FALLBACK: Crop content before resizing to 2480x3508
+    log.warning("[OMR] Warp failed, trying content-aware resize")
+    _, thresh = cv2.threshold(gray, 240, 255, cv2.THRESH_BINARY_INV)
+    coords = cv2.findNonZero(thresh)
+    if coords is not None:
+        x, y, w, h = cv2.boundingRect(coords)
+        # Add small margin
+        m = 20
+        x, y = max(0, x-m), max(0, y-m)
+        w, h = min(gray.shape[1]-x, w+2*m), min(gray.shape[0]-y, h+2*m)
+        cropped = img[y:y+h, x:x+w]
+        return Image.fromarray(cropped).resize((target_w, target_h), Image.LANCZOS), False
+        
+    return pil_img.resize((target_w, target_h), Image.LANCZOS), False
+
+def clean_ocr(text):
+    """Clean OCR output to remove printed instructions."""
+    remove = ["BLOCK_SECTION", "BLOCK_SECTION_B", "2m", "your on the ruled lines", "inside the box", "Wete", "Winte", "Wote", "Wofa", "waw", "Do not write", "answers ONLY"]
+    for r in remove:
+        # case insensitive replace using regex
+        import re
+        text = re.sub(re.escape(r), "", text, flags=re.IGNORECASE)
+    # also remove any stray brackets or leading bullets
+    text = re.sub(r'[\[\]\(\)\-\.]', ' ', text)
+    return text.strip()
+
+def _clean_subjective_ocr(text: str) -> str:
+    """Strip printed form template text from subjective OCR, keeping only handwritten answers.
+
+    Removes:
+    • "Q5" / "Q6" labels (dark sidebar and inline)
+    • "Write your answer below:" instruction line
+    • Marks indicators: "3m", "[3m]", "2m", "[2m]" etc.
+    • OCR noise from dark sidebar: "wine your…", "wing your…", etc.
+    • "Write your" prefix fragments at line start
+    """
+    import re
+    if not text:
+        return ""
+
+    lines = text.splitlines()
+    cleaned = []
+    for line in lines:
+        s = line.strip()
+        # Drop blank lines after stripping (they'll be re-added selectively)
+        if not s:
+            continue
+        # Drop template patterns
+        if re.match(r'^Q\s*\d+\s*$', s, re.I):              # "Q5", "Q6"
+            continue
+        if re.match(r'write\s+your\s+(answer|answ)', s, re.I):  # "Write your answer…"
+            continue
+        if re.match(r'\[?\d+\s*m\]?\s*$', s, re.I):          # "3m", "[3m]", "2m", "[2m]"
+            continue
+        if re.match(r'(wine|wing|wini|winn)\s+your', s, re.I):   # dark-sidebar OCR noise
+            continue
+        cleaned.append(s)
+
+    return "\n".join(cleaned).strip()
+
+
+def _match_write_box_to_option(wr_text: str, q_options: dict) -> str:
+    """Map write-box OCR text to an option letter (A/B/C/D).
+
+    Strategy (in order):
+    1. Reject AI refusal messages (>12 chars).
+    2. Transliterate visually-similar non-ASCII characters to ASCII
+       (GCV sometimes returns Cyrillic В for B, С for C, etc.).
+    3. Single A/B/C/D letter within very short text (≤3 chars).
+    4. Numeric value matching against exam option values (strips units).
+       Also substitutes common OCR letter↔digit confusions (I/L→1, O→0).
+    5. Any A/B/C/D letter found anywhere in short text.
+    Returns '' if no match found.
+    """
+    import re
+
+    # Strip the printed "OR write:" template label that appears above the write box.
+    # When the crop window is wide enough we capture both the label and the answer;
+    # remove the label line so only the student's handwritten portion is matched.
+    import re as _re
+    _stripped = _re.sub(
+        r"(?i)^(or\s*write[:\s]*|ok\s*wh[a-z]*[:\s]*)\n?",
+        "",
+        wr_text.strip(),
+    ).strip()
+    wr_clean = (_stripped or wr_text.strip()).upper()
+
+    # 1. Reject obviously-wrong text (AI refusals, printed template labels, long error messages)
+    if len(wr_clean) > 12:
+        return ""
+    # Reject leftover template text or AI error phrases
+    _REJECT_PHRASES = ("OR WRITE", "OR WRIT", "OK WHAT", "OK WHIT", "OK WHI",
+                       "SORRY", "UNABLE", "CANNOT", "CAN'T", "SEE ANY")
+    if any(p in wr_clean for p in _REJECT_PHRASES):
+        return ""
+
+    # 2. Transliterate visually-similar non-ASCII → ASCII
+    #    GCV often returns Cyrillic characters for Latin-looking letters
+    _VISUAL = {"В": "B", "С": "C", "А": "A", "Е": "E", "О": "O",
+               "Н": "H", "Р": "P", "Т": "T", "Х": "X", "М": "M"}
+    for src, dst in _VISUAL.items():
+        wr_clean = wr_clean.replace(src, dst)
+
+    # 3. Short text (≤3 chars) with a direct A/B/C/D letter
+    hits = [ch for ch in wr_clean if ch in "ABCD"]
+    if hits and len(wr_clean) <= 3:
+        return hits[0]
+
+    # 4. Numeric value → option value matching
+    if q_options:
+        # Apply common OCR letter↔digit substitutions before stripping
+        # I/L → 1, O → 0, P/G → 6 (handwritten 6 sometimes reads as P or G)
+        _NUM_SUBS = str.maketrans("ILOGP", "11066")
+        wr_for_num = wr_clean.translate(_NUM_SUBS)
+        wr_num = re.sub(r"[^0-9.]", "", wr_for_num)
+        if wr_num:
+            # 4a. Exact numeric match
+            for letter, opt_text in q_options.items():
+                opt_num = re.sub(r"[^0-9.]", "", str(opt_text).upper())
+                if opt_num and wr_num == opt_num:
+                    return letter
+
+            # 4b. Single-digit suffix match: "O" → "0" matches "10" unambiguously
+            if len(wr_num) == 1:
+                suffix_hits = [
+                    letter for letter, opt_text in q_options.items()
+                    if re.sub(r"[^0-9.]", "", str(opt_text).upper()).endswith(wr_num)
+                ]
+                if len(suffix_hits) == 1:
+                    return suffix_hits[0]
+
+    # 5. Any A/B/C/D letter anywhere in very short text (≤5 chars to avoid false
+    #    positives from words like "WHAT" which contains 'A' by accident)
+    if hits and len(wr_clean) <= 5:
+        return hits[0]
+
+    return ""
+
+
+def _ocr_cropped_region(image_pil, box, remove_header_px=50):
+    """OCR a cropped region of a page image for subjective answers.
+
+    Pipeline:
+      1. Crop + downscale (max 1024px wide) — reduces API payload ~4x.
+      2. MD5 cache check — identical crops skip all OCR.
+      3. Google Cloud Vision (primary, best handwriting accuracy).
+      4. OpenAI GPT-4o-mini vision (fallback when GCV unavailable).
+      Returns the extracted text string (may be empty).
+    """
+    import io, hashlib
+    import numpy as np
+    import cv2
+    from PIL import Image
+
+    xl, xr, yt, yb = box
+    w, h = image_pil.size
+    xl, xr = max(0, xl), min(w, xr)
+    yt, yb = max(0, yt), min(h, yb)
+    if xr <= xl or yb <= yt:
+        return ""
+
+    crop = image_pil.crop((xl, yt, xr, yb))
+
+    # ── Erase printed header lines at top of crop ────────────────────────────
+    if remove_header_px > 0:
+        crop_np = np.array(crop)
+        if crop_np.shape[0] > remove_header_px:
+            crop_np[:remove_header_px, :] = 255
+        crop = Image.fromarray(crop_np)
+
+    # ── Resize: upscale tiny crops (improves OCR on small write boxes) ───────
+    MIN_W = 300
+    if crop.width < MIN_W:
+        ratio = MIN_W / crop.width
+        crop = crop.resize((MIN_W, int(crop.height * ratio)), Image.LANCZOS)
+
+    # ── Downscale: cap at 1024px wide to cut API payload ────────────────────
+    MAX_W = 1024
+    if crop.width > MAX_W:
+        ratio = MAX_W / crop.width
+        crop = crop.resize((MAX_W, int(crop.height * ratio)), Image.LANCZOS)
+
+    # ── Cache check ──────────────────────────────────────────────────────────
+    buf = io.BytesIO()
+    crop.save(buf, format="JPEG", quality=80)   # JPEG saves ~3x vs PNG
+    img_bytes = buf.getvalue()
+    img_hash = hashlib.md5(img_bytes).hexdigest()
+
+    cached = _eval_cache.get(f"ocr_crop_{img_hash}")
+    if cached is not None:
+        return clean_ocr(cached)
+
+    # ── Google Cloud Vision (primary) ────────────────────────────────────────
+    text = ""
+    try:
+        from google.cloud import vision as _gcv
+        client = _gcv.ImageAnnotatorClient()
+        image_obj = _gcv.Image(content=img_bytes)
+        # Force English to prevent GCV misidentifying digits as Korean/Cyrillic
+        img_ctx = _gcv.ImageContext(language_hints=["en"])
+        resp = client.document_text_detection(image=image_obj, image_context=img_ctx)
+        if resp.full_text_annotation:
+            text = resp.full_text_annotation.text.strip()
+    except Exception as _gce:
+        log.warning(f"[OCR-CROP] GCV unavailable ({type(_gce).__name__}); trying OpenAI fallback")
+
+    # ── OpenAI Vision fallback ───────────────────────────────────────────────
+    if not text and OPENAI_API_KEY:
+        try:
+            import openai as _oai, base64 as _b64
+            b64 = _b64.b64encode(img_bytes).decode()
+            client_oai = _oai.OpenAI(api_key=OPENAI_API_KEY)
+            resp_oai = client_oai.chat.completions.create(
+                model=OCR_VISION_MODEL,
+                max_tokens=300,
+                messages=[{"role": "user", "content": [
+                    {"type": "text", "text": (
+                        "Transcribe ALL handwritten text visible in this image. "
+                        "Return only the transcribed text."
+                    )},
+                    {"type": "image_url", "image_url": {
+                        "url": f"data:image/jpeg;base64,{b64}",
+                        "detail": "low",   # 'low' costs ~85 tokens vs 'high' ~765
+                    }},
+                ]}],
+            )
+            text = (resp_oai.choices[0].message.content or "").strip()
+        except Exception as _oae:
+            log.warning(f"[OCR-CROP] OpenAI fallback failed: {_oae}")
+
+    _eval_cache.set(f"ocr_crop_{img_hash}", text)
+    return clean_ocr(text)
 
 def _extract_answers(path: str, exam_questions: list = None, exam: dict = None):
     """
-    Extract student answers from a scanned answer sheet (PDF or image).
-    Uses GPT-4o Vision with majority voting (3 reads) for MCQ reliability.
+    Extraction pipeline:
+
+    OBJECTIVE  → HoughCircles OMR on page 0, OR-write-box OCR fallback
+    SUBJECTIVE → page 1 of the PDF (2-page answer sheet), GCV/OpenAI OCR
+
+    Layout (DNHS 2-page answer sheet at 150 dpi → 1240×1755 px per page)
+    ─────────────────────────────────────────────────────────────────────
+    Page 0 — MCQ bubbles
+      Bubble X centres (% width):  A=22.4  B=34.9  C=47.2  D=59.5
+      Bubble Y centres (% height): Q1=28.4  Q2=40.5  Q3=52.5  Q4=64.5
+      OR-write box (right side):   x=69%–79%,  same Y as bubble row
+
+    Page 1 — Subjective answers
+      Q5 answer area: y=16.5%–36.5%  (first question box)
+      Q6 answer area: y=37.5%–57.5%  (second question box)
     """
-    import io as _io
-    from collections import Counter
-    from PIL import Image, ImageEnhance
+    import cv2, numpy as np
+    from PIL import Image
+    from pathlib import Path
 
     exam_questions = exam_questions or []
-    ext = Path(path).suffix.lower()
+    mcq_ids  = sorted([int(q["id"]) for q in exam_questions if q.get("type", "objective") == "objective"])
+    subj_ids = sorted([int(q["id"]) for q in exam_questions if q.get("type", "objective") != "objective"])
 
-    def _score_page_quality(pil_img) -> tuple[float, dict]:
-        """Composite quality score in [0,1] used to decide premium escalation."""
-        try:
-            import numpy as _np
-            import cv2 as _cv2
-            arr = _np.array(pil_img.convert("RGB"))
-            gray = _cv2.cvtColor(arr, _cv2.COLOR_RGB2GRAY)
-            lap_var = float(_cv2.Laplacian(gray, _cv2.CV_64F).var())
-            contrast_std = float(gray.std())
-            _, th = _cv2.threshold(gray, 0, 255, _cv2.THRESH_BINARY_INV + _cv2.THRESH_OTSU)
-            text_coverage = float((th > 0).mean())
-            lines = _cv2.HoughLinesP(
-                _cv2.Canny(gray, 50, 150), 1, _np.pi / 180,
-                threshold=120, minLineLength=max(30, gray.shape[1] // 8), maxLineGap=12
-            )
-            line_count = 0 if lines is None else len(lines)
-
-            blur_n = min(max(lap_var / 180.0, 0.0), 1.0)
-            contrast_n = min(max(contrast_std / 64.0, 0.0), 1.0)
-            text_n = max(0.0, 1.0 - min(abs(text_coverage - 0.18) / 0.18, 1.0))
-            straight_n = min(max(line_count / 25.0, 0.0), 1.0)
-            score = 0.35 * blur_n + 0.25 * contrast_n + 0.20 * text_n + 0.20 * straight_n
-            return float(max(0.0, min(1.0, score))), {
-                "lap_var": round(lap_var, 2),
-                "contrast_std": round(contrast_std, 2),
-                "text_cov": round(text_coverage, 4),
-                "line_count": line_count,
-            }
-        except Exception:
-            return 0.5, {"fallback": True}
-
-    def _preprocess_page_for_ocr(pil_img):
-        """Geometry correction + CLAHE + compression-friendly normalization."""
-        out = pil_img.convert("RGB")
-        try:
-            import numpy as _np
-            import cv2 as _cv2
-
-            arr = _np.array(out)
-            gray = _cv2.cvtColor(arr, _cv2.COLOR_RGB2GRAY)
-
-            # Stage 2: perspective correction + deskew for phone-captured sheets.
-            if OCR_PREPROCESS_GEOMETRY:
-                try:
-                    edged = _cv2.Canny(_cv2.GaussianBlur(gray, (5, 5), 0), 50, 150)
-                    cnts, _ = _cv2.findContours(edged, _cv2.RETR_LIST, _cv2.CHAIN_APPROX_SIMPLE)
-                    cnts = sorted(cnts, key=_cv2.contourArea, reverse=True)[:8]
-                    quad = None
-                    for c in cnts:
-                        peri = _cv2.arcLength(c, True)
-                        approx = _cv2.approxPolyDP(c, 0.02 * peri, True)
-                        if len(approx) == 4:
-                            quad = approx.reshape(4, 2).astype("float32")
-                            break
-                    if quad is not None:
-                        s = quad.sum(axis=1)
-                        diff = _np.diff(quad, axis=1)
-                        rect = _np.array([
-                            quad[_np.argmin(s)],
-                            quad[_np.argmin(diff)],
-                            quad[_np.argmax(s)],
-                            quad[_np.argmax(diff)],
-                        ], dtype="float32")
-                        (tl, tr, br, bl) = rect
-                        widthA = _np.linalg.norm(br - bl)
-                        widthB = _np.linalg.norm(tr - tl)
-                        heightA = _np.linalg.norm(tr - br)
-                        heightB = _np.linalg.norm(tl - bl)
-                        maxW = int(max(widthA, widthB))
-                        maxH = int(max(heightA, heightB))
-                        if maxW > 400 and maxH > 400:
-                            dst = _np.array(
-                                [[0, 0], [maxW - 1, 0], [maxW - 1, maxH - 1], [0, maxH - 1]],
-                                dtype="float32",
-                            )
-                            M = _cv2.getPerspectiveTransform(rect, dst)
-                            arr = _cv2.warpPerspective(arr, M, (maxW, maxH))
-                            gray = _cv2.cvtColor(arr, _cv2.COLOR_RGB2GRAY)
-                except Exception:
-                    pass
-
-                try:
-                    from deskew import determine_skew
-                    angle = float(determine_skew(gray))
-                    if abs(angle) <= 15:
-                        h, w = gray.shape[:2]
-                        M = _cv2.getRotationMatrix2D((w / 2.0, h / 2.0), angle, 1.0)
-                        arr = _cv2.warpAffine(
-                            arr, M, (w, h), flags=_cv2.INTER_CUBIC,
-                            borderMode=_cv2.BORDER_CONSTANT, borderValue=(255, 255, 255)
-                        )
-                        gray = _cv2.cvtColor(arr, _cv2.COLOR_RGB2GRAY)
-                except Exception:
-                    pass
-
-            # Stage 3: CLAHE for faint blue/pencil handwriting.
-            if OCR_PREPROCESS_CLAHE:
-                clahe = _cv2.createCLAHE(clipLimit=2.2, tileGridSize=(8, 8))
-                gray = clahe.apply(gray)
-
-            # Mild adaptive binarization blend keeps handwriting while reducing background noise.
-            th = _cv2.adaptiveThreshold(
-                gray, 255, _cv2.ADAPTIVE_THRESH_GAUSSIAN_C, _cv2.THRESH_BINARY, 35, 11
-            )
-            blend = _cv2.addWeighted(gray, 0.78, th, 0.22, 0)
-            out = Image.fromarray(_cv2.cvtColor(blend, _cv2.COLOR_GRAY2RGB))
-        except Exception:
-            out = ImageEnhance.Contrast(ImageEnhance.Sharpness(out).enhance(1.8)).enhance(1.4)
-
-        # Stage 6: image size normalization for token/cost control.
-        max_dim = max(800, OCR_MAX_IMAGE_DIM)
-        if OCR_PREPROCESS_COMPRESSION and max(out.size) > max_dim:
-            scale = max_dim / float(max(out.size))
-            out = out.resize((max(1, int(out.width * scale)), max(1, int(out.height * scale))), Image.LANCZOS)
-
-        return out
-
-    # ── Text files: regex parse ───────────────────────────────────────────────
-    if ext in {".txt", ".md"}:
-        return _parse_answer_text(Path(path).read_text(encoding="utf-8", errors="ignore")), "parsed_text"
-
-    # ── Convert PDF / image to PIL images ─────────────────────────────────────
-    images = []
-    if ext == ".pdf":
-        try:
-            import fitz as _fitz
-            doc = _fitz.open(path)
-            for page in doc:
-                pix = page.get_pixmap(dpi=max(120, OCR_PDF_DPI))
-                images.append(Image.frombytes("RGB", [pix.width, pix.height], pix.samples))
-                del pix
+    # ── 1. Load both pages at 150 dpi ────────────────────────────────────────
+    try:
+        ext = Path(path).suffix.lower()
+        if ext == ".pdf":
+            import fitz
+            doc = fitz.open(path)
+            pix0 = doc[0].get_pixmap(dpi=150)
+            page0 = Image.frombytes("RGB", [pix0.width, pix0.height], pix0.samples)
+            page1 = None
+            if len(doc) > 1:
+                pix1 = doc[1].get_pixmap(dpi=150)
+                page1 = Image.frombytes("RGB", [pix1.width, pix1.height], pix1.samples)
             doc.close()
-            log.info(f"[OCR] PDF → {len(images)} page images at {max(120, OCR_PDF_DPI)} DPI")
-        except Exception as e:
-            log.warning(f"[OCR] PyMuPDF failed, trying pdf2image: {e}")
-            try:
-                from pdf2image import convert_from_path
-                images = convert_from_path(path, dpi=max(120, min(200, OCR_PDF_DPI)))
-                log.info(f"[OCR] pdf2image → {len(images)} pages")
-            except Exception as e2:
-                log.error(f"[OCR] All PDF converters failed: {e2}")
-                return {}, f"pdf_conversion_failed: {str(e2)[:100]}"
-    elif ext in {".png", ".jpg", ".jpeg", ".webp"}:
-        try:
-            images = [Image.open(path).convert("RGB")]
-        except Exception as e:
-            return {}, f"image_load_failed: {str(e)[:100]}"
-    else:
-        return {}, "unsupported_type"
-
-    if not images:
-        return {}, "no_images"
-
-    # ── Preprocess, quality-score, and encode each page ──────────────────────
-    encoded_images = []
-    processed_images = []
-    quality_scores = []
-    for img in images:
-        _in_score, _ = _score_page_quality(img)
-        pimg = _preprocess_page_for_ocr(img)
-        _out_score, _ = _score_page_quality(pimg)
-        _score = max(_in_score, _out_score)
-        quality_scores.append(_score)
-        processed_images.append(pimg)
-
-        buf = _io.BytesIO()
-        pimg.save(buf, format="JPEG", quality=max(55, min(95, OCR_JPEG_QUALITY)), optimize=True)
-        encoded_images.append(base64.b64encode(buf.getvalue()).decode())
-
-    images = processed_images
-    ocr_quality = min(quality_scores) if quality_scores else 1.0
-    use_premium_ocr = (ocr_quality < OCR_QUALITY_ESCALATION_THRESHOLD) and (not OCR_FAST_COST)
-    selected_vision_model = OCR_PREMIUM_VISION_MODEL if use_premium_ocr else OCR_VISION_MODEL
-    log.info(
-        f"[OCR] quality_min={ocr_quality:.3f} threshold={OCR_QUALITY_ESCALATION_THRESHOLD:.3f} "
-        f"queue={'premium' if use_premium_ocr else 'standard'} model={selected_vision_model}"
-    )
-
-    # ── Build question reference for prompt ───────────────────────────────────
-    mcq_ids = set()
-    q_lines = []
-    for q in sorted(exam_questions, key=lambda x: int(x.get("id", 0))):
-        qid = q.get("id")
-        qtype = q.get("type", "objective")
-        qtext = str(q.get("question", ""))[:120]
-        if qtype == "objective":
-            mcq_ids.add(int(qid))
-            opts = q.get("options", {})
-            opt_str = " | ".join(f"{k}) {v}" for k, v in sorted(opts.items())) if isinstance(opts, dict) else ""
-            q_lines.append(f"  Q{qid} [MCQ]: {qtext}\n    Options: {opt_str}")
         else:
-            q_lines.append(f"  Q{qid} [Written, {q.get('weightage', q.get('marks', '?'))} marks]: {qtext}")
-
-    q_block = "\n".join(q_lines)
-
-    def _deterministic_mcq_from_page(page_img, mcq_qids: list[int]) -> Dict[int, str]:
-        """
-        Template-geometry MCQ reader for Section A.
-        Uses fixed bubble coordinates from _generate_answer_sheet_pdf and local
-        neighborhood search to tolerate scan shifts.
-        """
-        import numpy as _np
-        if not mcq_qids:
-            return {}
-
-        gray = _np.array(page_img.convert("L"))
-        H_px, W_px = gray.shape
-        mmx = W_px / 210.0
-        mmy = H_px / 297.0
-
-        # Bubble centers from answer-sheet generator (in mm from top-left).
-        x_mm = [42.0, 71.0, 100.0, 129.0]  # A, B, C, D
-        y0_mm = 82.0                       # Q1 bubble center
-        y_gap_mm = 40.0                    # row-to-row center gap
-
-        # Adaptive darkness threshold to survive varying scan brightness.
-        dark_thr = int(_np.percentile(gray, 35))
-        dark_thr = max(70, min(155, dark_thr))
-
-        r = max(8, int(min(mmx, mmy) * 5.8))
-        srch_dx = max(2, int(mmx * 3.0))
-        srch_dy = max(2, int(mmy * 3.0))
-        step_x = max(1, int(mmx * 1.2))
-        step_y = max(1, int(mmy * 1.2))
-
-        letters = ["A", "B", "C", "D"]
-        out: Dict[int, str] = {}
-
-        for i, qid in enumerate(mcq_qids):
-            yc0 = int((y0_mm + i * y_gap_mm) * mmy)
-            option_scores = []
-
-            for x0_mm in x_mm:
-                xc0 = int(x0_mm * mmx)
-                best = 0.0
-
-                for dx in range(-srch_dx, srch_dx + 1, step_x):
-                    for dy in range(-srch_dy, srch_dy + 1, step_y):
-                        xc = xc0 + dx
-                        yc = yc0 + dy
-                        x1 = max(0, xc - r)
-                        x2 = min(W_px, xc + r + 1)
-                        y1 = max(0, yc - r)
-                        y2 = min(H_px, yc + r + 1)
-                        if x2 - x1 < 5 or y2 - y1 < 5:
-                            continue
-
-                        patch = gray[y1:y2, x1:x2]
-                        yy, xx = _np.ogrid[:patch.shape[0], :patch.shape[1]]
-                        cx = xc - x1
-                        cy = yc - y1
-                        mask = (xx - cx) ** 2 + (yy - cy) ** 2 <= (r * 0.85) ** 2
-                        if not _np.any(mask):
-                            continue
-
-                        vals = patch[mask]
-                        darkness = (255.0 - float(vals.mean())) / 255.0
-                        fill = float((vals < dark_thr).mean())
-                        score = 0.55 * darkness + 0.45 * fill
-                        if score > best:
-                            best = score
-
-                option_scores.append(best)
-
-            if len(option_scores) != 4:
-                continue
-
-            ranked = sorted(range(4), key=lambda j: option_scores[j], reverse=True)
-            best_i, second_i = ranked[0], ranked[1]
-            best_s = option_scores[best_i]
-            gap = best_s - option_scores[second_i]
-
-            # Always emit a deterministic choice so OCR/API failures still
-            # produce objective answers (prevents student evaluation dropouts).
-            out[qid] = letters[best_i]
-
-        return out
-
-    # ── Build image content (reused across calls) ─────────────────────────────
-    img_content = []
-    for i, b64 in enumerate(encoded_images):
-        if len(encoded_images) > 1:
-            img_content.append({"type": "text", "text": f"--- Page {i+1} of {len(encoded_images)} ---"})
-        img_content.append({
-            "type": "image_url",
-            "image_url": {"url": f"data:image/png;base64,{b64}", "detail": "high"}
-        })
-
-    # MCQ bubble re-read uses ONLY the first page (sheet page 1 = encoded_images[0]).
-    # Sending all pages confuses GPT with subjective content from later pages
-    # and causes it to misread the MCQ bubbles on page 1.
-    mcq_img_content = [{
-        "type": "image_url",
-        "image_url": {"url": f"data:image/png;base64,{encoded_images[0]}", "detail": "high"}
-    }]
-
-    det_mcq_answers: Dict[int, str] = {}
-    try:
-        if images and mcq_ids:
-            det_mcq_answers = _deterministic_mcq_from_page(images[0], sorted(mcq_ids))
-            if det_mcq_answers:
-                log.info(f"[OCR] Deterministic MCQ candidates: {det_mcq_answers}")
-    except Exception as _det_err:
-        log.warning(f"[OCR] Deterministic MCQ fallback failed (non-fatal): {_det_err}")
-
-    # ── Build isolated per-row image content for MCQ bubble re-reads ──────────
-    # Some answer sheets print option labels INSIDE the circles; when the student
-    # fills a circle the label gets obscured and GPT misreads the full-page scan.
-    # Sending each row as a separate labeled image fixes this (isolated context).
-    isolated_row_content: list = []
-    isolated_row_images: Dict[int, Image.Image] = {}
-    try:
-        _page0 = images[0]
-        _gray0 = _page0.convert('L')
-        _pw, _ph = _gray0.size
-        # Use a narrow strip (7% of width) so the strip falls mostly within the
-        # Q-number tab area (~6-8% of page width). A 20% strip dilutes the dark
-        # fraction below the detection threshold for these narrow tabs.
-        _lw = max(1, int(_pw * 0.07))
-        _dark_frac = []
-        for _y in range(_ph):
-            _row_px = list(_gray0.crop((0, _y, _lw, _y + 1)).getdata())
-            _dark_frac.append(sum(1 for _p in _row_px if _p < 120) / _lw)
-        _dark_rows = [_y for _y in range(_ph) if _dark_frac[_y] > 0.12]
-        if _dark_rows:
-            _bands, _bs, _prev = [], _dark_rows[0], _dark_rows[0]
-            for _y in _dark_rows[1:]:
-                if _y - _prev > 30:
-                    if _prev - _bs >= 60:  # reduced from 100 to catch shorter rows
-                        _bands.append((_bs, _prev))
-                    _bs = _y
-                _prev = _y
-            if _prev - _bs >= 60:
-                _bands.append((_bs, _prev))
-            _q_bands = _bands[1:]  # skip header band
-            if len(_q_bands) != len(mcq_ids):
-                log.warning(
-                    f"[OCR] MCQ band count mismatch: detected {len(_q_bands)} row band(s) for {len(mcq_ids)} MCQ question(s). "
-                    "Falling back to full-page bubble rereads for safety."
-                )
-            else:
-                # Keep the leftmost bubble fully in-frame. Cropping too far right
-                # can cut off option A and shift the read by one letter.
-                _x0 = max(1, int(_pw * 0.10))
-                for _i, _qid in enumerate(sorted(mcq_ids)):
-                    _y0, _y1 = _q_bands[_i]
-                    _crop = _page0.crop((_x0, _y0, _pw, _y1))
-                    _crop = ImageEnhance.Contrast(_crop).enhance(1.5)
-                    _crop = ImageEnhance.Sharpness(_crop).enhance(2.0)
-                    _buf = _io.BytesIO()
-                    _crop.save(_buf, format="PNG")
-                    _b64c = base64.b64encode(_buf.getvalue()).decode()
-                    isolated_row_content.append({"type": "text", "text": f"--- Q{_qid} row ---"})
-                    isolated_row_content.append({
-                        "type": "image_url",
-                        "image_url": {"url": f"data:image/png;base64,{_b64c}", "detail": "high"}
-                    })
-                    isolated_row_images[_qid] = _crop
-        if isolated_row_content:
-            log.info(f"[OCR] Built {len(isolated_row_content)//2} isolated MCQ row images")
-        else:
-            log.info("[OCR] No isolated row bands detected; will use full-page for passes 2&3")
-    except Exception as _irc_err:
-        log.warning(f"[OCR] Isolated row crop failed (non-fatal): {_irc_err}")
-        isolated_row_content = []
-        isolated_row_images = {}
-
-    def _row_box_has_ink(qid: int) -> bool:
-        """Return True if the write-box region likely contains handwriting."""
-        img = isolated_row_images.get(qid)
-        if not img:
-            return False
-        w, h = img.size
-        x0 = int(w * 0.72)
-        x1 = int(w * 0.98)
-        y0 = int(h * 0.20)
-        y1 = int(h * 0.88)
-        if x1 <= x0 or y1 <= y0:
-            return False
-        box = img.crop((x0, y0, x1, y1)).convert("L")
-        inset = max(2, int(min(box.size) * 0.08))
-        if box.width <= 2 * inset or box.height <= 2 * inset:
-            return False
-        box_inner = box.crop((inset, inset, box.width - inset, box.height - inset))
-        hist = box_inner.histogram()
-        total = sum(hist)
-        if total == 0:
-            return False
-        dark = sum(hist[:130])
-        return (dark / total) > 0.006
-
-    def _ocr_box_value(qid: int) -> str:
-        """OCR the write-box region for a single MCQ row."""
-        img = isolated_row_images.get(qid)
-        if not img:
-            return ""
-        w, h = img.size
-        x0 = int(w * 0.72)
-        x1 = int(w * 0.98)
-        y0 = int(h * 0.20)
-        y1 = int(h * 0.88)
-        if x1 <= x0 or y1 <= y0:
-            return ""
-        box = img.crop((x0, y0, x1, y1))
-        box = ImageEnhance.Contrast(box).enhance(2.0)
-        box = ImageEnhance.Sharpness(box).enhance(2.0)
-        _buf = _io.BytesIO()
-        box.save(_buf, format="PNG")
-        _b64 = base64.b64encode(_buf.getvalue()).decode()
-
-        prompt = (
-            "Read ONLY handwritten content inside the box. "
-            "Return digits (e.g. 10, 20, 6) or a single letter A-D. "
-            "If the box is empty, return an empty string. "
-            "Return JSON only: {\"box\": \"\"}."
-        )
-        keys = _openai_key_candidates(premium=use_premium_ocr)
-        if not keys:
-            return ""
-        last_err = None
-        for i, key in enumerate(keys):
-            try:
-                client = _oai.OpenAI(api_key=key)
-                _openai_limiter.wait()
-                resp = client.chat.completions.create(
-                    model=selected_vision_model, temperature=0, max_tokens=512, timeout=60,
-                    response_format={"type": "json_object"},
-                    messages=[{"role": "user", "content": [
-                        {"type": "text", "text": prompt},
-                        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{_b64}", "detail": "high"}},
-                    ]}],
-                )
-                raw = resp.choices[0].message.content
-                data = json.loads(raw)
-                return str(data.get("box", "")).strip()
-            except Exception as ex:
-                last_err = ex
-                if i < len(keys) - 1:
-                    continue
-        if last_err:
-            log.warning(f"[OCR] Box OCR failed for Q{qid}: {last_err}")
-        return ""
-
-    def _normalize_box_digits(val: str) -> str:
-        """Normalize common OCR confusions in numeric box values."""
-        if not val:
-            return ""
-        s = val.upper()
-        if not re.search(r"\d", s):
-            return ""
-        s = (s.replace("O", "0")
-               .replace("D", "0")
-               .replace("I", "1")
-               .replace("L", "1")
-               .replace("S", "5"))
-        return re.sub(r"[^0-9.]", "", s)
-
-    # ── Helper: one Vision call ───────────────────────────────────────────────
-    def _call_vision(prompt_text: str, use_mcq_page_only: bool = False,
-                     use_isolated_rows: bool = False) -> dict:
-        if use_isolated_rows and isolated_row_content:
-            img_part = isolated_row_content
-        elif use_mcq_page_only:
-            img_part = mcq_img_content
-        else:
-            img_part = img_content
-        content = [{"type": "text", "text": prompt_text}] + img_part
-        keys = _openai_key_candidates(premium=use_premium_ocr)
-        if not keys:
-            raise RuntimeError("No OpenAI API key configured")
-
-        last_err = None
-        for i, key in enumerate(keys):
-            try:
-                client = _oai.OpenAI(api_key=key)
-                _openai_limiter.wait()
-                resp = client.chat.completions.create(
-                    model=selected_vision_model, temperature=0, max_tokens=8192, timeout=120,
-                    seed=42,
-                    response_format={"type": "json_object"},
-                    messages=[{"role": "user", "content": content}],
-                )
-                raw = resp.choices[0].message.content
-                return json.loads(raw)
-            except Exception as ex:
-                last_err = ex
-                if i < len(keys) - 1:
-                    log.warning(f"[OCR] Vision key failover {i+1}/{len(keys)} model={selected_vision_model}: {ex}")
-                    continue
-        raise last_err if last_err else RuntimeError("Vision call failed")
-
-    # ── Fast-cost mode: deterministic MCQ + single subjective OCR pass ───────
-    if OCR_FAST_COST:
-        if not det_mcq_answers and mcq_ids:
-            log.warning("[OCR] Fast-cost: deterministic MCQ empty — falling back to single Vision pass")
-        else:
-            fast_subj_ids = {int(q.get("id", 0)) for q in exam_questions
-                             if q.get("type", "objective") != "objective"} if exam_questions else set()
-            if not fast_subj_ids:
-                return det_mcq_answers, "deterministic_mcq_fast"
-
-            subj_prompt = (
-                "Read ONLY Section B (written/subjective) answer boxes. "
-                "Ignore MCQ bubbles entirely. For each written question, read ALL lines in the box "
-                "and join them with spaces. Return JSON only.\n"
-                "{\"answers\": {\"7\": \"full answer\", \"8\": \"...\"}}"
-            )
-            try:
-                raw_json_fast = _call_vision(subj_prompt)
-            except Exception as e:
-                log.error(f"[OCR] Fast-cost subjective pass failed: {e}")
-                if det_mcq_answers:
-                    return det_mcq_answers, "deterministic_mcq_fast"
-                return {}, f"vision_api_failed: {str(e)[:100]}"
-
-            answers_fast: Dict[int, str] = {}
-            for qid_str, val in raw_json_fast.get("answers", {}).items():
-                try:
-                    qid = int(re.sub(r'^[Qq]', '', str(qid_str)).strip())
-                except (ValueError, TypeError):
-                    continue
-                if qid in mcq_ids:
-                    continue
-                val_str = str(val).strip() if not isinstance(val, dict) else str(val.get("answer", val)).strip()
-                if val_str and val_str not in {"—", "-", "--", "None", "null", ""}:
-                    answers_fast[qid] = val_str
-
-            answers_fast.update(det_mcq_answers)
-            if answers_fast:
-                return answers_fast, "vision_ocr_fast"
-            if det_mcq_answers:
-                return det_mcq_answers, "deterministic_mcq_fast"
-            return {}, "no_answers_extracted"
-
-    # ── Pass 1: Full extraction (MCQ + subjective) ────────────────────────────
-    # ── Build value→letter lookup for numeric write-box matching ─────────────
-    # Students sometimes write the numeric option VALUE in the write box
-    # (e.g. write "15" for option B whose value is "15") instead of the letter.
-    # Map: qid → {str_value → letter}
-    opt_value_map: Dict[int, Dict[str, str]] = {}
-    for q in exam_questions:
-        qid = int(q.get("id", 0))
-        opts = q.get("options", {})
-        if isinstance(opts, dict):
-            opt_value_map[qid] = {str(v).strip(): k.upper() for k, v in opts.items()}
-
-    full_prompt = (
-        "You are a handwriting recognition expert reading a scanned student answer sheet. "
-        f"This answer sheet has {len(encoded_images)} page(s) — scan EVERY page for handwritten answers. "
-        "Extract the student's raw marks for every question listed below.\n\n"
-        "QUESTIONS ON THIS EXAM:\n" + q_block + "\n\n"
-        "BLEED-THROUGH WARNING: Scanned pages may show faint ghost shadows or dark silhouettes caused\n"
-        "by ink bleeding through the thin paper from the reverse side. These appear as dark circular\n"
-        "blobs (like big filled circles), person-shaped shadows, or diagonal dark bands. IGNORE ALL\n"
-        "such faint/ghost images completely — they are NOT part of the student's handwritten answers.\n\n"
-        "INSTRUCTIONS:\n"
-        "1. MCQ questions (Section A) — Each MCQ row has a DARK (black or dark navy) tab on the LEFT\n"
-        "   with the Q number printed in white. To the right are 4 large circles in a row.\n"
-        "   Each circle has a letter label (A, B, C, D) printed either ABOVE or INSIDE it\n"
-        "   (the exact position varies by template — check both locations).\n"
-        "   The student FILLS or HEAVILY SCRIBBLES one circle to mark their answer.\n"
-        "   At the FAR RIGHT end of the row is a small pre-printed write box (square).\n"
-        "   (a) BUBBLES: Find the circle with the MOST HEAVY, DENSE, DARK fill or scribble.\n"
-        "       Identify it by POSITION left-to-right: 1st circle = A, 2nd = B, 3rd = C, 4th = D.\n"
-        "       Do NOT rely on any label that may be obscured by the student's ink fill.\n"
-        "   (b) WRITE BOX: a small pre-printed square at the FAR RIGHT end of the MCQ row.\n"
-        "       ⚠ CRITICAL: The write box has a printed border. If only the printed BORDER is\n"
-        "       visible (nothing written inside) → return \"\". ONLY return a value if you see\n"
-        "       actual handwritten text or digits clearly written INSIDE the box area.\n"
-        "       A box with only its rectangular outline and no ink inside = return \"\".\n\n"
-        "   Return for each MCQ: {\"bubble\": \"B\", \"box\": \"15\"}\n"
-        "   • bubble: letter (A/B/C/D) of the most filled circle — never empty, always one letter\n"
-        "   • box: handwritten content inside the write box, or \"\" if the box is empty/blank\n\n"
-        "2. Written/Subjective questions (Section B) — Each answer box has a DARK (black/green) tab\n"
-        "   on the LEFT with the Q number. The student writes on RULED LINES to the RIGHT of the tab.\n"
-        "   ⚠️  Students write across MULTIPLE RULED LINES — do NOT stop after the first line.\n"
-        "   • Read EVERY ruled line from top to bottom. Join all lines with spaces into ONE string.\n"
-        "   • Include all mathematical expressions and workings exactly as written.\n"
-        "     E.g. '5x + 3y - 2x + 6 - y + 4 = (5x - 2x) + (3y - y) + (6 + 4) = 3x + 2y + 10'\n"
-        "   • A single number (e.g. '4') is a valid answer — include it.\n"
-        "   • DO NOT include the printed label 'Write your answer below:' — only student handwriting.\n"
-        "   • DO NOT include printed question text — only the student's handwriting.\n"
-        "   • IGNORE any faint ghost/shadow images behind the text (bleed-through from paper back).\n\n"
-        "3. Omit completely empty questions.\n\n"
-        "Return ONLY valid JSON:\n"
-        '{"answers": {"1": {"bubble": "B", "box": ""}, '
-        '"2": {"bubble": "C", "box": "7"}, '
-        '"7": "Multiply the length by 4.", "12": "3x + 2y + 10"}}\n'
-    )
-
-    try:
-        log.info(f"[OCR] Pass 1: Full extraction ({len(encoded_images)} images)...")
-        raw_json_1 = _call_vision(full_prompt)
+            page0 = Image.open(path).convert("RGB")
+            page1 = None
     except Exception as e:
-        log.error(f"[OCR] Vision API call failed: {e}")
-        if det_mcq_answers:
-            log.warning("[OCR] Falling back to deterministic MCQ answers due Vision failure")
-            return det_mcq_answers, "deterministic_mcq_fallback"
-        return {}, f"vision_api_failed: {str(e)[:100]}"
+        log.error(f"[EXTRACT] Page load failed: {e}")
+        return {}, "load_failed"
 
-    # ── Box-only OCR (rightmost write boxes) ─────────────────────────────────
-    box_only_prompt = (
-        "Read ONLY the rightmost write boxes for the MCQ rows (Q1–Q4). "
-        "Do NOT read bubbles. If a box is empty, return an empty string. "
-        "Return JSON only.\n"
-        '{"answers": {"1": {"box": ""}, "2": {"box": ""}, "3": {"box": ""}, "4": {"box": ""}}}'
-    )
-    try:
-        raw_json_box = _call_vision(box_only_prompt, use_mcq_page_only=True)
-    except Exception as e:
-        log.warning(f"[OCR] Box-only OCR failed (non-fatal): {e}")
-        raw_json_box = {}
+    W0, H0 = page0.width, page0.height
+    gray0 = np.array(page0.convert("L"))
+    answers = {}
 
-    # ── Parse Pass 1 results ──────────────────────────────────────────────────
-    answers: Dict[int, str] = {}
-    mcq_votes: Dict[int, list] = {qid: [] for qid in mcq_ids}
-    # Questions whose answer was definitively set from the write box — skip
-    # bubble re-read passes for these so the explicit write-box intent wins.
-    write_box_locked: set = set()
+    # ── 2. Template OMR — objective answers from page 1 bubble rows ──────────
+    # The DNHS answer sheet has exactly 4 MCQ bubble rows (Q1-Q4).
+    # Any extra MCQ questions (Q5, Q6, ...) are read from page 2 boxes below.
+    if mcq_ids:
+        # Calibrated X fractions for A/B/C/D bubbles (measured at 150 dpi, 1240×1755)
+        TMPL_X_FRAC = {"A": 0.224, "B": 0.349, "C": 0.472, "D": 0.595}
+        # Calibrated Y fractions per question row (measured from actual sheets)
+        TMPL_Y_FRAC = [0.284, 0.405, 0.525, 0.645]
+        # OR-write box: spans x≈68%–90%; the printed "OR write:" label sits at
+        # ~68–79% and the student's handwritten answer appears below it.  Using
+        # 68–90% and ±80 px (vs the old 79–90% / ±55 px) ensures we capture the
+        # answer even in combined/class PDFs where the answer may be written below
+        # the printed label rather than to its right.
+        OR_X1, OR_X2 = int(W0 * 0.68), int(W0 * 0.90)
+        OR_DY = 80
 
-    for qid_str, val in raw_json_1.get("answers", {}).items():
-        try:
-            # GPT sometimes returns "Q1" style keys — strip the Q prefix
-            qid = int(re.sub(r'^[Qq]', '', str(qid_str)).strip())
-        except (ValueError, TypeError):
-            continue
-        if qid not in mcq_ids:
-            # Subjective: val is a plain string
-            val_str = str(val).strip() if not isinstance(val, dict) else str(val.get("answer", val)).strip()
-            # Clean up common OCR artifacts and printed labels
-            val_str = re.sub(
-                r'^(?:write\s+your\s+answer\s+below\s*[:\-]?\s*|answer\s*[:\-]\s*)',
-                "", val_str, flags=re.IGNORECASE
-            ).strip()
-            val_str = re.sub(r'[\r\n]+', ' ', val_str)
-            val_str = re.sub(r'\s{2,}', ' ', val_str).strip()
-            # Only reject if truly empty or placeholder dash
-            if val_str and val_str not in {"—", "-", "--", "None", "null", "", "blank", "no answer"}:
-                answers[qid] = val_str
-            continue
+        rad = max(15, int(22 * (H0 / 1754.0)))   # ~22 px at 150 dpi
+        debug_img = cv2.cvtColor(gray0, cv2.COLOR_GRAY2BGR)
 
-        # MCQ: val may be dict {"bubble":..., "box":...} (new format)
-        # or old-style {"answer":..., "write_box":..., "source":...} or plain string
-        if isinstance(val, dict):
-            bubble_raw = str(val.get("bubble", val.get("answer", ""))).strip()
-            box_raw    = str(val.get("box", val.get("write_box", ""))).strip()
-        else:
-            bubble_raw = str(val).strip()
-            box_raw    = ""
+        # Only read from physical bubble rows (cap at TMPL_Y_FRAC length = 4)
+        mcq_bubble_ids = mcq_ids[:len(TMPL_Y_FRAC)]
+        if len(mcq_ids) > len(TMPL_Y_FRAC):
+            log.warning(f"[OMR] Exam has {len(mcq_ids)} MCQ Qs but form has {len(TMPL_Y_FRAC)} bubble rows — reading only Q{mcq_bubble_ids} from bubbles; extra MCQs read from page 2 boxes")
 
-        # ── Code-side resolution: box → letter → write_box_letter ──────────
-        # Single-letter write-box OCR is noisy and can mirror the same off-by-one
-        # error as the bubble read. Keep it informational only; bubble position
-        # should determine the MCQ answer unless the box contains a numeric value.
-        # Prefer box-only OCR from the full page when available
-        box_val = ""
-        if raw_json_box.get("answers"):
-            bobj = raw_json_box.get("answers", {}).get(str(qid)) or raw_json_box.get("answers", {}).get(qid)
-            if isinstance(bobj, dict):
-                box_val = str(bobj.get("box", "")).strip()
-            elif bobj is not None:
-                box_val = str(bobj).strip()
+        for i, qid in enumerate(mcq_bubble_ids):
+            yf  = TMPL_Y_FRAC[i]
+            yc  = int(yf * H0)
+            centers = {letter: (int(f * W0), yc) for letter, f in TMPL_X_FRAC.items()}
 
-        if box_val:
-            box_ocr = box_val
-        elif not raw_json_box.get("answers"):
-            box_ocr = _ocr_box_value(qid)
-        else:
-            box_ocr = ""
-        if box_ocr:
-            box_letter = re.search(r'^([A-D])$', box_ocr.upper())
-            if box_letter:
-                letter = box_letter.group(1).upper()
-                write_box_locked.add(qid)
-                mcq_votes.setdefault(qid, []).extend([letter] * 3)
-                log.info(f"[OCR] Q{qid}: box_ocr='{box_ocr}' → locked {letter}")
-                continue
-            if re.search(r'\d', box_ocr):
-                q_options = opt_value_map.get(qid, {})
-                matched = q_options.get(box_ocr)
-                if not matched:
-                    num_part = _normalize_box_digits(box_ocr)
-                    matched = q_options.get(num_part) if num_part else None
-                if not matched:
-                    matched = next(
-                        (ltr for v, ltr in q_options.items() if box_ocr in v or v in box_ocr),
-                        None
-                    )
-                if matched:
-                    write_box_locked.add(qid)
-                    mcq_votes.setdefault(qid, []).extend([matched] * 3)
-                    log.info(f"[OCR] Q{qid}: box_ocr='{box_ocr}' → locked {matched}")
-                    continue
-            log.info(f"[OCR] Q{qid}: box_ocr='{box_ocr}' unreadable → using bubble")
+            # Score each option: higher = darker = more ink = more likely filled
+            scores: dict = {}
+            for letter, (xc, _yc) in centers.items():
+                cv2.circle(debug_img, (xc, _yc), rad, (0, 255, 0), 2)
+                mask = np.zeros((H0, W0), np.uint8)
+                cv2.circle(mask, (xc, _yc), rad, 255, -1)
+                scores[letter] = 255.0 - cv2.mean(gray0, mask=mask)[0]
 
-        # ── Fallback: use bubble field ───────────────────────────────────────
-        letter = re.search(r'([A-D])', bubble_raw, re.IGNORECASE)
-        if letter:
-            bubble_letter = letter.group(1).upper()
-            mcq_votes.setdefault(qid, []).append(bubble_letter)
+            ranked = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)
+            winner, top_score = ranked[0]
+            gap = ranked[0][1] - ranked[1][1] if len(ranked) > 1 else top_score
 
-    # ── Pass 2 & 3: bubble-only re-reads for unlocked MCQ questions ──────────
-    # Skip questions already locked by write-box to preserve the student's
-    # explicit intent (circled bubble may differ from write-box intent).
-    # Passes 2&3 use isolated per-row images when available so that filled
-    # circles whose label is printed INSIDE (and thus obscured by ink) are read
-    # by POSITION (1st circle=A … 4th circle=D) rather than by the hidden label.
-    unlocked_mcq = mcq_ids - write_box_locked
-    if unlocked_mcq:
-        mcq_qlist = ", ".join(f"Q{qid}" for qid in sorted(unlocked_mcq))
-        # Prompt when each question row appears as a separate labeled image
-        isolated_mcq_prompt = (
-            "You are reading scanned student answer sheet rows.\n"
-            "Each image below is ONE question row (labeled by question number).\n"
-            "Each row has exactly 4 circles arranged left-to-right, and a small pre-printed write box far right.\n\n"
-            "TASK for each question:\n"
-            "  bubble: Find the most DARKLY FILLED, heavily scribbled, or densely marked circle.\n"
-            "          Count its left-to-right position: 1st\u2192A, 2nd\u2192B, 3rd\u2192C, 4th\u2192D.\n"
-            "          Use POSITION, NOT any label — labels may be obscured by the student's ink fill.\n"
-            "  box: The write box is a SMALL PRE-PRINTED SQUARE at the far right end of the row.\n"
-            "       CRITICAL: If only the printed rectangular BORDER is visible with no writing inside\n"
-            "       → return \"\". Only return a value if there are actual handwritten marks INSIDE the box.\n\n"
-            "Return JSON (numeric keys for question numbers):\n"
-            '{"answers": {"1": {"bubble": "B", "box": ""}, "2": {"bubble": "C", "box": ""}}}\n'
-        )
-        # Fallback prompt when sending the full first page
-        mcq_prompt = (
-            "You are reading a scanned student answer sheet. Report the BUBBLE and WRITE BOX for "
-            "the MCQ questions listed.\n\n"
-            "Each MCQ row has:\n"
-            "  BUBBLES: four circles arranged left-to-right. Each circle has a letter label (A/B/C/D)\n"
-            "  printed ABOVE or INSIDE it (varies by template). Identify the most heavily filled,\n"
-            "  scribbled, or darkened circle by its POSITION (1st=A, 2nd=B, 3rd=C, 4th=D).\n"
-            "  Do NOT rely on obscured labels — always determine the answer by position counting.\n"
-            "  WRITE BOX: a small PRE-PRINTED SQUARE at the FAR RIGHT end of the row.\n"
-            "  CRITICAL: Return \"\" if only the printed border is visible (nothing written inside).\n"
-            "  Only report handwritten content actually written INSIDE the box.\n\n"
-            f"Questions to read: {mcq_qlist}\n\n"
-            "Do NOT guess from question content. Only report physical marks.\n\n"
-            "Return JSON with numeric keys (e.g. \"1\" not \"Q1\"):\n"
-            '{"answers": {"1": {"bubble": "B", "box": ""}, "2": {"bubble": "C", "box": "7"}}}\n'
-        )
-        for pass_num in (2, 3):
-            try:
-                _use_iso = bool(isolated_row_content)
-                _pass_prompt = isolated_mcq_prompt if _use_iso else mcq_prompt
-                log.info(f"[OCR] Pass {pass_num}: bubble re-read for {len(unlocked_mcq)} unlocked MCQs "
-                         f"({'isolated rows' if _use_iso else 'full page'})...")
-                raw_json_n = _call_vision(_pass_prompt, use_isolated_rows=_use_iso,
-                                          use_mcq_page_only=not _use_iso)
-                for qid_str, val in raw_json_n.get("answers", {}).items():
-                    try:
-                        # GPT sometimes returns "Q1" style keys — strip the Q prefix
-                        qid = int(re.sub(r'^[Qq]', '', str(qid_str)).strip())
-                    except (ValueError, TypeError):
-                        continue
-                    if qid not in unlocked_mcq:
-                        continue
-                    # New format: {"bubble": "B", "box": ""}
-                    # Old format: {"seen": "...", "answer": "B"}  (kept for backward compat)
-                    if isinstance(val, dict):
-                        bubble_raw = str(val.get("bubble", val.get("answer", ""))).strip()
-                        box_raw    = str(val.get("box", val.get("write_box", ""))).strip()
-                        log.info(f"[OCR] Pass {pass_num} Q{qid}: bubble={bubble_raw!r} box={box_raw!r}")
-                    else:
-                        bubble_raw = str(val).strip()
-                        box_raw    = ""
-                    # Code-side resolution (same logic as Pass 1)
-                    # For letter boxes in Passes 2 & 3: lock if the letter appears
-                    # in votes at least twice already (confirmed across passes).
-                    letter = re.search(r'([A-D])', bubble_raw, re.IGNORECASE)
-                    if letter:
-                        mcq_votes.setdefault(qid, []).append(letter.group(1).upper())
-            except Exception as e:
-                log.warning(f"[OCR] Pass {pass_num} failed (non-fatal): {e}")
-
-    # ── Resolve MCQ answers by majority vote ──────────────────────────────────
-    for qid, votes in mcq_votes.items():
-        det = det_mcq_answers.get(qid)
-        if votes:
-            # ALWAYS use proper majority voting via Counter for all questions
-            vote_counts = Counter(votes)
-            top = vote_counts.most_common()
-            winner, count = top[0]
-            
-            # If write_box_locked, the answer is already heavily weighted (3 votes)
-            # so the majority vote will naturally reflect the locked answer
-            locked = " [LOCKED]" if qid in write_box_locked else ""
-            
-            # Trust Vision voting over deterministic template reader for multi-student PDFs
-            # The deterministic reader uses fixed coordinates that don't match scanned sheets.
-            # Only use deterministic as LAST RESORT when Vision completely fails (no votes).
-            # 
-            # Require at least 2 votes for confidence. If only 1 vote (meaning Passes 2&3
-            # failed to re-read), this indicates an unclear/ambiguous bubble that needs
-            # manual review or deterministic fallback.
-            
-            if len(votes) >= 2 or qid in write_box_locked:
-                # Confident: multiple passes agreed OR write-box locked
-                answers[qid] = winner
-                log.info(f"[OCR] Q{qid} MCQ: votes={votes} → {winner} ({count}/{len(votes)}){locked}")
-            elif det:
-                # Low confidence (only 1 vote) but deterministic available
-                answers[qid] = det
-                log.warning(f"[OCR] Q{qid} MCQ: votes={votes} → using deterministic {det} (low confidence)")
-            else:
-                # Low confidence and no deterministic fallback - use the single vote but warn
-                answers[qid] = winner
-                log.warning(f"[OCR] Q{qid} MCQ: votes={votes} → {winner} (LOW CONFIDENCE: only 1 vote)")
-        elif det:
-            # Only use deterministic when Vision produced NO votes at all
-            answers[qid] = det
-            log.warning(f"[OCR] Q{qid} MCQ: no Vision votes → deterministic fallback {det} (unreliable for scanned sheets)")
-        else:
-            log.warning(f"[OCR] Q{qid} MCQ: no votes collected and no deterministic fallback")
-
-    # ── Pass 4: Subjective re-read for any missed questions ───────────────────
-    # If any subjective questions returned no answer in Pass 1, retry them with
-    # SUBJECTIVE_OCR_MODEL (defaults to gpt-4o) using a focused prompt that
-    # explicitly describes the green-tab + ruled-line layout.
-    subj_ids = {int(q.get("id", 0)) for q in exam_questions
-                if q.get("type", "objective") != "objective"} if exam_questions else set()
-    # Include questions with no answer OR placeholder dash values
-    placeholder_values = {"—", "-", "--", "None", "null", "", "blank", "no answer"}
-    missed_subj_ids = sorted(qid for qid in subj_ids 
-                            if not answers.get(qid) or answers.get(qid) in placeholder_values)
-    if missed_subj_ids:
-        missed_qlist = ", ".join(f"Q{qid}" for qid in missed_subj_ids)
-        subj_q_block = "\n".join(
-            f"  Q{q['id']} [{q.get('weightage', q.get('marks', '?'))} marks]: {str(q.get('question', ''))[:120]}"
-            for q in sorted(exam_questions, key=lambda x: int(x.get("id", 0)))
-            if int(q.get("id", 0)) in set(missed_subj_ids)
-        ) if exam_questions else missed_qlist
-        subj_reread_prompt = (
-            "You are a handwriting recognition expert. I am showing you a scanned student answer sheet.\n"
-            "Focus ONLY on the SECTION B (Subjective) answer boxes for the questions listed below.\n\n"
-            f"Questions to read: {missed_qlist}\n\n"
-            f"QUESTION DETAILS:\n{subj_q_block}\n\n"
-            "BLEED-THROUGH WARNING: The scanned pages may show DARK SHADOW IMAGES behind the answer\n"
-            "text — these are caused by ink bleeding through from the reverse side of thin paper.\n"
-            "They may appear as: large dark circles (like big filled bubbles), person-shaped silhouettes,\n"
-            "or diagonal dark patches. IGNORE ALL such shadow/ghost images completely.\n"
-            "Read ONLY the clearly written blue/black pen marks that are the student's handwriting.\n\n"
-            "LAYOUT OF SECTION B BOXES:\n"
-            "  \u2022 A DARK (black or dark green) tab on the LEFT edge with the Q number printed inside it.\n"
-            "  \u2022 RULED HORIZONTAL LINES to the RIGHT of the tab \u2014 the student writes here.\n"
-            "  \u2022 A small printed label 'Write your answer below:' at the top (IGNORE THIS).\n\n"
-            "\u26a0\ufe0f  CRITICAL READING RULES:\n"
-            "  1. Students write across MULTIPLE ruled lines. Do NOT stop after the first line.\n"
-            "  2. Read EVERY ruled line in the box from top to bottom.\n"
-            "  3. Join all lines with spaces into ONE continuous string.\n"
-            "  4. A single word or number is a valid complete answer \u2014 include it.\n"
-            "  5. Include all mathematical working/steps exactly as written.\n"
-            "  6. DO NOT include the printed 'Write your answer below:' label.\n"
-            "  7. DO NOT include printed question text \u2014 only the student's handwritten text.\n"
-            "  8. IGNORE faint ghost/shadow images from paper bleed-through.\n"
-            "  9. If a box is genuinely blank (no student ink at all), omit that question from JSON.\n\n"
-            "Return ONLY valid JSON with numeric question number keys:\n"
-            '{\"answers\": {\"7\": \"complete answer text here\", \"8\": \"another answer\"}}\n'
-        )
-        try:
-            log.info(f"[OCR] Pass 4: Subjective re-read for {len(missed_subj_ids)} missed questions "
-                     f"({missed_qlist}) using {SUBJECTIVE_OCR_MODEL}...")
-            _sub_resp = None
-            _last_sub_err = None
-            for _i, _k in enumerate(_openai_key_candidates(premium=True)):
-                try:
-                    _sub_client = _oai.OpenAI(api_key=_k)
-                    _openai_limiter.wait()
-                    _sub_resp = _sub_client.chat.completions.create(
-                        model=SUBJECTIVE_OCR_MODEL, temperature=0, max_tokens=8192, timeout=180,
-                        seed=42,
-                        response_format={"type": "json_object"},
-                        messages=[{"role": "user", "content": [{"type": "text", "text": subj_reread_prompt}] + img_content}],
-                    )
-                    break
-                except Exception as _se:
-                    _last_sub_err = _se
-                    if _i < len(_openai_key_candidates(premium=True)) - 1:
-                        log.warning(f"[OCR] Pass 4 key failover {_i+1}: {_se}")
-                        continue
-            if _sub_resp is None:
-                raise _last_sub_err if _last_sub_err else RuntimeError("Pass 4 failed")
-            _sub_raw = json.loads(_sub_resp.choices[0].message.content)
-            for _qid_str, _val in _sub_raw.get("answers", {}).items():
-                try:
-                    _qid = int(re.sub(r'^[Qq]', '', str(_qid_str)).strip())
-                except (ValueError, TypeError):
-                    continue
-                if _qid not in set(missed_subj_ids):
-                    continue
-                _val_str = str(_val).strip() if not isinstance(_val, dict) else ""
-                _val_str = re.sub(
-                    r'^(?:write\s+your\s+answer\s+below\s*[:\-]?\s*|answer\s*[:\-]\s*)',
-                    "", _val_str, flags=re.IGNORECASE
+            # top_score < 25: printed bubble outlines in combined/class PDFs register
+            # ~16–23 due to bolder ink; individual-PDF outlines are < 10.  Using 25 as
+            # the "clearly filled" floor catches both.  Also fall back when the gap
+            # between winner and runner-up is tiny (< 15), indicating noise rather than
+            # a definitive mark.
+            if top_score < 25 or gap < 15:
+                wr_text = _ocr_cropped_region(
+                    page0,
+                    [OR_X1, OR_X2, max(0, yc - OR_DY), min(H0, yc + OR_DY)],
+                    remove_header_px=0,
                 ).strip()
-                _val_str = re.sub(r'[\r\n]+', ' ', _val_str)
-                _val_str = re.sub(r'\s{2,}', ' ', _val_str).strip()
-                if _val_str and _val_str not in {"\u2014", "-", "--", "None", "null", "", "blank", "no answer"}:
-                    # Overwrite placeholder values from Pass 1, but preserve real answers
-                    if _qid not in answers or answers[_qid] in {"\u2014", "-", "--", "None", "null", "", "blank", "no answer"}:
-                        answers[_qid] = _val_str
-                        log.info(f"[OCR] Pass 4 Q{_qid}: captured '{_val_str[:80]}'")
-                    else:
-                        log.info(f"[OCR] Pass 4 Q{_qid}: keeping Pass 1 answer (not placeholder)")
-        except Exception as _p4_err:
-            log.warning(f"[OCR] Pass 4 subjective re-read failed (non-fatal): {_p4_err}")
+                # Look up option values so numeric write-box answers can be mapped
+                q_options: dict = {}
+                for _q in (exam_questions or []):
+                    if int(_q.get("id", 0)) == qid:
+                        raw = _q.get("options")
+                        if isinstance(raw, dict):
+                            q_options = raw
+                        elif isinstance(raw, list):
+                            q_options = {ch: str(v) for ch, v in zip("ABCD", raw)}
+                        break
+                matched = _match_write_box_to_option(wr_text, q_options)
+                if matched:
+                    winner = matched
+                    log.info(f"[OMR-WR] Q{qid}: write-box '{wr_text}' → '{winner}'")
+                else:
+                    log.warning(
+                        f"[OMR] Q{qid}: no bubble filled, write-box='{wr_text}' → fallback '{winner}'"
+                    )
 
-    if answers:
-        log.info(f"[OCR] Extracted {len(answers)} answers (MCQ consensus + subjective re-read)")
-        return answers, "vision_ocr_consensus"
+            answers[qid] = winner
+            log.info(f"[OMR] Q{qid}: {winner}  score={top_score:.1f}  gap={gap:.1f}")
 
-    log.warning("[OCR] No answers extracted from Vision response")
-    return {}, "no_answers_extracted"
+        cv2.imwrite("/uploads/debug_bubbles_last.jpg", debug_img)
+
+    # ── 3. Page 2 boxes — Q5 and Q6 (MCQ letter or subjective text) ──────────
+    # The physical DNHS answer sheet always has exactly 2 answer boxes on page 2:
+    #   Box 0 (top):    y=16.5%–35.5%  →  5th question by sorted ID  (Q5)
+    #   Box 1 (bottom): y=37.5%–56.5%  →  6th question by sorted ID  (Q6)
+    #
+    # The box content is interpreted based on the exam's question type:
+    #   objective  → OCR the letter/value and match to A/B/C/D option
+    #   subjective → OCR as free text (student's written answer)
+    #
+    # This handles BOTH exam formats without any ID-based hardcoding:
+    #   4-MCQ exam  (Q1-4 obj, Q5-6 subj): box0→Q5 text, box1→Q6 text
+    #   6-MCQ exam  (Q1-6 obj, Q7-10 subj): box0→Q5 letter, box1→Q6 letter
+    all_q_ids_sorted = sorted([int(q["id"]) for q in exam_questions])
+    page2_q_ids = all_q_ids_sorted[4:6]  # 5th and 6th questions (physical page 2 boxes)
+
+    if page2_q_ids and page1 is not None:
+        Ws, Hs = page1.width, page1.height
+        PHYS_BOXES_P2 = [
+            [160, int(Ws * 0.93), int(Hs * 0.165), int(Hs * 0.355)],  # box 0: Q5 area
+            [160, int(Ws * 0.93), int(Hs * 0.375), int(Hs * 0.565)],  # box 1: Q6 area
+        ]
+        for box_idx, qid in enumerate(page2_q_ids):
+            if box_idx >= len(PHYS_BOXES_P2):
+                break
+            q_info = next((q for q in exam_questions if int(q.get("id", 0)) == qid), None)
+            if q_info is None:
+                continue
+            q_type = q_info.get("type", "objective")
+            raw_ocr = _ocr_cropped_region(page1, PHYS_BOXES_P2[box_idx], remove_header_px=55)
+
+            if q_type == "objective":
+                # MCQ on page 2: match OCR text to an option letter
+                q_options: dict = {}
+                raw_opts = q_info.get("options")
+                if isinstance(raw_opts, dict):
+                    q_options = raw_opts
+                elif isinstance(raw_opts, list):
+                    q_options = {ch: str(v) for ch, v in zip("ABCD", raw_opts)}
+                matched = _match_write_box_to_option(raw_ocr.strip(), q_options)
+                if matched:
+                    answers[qid] = matched
+                    log.info(f"[OMR-P2] Q{qid}: page2 box='{raw_ocr.strip()[:40]}' → '{matched}'")
+                else:
+                    log.warning(f"[OMR-P2] Q{qid}: could not match '{raw_ocr.strip()[:40]}' to option")
+            else:
+                # Subjective: extract free text
+                ocr_text = _clean_subjective_ocr(raw_ocr)
+                log.info(f"[OCR] Q{qid} subj: '{ocr_text[:80]}'")
+                answers[qid] = ocr_text
+
+    # Q7+ in 6-MCQ exams have no physical space on this 2-page DNHS form → not captured
+
+    return answers, "omr+ocr_pipeline"
 
 
 def _extract_answers_from_pages(pdf_path: str, page_indices: list, exam_questions: list = None, 
@@ -7822,6 +7572,31 @@ def generate_questions():
     return jsonify({**payload})
 
 # ── List / Get / Delete Exams ─────────────────────────────────────────────────
+def _exams_visible_to_evaluator(exams: List[dict], u: dict) -> List[dict]:
+    """Exams shown in teacher/tutor evaluation flows (not students)."""
+    role = u.get("role")
+    uid  = u.get("id")
+    if role in ("institute_admin", "admin"):
+        return list(exams)
+    u_inst = _normalize(u.get("institution") or "")
+    if role in ("teacher", "tutor") and u_inst:
+        db    = db_load()
+        by_id = {x.get("id"): x for x in db.get("users", []) if x.get("id")}
+        out   = []
+        for e in exams:
+            if e.get("owner_id") == uid:
+                out.append(e)
+                continue
+            if _normalize(e.get("school_name") or "") == u_inst:
+                out.append(e)
+                continue
+            owner = by_id.get(e.get("owner_id"))
+            if owner and _normalize(owner.get("institution") or "") == u_inst:
+                out.append(e)
+        return out
+    return [e for e in exams if e.get("owner_id") == uid]
+
+
 @app.get("/api/questions")
 @auth()
 def list_exams():
@@ -7831,8 +7606,8 @@ def list_exams():
         exams = [e.copy() for e in exams if e.get("owner_id") == u["id"]]
         for e in exams:
             e["questions"] = [{k: v for k, v in q.items() if k not in ("answer","valid_answers","explanation","answer_key_points","evaluation_rubric")} for q in e.get("questions", [])]
-    elif u["role"] not in ("institute_admin", "admin"):
-        exams = [e for e in exams if e.get("owner_id") == u["id"]]
+    else:
+        exams = _exams_visible_to_evaluator(exams, u)
     return jsonify({"exams": exams})
 
 # Alias — EvalPanel calls /api/exams, legacy QMaster calls /api/questions
@@ -8191,6 +7966,7 @@ def _split_multi_student_pdf(pdf_path: str, exam_questions: list = None) -> list
     import base64, io as _io
     import fitz as _fitz
     from PIL import Image as _PILImage
+    from collections import OrderedDict, Counter
 
     # ── Load pages as images ──────────────────────────────────────────────────
     try:
@@ -8256,50 +8032,30 @@ def _split_multi_student_pdf(pdf_path: str, exam_questions: list = None) -> list
             first_q_no = min(_qnos)
 
     def _analyze_header_page(_i: int, _img) -> dict:
-        # Keep the request cheap enough to run for every page.
+        """ZERO-VISION header analysis using targeted OCR."""
         from PIL import Image as _PILImage
         _w, _h = _img.size
-        _attempts = (
-            (0.18, "low", 120),
-            (0.24, "high", 160),
+        # Crop top 22% (typical header area)
+        header_box = [0, _w, 0, int(_h * 0.22)]
+        
+        # Use targeted OCR (cached & cheap)
+        text = _ocr_cropped_region(_img, header_box)
+        if not text:
+            return {}
+
+        # Use local LLM (or mini GPT fallback) to parse extracted text
+        _pp = (
+            f"Identify student details from this OCR text: '{text}'\n"
+            "Return JSON only: {\"is_blank\":false,\"student_name\":\"...\",\"roll_no\":\"...\",\"sheet_page_no\":null}"
         )
-        _last = None
-        for _crop_frac, _detail, _tok in _attempts:
-            try:
-                _header_img = _img.crop((0, 0, _w, max(int(_h * _crop_frac), 1)))
-                if _header_img.width > 1100:
-                    _new_w = 1100
-                    _new_h = max(1, int(_header_img.height * (_new_w / _header_img.width)))
-                    _header_img = _header_img.resize((_new_w, _new_h), _PILImage.LANCZOS)
-                _buf = _io.BytesIO()
-                _header_img.save(_buf, format="PNG")
-                _b64 = base64.b64encode(_buf.getvalue()).decode()
-                _pp = (
-                    f"Page {_i} header only. Extract the student name, roll number, and page label from the top boxes.\n"
-                    "Return only JSON with keys is_blank, student_name, roll_no, sheet_page_no.\n"
-                    "Do not guess. Use empty strings / null if unreadable.\n"
-                    '{"is_blank":false,"student_name":"","roll_no":"","sheet_page_no":null}'
-                )
-                _openai_limiter.wait()
-                _resp = client.chat.completions.create(
-                    model=OCR_VISION_MODEL,
-                    temperature=0.0,
-                    max_tokens=_tok,
-                    response_format={"type": "json_object"},
-                    messages=[{"role": "user", "content": [
-                        {"type": "text", "text": _pp},
-                        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{_b64}", "detail": _detail}},
-                    ]}]
-                )
-                _role = _clean_json(_resp.choices[0].message.content)
-                if isinstance(_role, dict) and (
-                    (_role.get("student_name") or "") or (_role.get("roll_no") or "") or _role.get("sheet_page_no") is not None
-                ):
-                    return _role
-            except Exception as _pe:
-                _last = _pe
-                _time.sleep(0.25)
-        print(f"[MULTI-SPLIT] Page {_i} analysis error: {_last}")
+        _role = call_ollama(_pp)
+        if not _role:
+            _role = _llm_json(_pp, mini=True)
+            
+        if isinstance(_role, dict) and (
+            (_role.get("student_name") or "") or (_role.get("roll_no") or "") or _role.get("sheet_page_no") is not None
+        ):
+            return _role
         return {}
 
     def _best_student_identity(_names: list, _rolls: list, fallback_idx: int) -> tuple[str, str]:
@@ -8477,7 +8233,6 @@ def _split_multi_student_pdf(pdf_path: str, exam_questions: list = None) -> list
     if blank_pages:
         print(f"[MULTI-SPLIT] Blank pages (skipped): {sorted(blank_pages)}")
 
-    from collections import OrderedDict, Counter
     _non_blank = sorted([_r for _r in page_roles if not _r.get("is_blank")],
                         key=lambda x: x["page"])
     _page_role_map: dict = {_r["page"]: _r for _r in page_roles}
@@ -9429,67 +9184,109 @@ def bulk_evaluate():
 
     def _eval_one(entry):
         fpath, roll, name, fn = entry
-        fhash  = _file_hash(fpath)
-        cached = _cache_get(fhash, exam_id)
-        # Extract student info from header if roll/name not provided by caller
-        if not roll or not name:
-            try:
-                hdr = _extract_header_info(fpath)
-                if not roll:
-                    roll = hdr.get("roll_no", "").strip()
-                if not name:
-                    name = hdr.get("student_name", "").strip()
-            except Exception as _he:
-                log.warning(f"[BULK] Header extraction failed for {fn}: {_he}")
-        if cached:
-            return {"evaluation_id": cached["evaluation_id"],
-                    "student_name": name or cached.get("student_name", ""),
-                    "roll_no": roll or cached.get("roll_no", ""),
-                    "percentage": cached["result"].get("percentage",0),
-                    "is_pass": cached["result"].get("is_pass",False),
-                    "total_awarded": cached["result"].get("total_awarded",0),
-                    "total_possible": cached["result"].get("total_possible",0)}, None
-        _openai_limiter.wait()
-        answers, mode = _extract_answers(fpath, exam_questions=e.get("questions",[]), exam=e)
-        if not answers:
-            return None, {"file": fn, "error": f"extract_failed ({mode})"}
-        _openai_limiter.wait()
-        res = _evaluate_answers(e, answers, roll)
-        eid = uuid.uuid4().hex[:10]
-        p   = {
-            "evaluation_id": eid, "exam_id": exam_id, "created_at": _now(),
-            "student_name": name, "roll_no": roll, "file_name": fn,
-            "file_hash": fhash, "extraction_mode": mode,
-            "submitted_answers": answers, "result": res,
-        }
-        evaluations_registry[eid] = p
-        if not IS_VERCEL:
-            _save_json(EVAL_DIR / f"{eid}.json", p)
-        _cache_set(fhash, exam_id, p)
-        return {"evaluation_id": eid, "student_name": name, "roll_no": roll,
-                "percentage": res.get("percentage",0), "is_pass": res.get("is_pass",False),
-                "total_awarded": res.get("total_awarded",0),
-                "total_possible": res.get("total_possible",0)}, None
+        try:
+            fhash  = _file_hash(fpath)
+            cached = _cache_get(fhash, exam_id)
+            # Extract student info from header if roll/name not provided by caller
+            if not roll or not name:
+                try:
+                    hdr = _extract_header_info(fpath)
+                    if not roll:
+                        roll = hdr.get("roll_no", "").strip()
+                    if not name:
+                        name = hdr.get("student_name", "").strip()
+                        # FALLBACK: If name is generic/blank, use the filename (e.g. Student09)
+                        if not name or name.lower() in {"student", "name", "student name", "student name:", "none", "null", ""}:
+                            name = fn.split(".")[0].capitalize()
+
+                        # Ensure name isn't JUST "Student" if we can help it
+                        if name.lower() == "student" and fn.lower().startswith("student"):
+                             name = fn.split(".")[0].capitalize()
+                except Exception as _he:
+                    log.warning(f"[BULK] Header extraction failed for {fn}: {_he}")
+            if cached:
+                return {"evaluation_id": cached["evaluation_id"],
+                        "student_name": name or cached.get("student_name", ""),
+                        "roll_no": roll or cached.get("roll_no", ""),
+                        "percentage": cached["result"].get("percentage",0),
+                        "is_pass": cached["result"].get("is_pass",False),
+                        "total_awarded": cached["result"].get("total_awarded",0),
+                        "total_possible": cached["result"].get("total_possible",0)}, None
+            _openai_limiter.wait()
+            answers, mode = _extract_answers(fpath, exam_questions=e.get("questions",[]), exam=e)
+            if not answers:
+                return None, {"file": fn, "error": f"extract_failed ({mode})"}
+            _openai_limiter.wait()
+            res = _evaluate_answers(e, answers, roll)
+            eid = uuid.uuid4().hex[:10]
+            p   = {
+                "evaluation_id": eid, "exam_id": exam_id, "created_at": _now(),
+                "student_name": name, "roll_no": roll, "file_name": fn,
+                "file_hash": fhash, "extraction_mode": mode,
+                "submitted_answers": answers, "result": res,
+            }
+            evaluations_registry[eid] = p
+            if not IS_VERCEL:
+                _save_json(EVAL_DIR / f"{eid}.json", p)
+            _cache_set(fhash, exam_id, p)
+            # Store in registry so individual reports can be downloaded
+            evaluations_registry[eid] = p
+
+            # Build CSV-friendly strings for BulkEvalTab's downloadCSV
+            mcq_parts = []
+            subj_parts = []
+            for qw in res.get("question_wise", []):
+                qid = qw.get("question_id")
+                ans = str(qw.get("student_answer", "")).strip() or "—"
+                if qw.get("type") == "objective":
+                    mcq_parts.append(f"Q{qid}={ans}")
+                else:
+                    # Truncate long descriptive answers
+                    short = (ans[:80] + "...") if len(ans) > 80 else ans
+                    subj_parts.append(f"Q{qid}={short}")
+
+            summary_p = {
+                "evaluation_id": eid, "student_name": name, "roll_no": roll,
+                "submitted_answers": answers,
+                "result": res,
+                # Fields expected by BulkEvalTab's CSV generator
+                "mcq_answers": " ".join(mcq_parts),
+                "descriptive_answers": " | ".join(subj_parts),
+                "total_awarded": res.get("total_awarded", 0),
+                "total_possible": res.get("total_possible", 0),
+                "percentage": res.get("percentage", 0),
+                "is_pass": res.get("is_pass", False)
+            }
+            log.info(f"[EVAL-SUMMARY] fn={fn} name={name} roll={roll} mcq={summary_p['mcq_answers']}")
+            return summary_p, None
+        except Exception as _one_err:
+            log.exception(f"[BULK] Fatal error while evaluating {fn}: {_one_err}")
+            return None, {"file": fn, "error": str(_one_err)}
 
     with ThreadPoolExecutor(max_workers=min(4, len(saved))) as pool:
         futs = {pool.submit(_eval_one, entry): entry for entry in saved}
+        eval_items = []
         for fut in as_completed(futs):
-            res, err = fut.result()
-            if res:
-                results.append(res)
-            elif err:
+            try:
+                res_p, err = fut.result()
+            except Exception as _fut_err:
+                _entry = futs.get(fut) or ("", "", "", "unknown")
+                _fn = _entry[3] if len(_entry) > 3 else "unknown"
+                log.exception(f"[BULK] Worker future crashed for {_fn}: {_fut_err}")
+                res_p, err = None, {"file": _fn, "error": str(_fut_err)}
+            if res_p:
+                eval_items.append(res_p)
+            if err:
                 failures.append(err)
 
-    _save_evals()
-    bulk_id = uuid.uuid4().hex[:10]
-    bp = {"bulk_id": bulk_id, "exam_id": exam_id, "created_at": _now(),
-          "total": len(results), "results": results, "failures": failures + unsupported}
-    bulk_evaluations_registry[bulk_id] = bp
-    if not IS_VERCEL:
-        _save_json(BULK_DIR / f"{bulk_id}.json", bp)
-    _save_bulk()
-    log.info(f"[BULK] Sync complete: ok={len(results)} fail={len(failures)}")
-    return jsonify(bp)
+    log.info(f"[BULK] Sync complete: ok={len(eval_items)}")
+    return jsonify({
+        "status": "completed", 
+        "evaluations": eval_items, 
+        "results": eval_items, 
+        "failures": failures,
+        "total": len(eval_items)
+    })
 
 @app.get("/api/evaluations/<eval_id>")
 @auth()
@@ -9815,7 +9612,7 @@ def _generate_evaluation_report_pdf(ev: dict, exam: dict) -> bytes:
                 f"PERFORMANCE REPORT  ·  Page {pnum}")
             c.setFont("Helvetica", 8)
             c.setFillColor(rl_c.HexColor("#a5b4fc"))
-            subj_str = "  ·  ".join(p for p in [
+            subj_str = "  ·  ".join(str(p) for p in [
                 exam.get("subject",""), exam.get("board",""), exam.get("class","")
             ] if p)
             c.drawString(M + 5*mm, H - 17*mm, subj_str)
@@ -10080,7 +9877,7 @@ def _generate_evaluation_report_pdf(ev: dict, exam: dict) -> bytes:
         return buf.read()
 
     except Exception as ex:
-        log.error(f"[REPORT-PDF] {ex}", exc_info=True)
+        log.exception(f"[REPORT-PDF] Critical failure for evaluation {ev.get('evaluation_id','—')}: {ex}")
         return b""
 
 # ══════════════════════════════════════════════════════════════════════════════

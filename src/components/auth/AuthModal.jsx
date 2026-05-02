@@ -92,7 +92,7 @@ function OTPInput({ value, onChange }) {
   )
 }
 
-export default function AuthModal({ isOpen, onClose, defaultForm = 'login', defaultRole = 'student' }) {
+export default function AuthModal({ isOpen, onClose, defaultForm = 'login', defaultRole = 'student', onSuccess }) {
   const { login } = useAuth()
 
   const [form, setForm] = useState(defaultForm)
@@ -212,6 +212,7 @@ export default function AuthModal({ isOpen, onClose, defaultForm = 'login', defa
       })
       login(data.token, data.user)
       handleClose()
+      if (onSuccess) onSuccess(data)
     } catch (e) { showAlert(e.data?.error || e.message || 'Cannot reach server') }
     setOtpVerifying(false)
   }
@@ -224,6 +225,7 @@ export default function AuthModal({ isOpen, onClose, defaultForm = 'login', defa
       const data = await apiPost('/auth/login', { email: lEmail.trim().toLowerCase(), password: lPw, role })
       login(data.token, data.user)
       handleClose()
+      if (onSuccess) onSuccess(data)
     } catch (e) { showAlert(e.data?.error || e.message || 'Cannot reach server') }
     setLoading(false)
   }

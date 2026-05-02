@@ -1,11 +1,11 @@
 import { useState, useEffect } from 'react'
-import { INDIA_STATES, STATE_BOARDS, getSubjects } from '../../data/indiaCurriculum'
+import { INDIA_STATES, STATE_BOARDS, getBoardMediums, boardNeedsStream, getSubjectsForStream, getBoardClasses, STREAMS } from '../../data/indiaCurriculum'
 
 const C = {
-  indigo:  '#4f46e5', indigoDark: '#3730a3', indigoLight: '#eef2ff', indigoBorder: '#c7d2fe',
-  slate:   '#64748b', slateBorder: '#e2e8f0',
-  purple:  '#7c3aed', purpleLight:'#f5f3ff', purpleBorder:'#ddd6fe',
-  red:     '#dc2626', redLight:   '#fef2f2', redBorder:   '#fecaca',
+  indigo: '#4f46e5', indigoDark: '#3730a3', indigoLight: '#eef2ff', indigoBorder: '#c7d2fe',
+  slate: '#64748b', slateBorder: '#e2e8f0',
+  purple: '#7c3aed', purpleLight: '#f5f3ff', purpleBorder: '#ddd6fe',
+  red: '#dc2626', redLight: '#fef2f2', redBorder: '#fecaca',
   saffron: '#f59e0b', saffron2: '#d97706',
 }
 
@@ -46,16 +46,20 @@ const S = {
  * UI aligned with Curriculum Hub (linear dropdowns + action buttons below)
  */
 export default function CurriculumSelector({ token, onComplete, buttonLabel = "Load Chapters" }) {
-  const [state, setState]       = useState('')
-  const [board, setBoard]       = useState('')
+  const [state, setState] = useState('')
+  const [board, setBoard] = useState('')
   const [classNum, setClassNum] = useState('')
-  const [subject, setSubject]   = useState('')
-  const [loading, setLoading]   = useState(false)
-  const [error, setError]       = useState('')
+  const [subject, setSubject] = useState('')
+  const [medium, setMedium] = useState('English')
+  const [stream, setStream] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
 
-  const boards   = STATE_BOARDS[state] || []
-  const classes  = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
-  const subjects = board && classNum ? getSubjects(board, classNum) : []
+  const boards = STATE_BOARDS[state] || []
+  const classes = getBoardClasses(board)
+  const availMediums = getBoardMediums(board)
+  const showStream = boardNeedsStream(board, classNum)
+  const subjects = board && classNum ? getSubjectsForStream(board, classNum, showStream ? stream : '') : []
 
   const handleLoad = async () => {
     if (!state || !board || !classNum || !subject) return
@@ -72,17 +76,20 @@ export default function CurriculumSelector({ token, onComplete, buttonLabel = "L
           board: board,
           class: `Class ${classNum}`,
           subject,
-          medium: 'English'
+          medium: medium || 'English',
+          ...(showStream && stream ? { stream } : {})
         })
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || 'Failed to load chapters')
-      
+
       onComplete({
         state,
         board,
         classNum,
         subject,
+        medium: medium || 'English',
+        stream: showStream ? stream : '',
         chapters: data.chapters || [],
         syllabus_id: data.syllabus_id,
         name: data.name
@@ -99,18 +106,18 @@ export default function CurriculumSelector({ token, onComplete, buttonLabel = "L
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
       <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
-      
+
       {/* Selection Grid: Exactly like Curriculum Hub */}
-      <div style={{ 
-        display: 'grid', 
-        gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', 
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
         gap: '14px',
         alignItems: 'flex-end'
       }}>
         {/* State */}
         <div className="fg" style={{ marginBottom: 0 }}>
           <label style={S.label}>State / UT</label>
-          <select style={S.select} value={state} onChange={e => { setState(e.target.value); setBoard(''); setClassNum(''); setSubject('') }}>
+          <select style={S.select} value={state} onChange={e => { setState(e.target.value); setBoard(''); setClassNum(''); setSubject(''); setMedium('English'); setStream('') }}>
             <option value="">— Select State —</option>
             {INDIA_STATES.map(s => <option key={s} value={s}>{s}</option>)}
           </select>
@@ -119,20 +126,41 @@ export default function CurriculumSelector({ token, onComplete, buttonLabel = "L
         {/* Board */}
         <div className="fg" style={{ marginBottom: 0 }}>
           <label style={S.label}>Board</label>
-          <select style={S.select} value={board} onChange={e => { setBoard(e.target.value); setSubject('') }} disabled={!state}>
+          <select style={S.select} value={board} onChange={e => { setBoard(e.target.value); setClassNum(''); setSubject(''); setMedium('English'); setStream('') }} disabled={!state}>
             <option value="">— Select Board —</option>
             {boards.map(b => <option key={b.shortName} value={b.shortName}>{b.name}</option>)}
           </select>
         </div>
 
+        {/* Medium — only for boards that offer multiple mediums */}
+        {availMediums && (
+          <div className="fg" style={{ marginBottom: 0 }}>
+            <label style={S.label}>Medium</label>
+            <select style={S.select} value={medium} onChange={e => setMedium(e.target.value)} disabled={!board}>
+              {availMediums.map(m => <option key={m} value={m}>{m}</option>)}
+            </select>
+          </div>
+        )}
+
         {/* Class */}
         <div className="fg" style={{ marginBottom: 0 }}>
           <label style={S.label}>Class</label>
-          <select style={S.select} value={classNum} onChange={e => { setClassNum(e.target.value); setSubject('') }} disabled={!board}>
+          <select style={S.select} value={classNum} onChange={e => { setClassNum(e.target.value); setSubject(''); setStream('') }} disabled={!board}>
             <option value="">— Select Class —</option>
             {classes.map(c => <option key={c} value={c}>Class {c}</option>)}
           </select>
         </div>
+
+        {/* Stream — only for Class 11-12 on applicable boards */}
+        {showStream && (
+          <div className="fg" style={{ marginBottom: 0 }}>
+            <label style={S.label}>Stream</label>
+            <select style={S.select} value={stream} onChange={e => { setStream(e.target.value); setSubject('') }} disabled={!classNum}>
+              <option value="">— All Subjects —</option>
+              {STREAMS.map(s => <option key={s} value={s}>{s}</option>)}
+            </select>
+          </div>
+        )}
 
         {/* Subject */}
         <div className="fg" style={{ marginBottom: 0 }}>
@@ -146,7 +174,7 @@ export default function CurriculumSelector({ token, onComplete, buttonLabel = "L
 
       {/* Action Row */}
       <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
-        <button 
+        <button
           className="btn-saffron"
           style={{ ...S.btn('primary'), opacity: ready ? 1 : 0.5 }}
           onClick={handleLoad}

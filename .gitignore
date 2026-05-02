@@ -9,14 +9,54 @@ __pycache__/
 *.pyc
 *.pyo
 *.pyd
+*.pyi
 
-# Environment
+# Environment / Secrets
 .env
 .env.local
+.env.*.local
+google-vision-key.json
+*.key.json
 
-# OS
+# OS / IDE
 .DS_Store
+.idea/
+.vscode/
 
-# Local
+# Local debug / temp artifacts
+debug_*.jpg
+debug_*.png
+tmp_app_*.py
+*.log
+.cache/
+outputs/
+scratch/
+backups/
+artifacts/
+.describe_crop*.py
+.describe_page*.py
+.find_circles*.py
+.github/workflows/*.sh
+
+# Vercel local token (contains secrets)
+.env.vercel
+
+# Build zips
 vidyai-react.zip
-.vercel
+
+# Local-only scripts (not part of the app)
+test_*.py
+check_*.py
+run_*.py
+diagnose_*.py
+focused_*.py
+verify_*.py
+analyse_*.py
+analyze_*.py
+update_*.py
+parse_*.py
+learn_*.py
+clear_*.py
+add_exam_to_prod.py
+fix_exam_*.py
+validate_mcq_results.py

@@ -23,13 +23,18 @@ services:
       - PORT=5001
       - MONGO_URI=mongodb://mongo:27017
       - REDIS_URL=redis://redis:6379/0
+      - GOOGLE_APPLICATION_CREDENTIALS=/google-vision-key.json
+      # Ollama runs on the Mac host; host.docker.internal resolves to it from inside Docker
+      - OLLAMA_URL=http://host.docker.internal:11434/api/generate
     env_file:
       - .env
     volumes:
-      # Persist uploads and study_db between restarts
-      - ./uploads:/app/uploads
-      - ./study_db:/app/study_db
-      - ./data:/app/data
+      # BASE = Path(app.py).parent.parent = / inside container, so data dirs are at root level
+      - ../uploads:/uploads
+      - ../study_db:/study_db
+      - ../data:/data
+      # Google Cloud Vision service account key (read-only)
+      - ../google-vision-key.json:/google-vision-key.json:ro
     depends_on:
       mongo:
         condition: service_healthy
@@ -50,12 +55,14 @@ services:
     environment:
       - MONGO_URI=mongodb://mongo:27017
       - REDIS_URL=redis://redis:6379/0
+      - GOOGLE_APPLICATION_CREDENTIALS=/google-vision-key.json
     env_file:
       - .env
     volumes:
-      - ./uploads:/app/uploads
-      - ./study_db:/app/study_db
-      - ./data:/app/data
+      - ../uploads:/uploads
+      - ../study_db:/study_db
+      - ../data:/data
+      - ../google-vision-key.json:/google-vision-key.json:ro
     depends_on:
       - redis
       - mongo

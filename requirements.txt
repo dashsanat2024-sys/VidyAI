@@ -12,11 +12,12 @@ gunicorn>=22.0.0
 openai>=1.35.0
 
 # ── LangChain Core ────────────────────────────────────────────────────────────
-langchain>=0.2.0
-langchain-core>=0.2.0
-langchain-openai>=0.1.0
-langchain-text-splitters>=0.2.0
-langchain-community>=0.2.0      # PyPDFLoader (text extraction from digital PDFs)
+# Pin 0.3.x: 1.x reorganized packages and often breaks `langchain.chains` imports.
+langchain>=0.3.0,<0.4.0
+langchain-core>=0.3.0,<0.4.0
+langchain-openai>=0.2.0,<0.4.0
+langchain-text-splitters>=0.3.0,<0.4.0
+langchain-community>=0.3.0,<0.4.0   # PyPDFLoader (text extraction from digital PDFs)
 
 # ── PDF Processing ────────────────────────────────────────────────────────────
 pypdf>=4.0.0                    # Extract text layer from digital PDFs
@@ -32,12 +33,17 @@ pdf2image>=1.17.0               # Local fallback PDF converter (requires poppler
 # ── Image Processing (handwriting OCR pipeline) ───────────────────────────────
 Pillow>=10.0.0                  # PIL — image manipulation, contrast enhancement
 numpy>=1.26.0                   # Pixel-diff array operations for handwriting isolation
+opencv-python-headless>=4.10.0  # Perspective correction, deskew helpers, CLAHE
+deskew>=1.5.1                   # Lightweight skew-angle estimation for scanned sheets
 
 # ── PDF Generation (blank answer sheet for image-diff) ───────────────────────
 reportlab>=4.0.0                # Generate blank answer sheet PDFs from exam data
 
+# ── Google Cloud Vision (handwriting OCR for subjective answers) ───────────────
+google-cloud-vision>=3.7.0
+
 # ── MongoDB — Primary Database ────────────────────────────────────────────────
-pymongo[srv]>=4.6.0             # [srv] = SRV DNS support for Atlas
+pymongo>=4.6.0                  # SRV support is built into modern pymongo
 dnspython>=2.6.0                # Required by pymongo SRV
 certifi>=2024.2.2               # TLS cert bundle for Atlas SSL
 
@@ -55,6 +61,9 @@ redis>=5.0.0                    # Celery broker + result backend
 
 # ── Email ─────────────────────────────────────────────────────────────────────
 # Uses stdlib smtplib — no extra package needed
+
+# ── Payment Gateway ───────────────────────────────────────────────────────────
+razorpay>=1.4.0                 # Razorpay Python SDK (UPI, cards, net banking, EMI)
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  DEPLOYMENT NOTES
