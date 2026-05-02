@@ -44,6 +44,9 @@ artifacts/
 # Build zips
 vidyai-react.zip
 
+# Deployment script (contains secrets)
+deploy.sh
+
 # Local-only scripts (not part of the app)
 test_*.py
 check_*.py
