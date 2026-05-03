@@ -85,7 +85,7 @@ MULTI_EVAL_INTER_BATCH_DELAY = float(os.getenv("MULTI_EVAL_INTER_BATCH_DELAY", "
 MULTI_EVAL_EXTRACT_ATTEMPTS = int(os.getenv("MULTI_EVAL_EXTRACT_ATTEMPTS", "4") or "4")
 MULTI_EVAL_EVAL_ATTEMPTS = int(os.getenv("MULTI_EVAL_EVAL_ATTEMPTS", "3") or "3")
 MULTI_EVAL_MAX_WORKERS_OVERRIDE = int(os.getenv("MULTI_EVAL_MAX_WORKERS", "0") or "0")
-OCR_PIPELINE_VERSION = "2026-05-03.1"
+OCR_PIPELINE_VERSION = "2026-05-03.2"
 OCR_FAST_COST = os.getenv("OCR_FAST_COST", "0") == "1"
 
 # ── Enhanced Evaluation Configuration ──────────────────────────────────────────
@@ -4331,13 +4331,15 @@ def _match_write_box_to_option(wr_text: str, q_options: dict) -> str:
                     return suffix_hits[0]
 
         # 4c. Try additional substitution tables when the primary didn't match.
-        #     Different digits are commonly confused with letters in OCR:
+        #     Different digits are commonly confused in handwriting OCR:
         #       D → 0 (e.g., "2D" misread from "20")
         #       S → 8 (e.g., "S" or "8" written in cursive look identical)
+        #       4 → 8 (closed-top handwritten 4 can resemble 8)
         #     We try each alternative and return the first unambiguous hit.
         _ALT_SUBS = [
-            ("D→0",  str.maketrans("ILOGPSDZD", "110669200")),   # D→0, S→9→already tried; add D only
-            ("S→8",  str.maketrans("ILOGPSD",   "1106682")),     # S→8 (curved 8 looks like S)
+            ("D→0",  str.maketrans("ILOGPSDZD", "110669200")),   # D→0
+            ("S→8",  str.maketrans("ILOGPSD",   "1106682")),     # S→8
+            ("4→8",  str.maketrans("4",          "8")),           # closed-top 4 misread as 8
             ("D0S8", str.maketrans("ILOGPSDZ",  "11066820")),    # combined
         ]
         for _label, _subs in _ALT_SUBS:
@@ -4406,10 +4408,19 @@ def _ocr_cropped_region(image_pil, box, remove_header_px=50, write_box=False):
     crop.save(buf, format="JPEG", quality=80)   # JPEG saves ~3x vs PNG
     img_bytes = buf.getvalue()
     img_hash = hashlib.md5(img_bytes).hexdigest()
+    _cache_key = f"ocr_crop_{img_hash}"
 
-    cached = _eval_cache.get(f"ocr_crop_{img_hash}")
+    cached = _eval_cache.get(_cache_key)
     if cached is not None:
-        return clean_ocr(cached)
+        # Reject stale AI-refusal responses that were cached before the
+        # write_box=True prompt was added (they contain long refusal strings
+        # rather than a single character/number or "BLANK").
+        if len(cached) > 12 or any(p in cached.upper() for p in (
+                "NO HANDWRITTEN", "NO TEXT", "NO VISIBLE", "THERE IS NO",
+                "I CANNOT", "UNABLE TO")):
+            pass   # fall through to fresh OCR
+        else:
+            return clean_ocr(cached)
 
     # ── Google Cloud Vision (primary) ────────────────────────────────────────
     text = ""
