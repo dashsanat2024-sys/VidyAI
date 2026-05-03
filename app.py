@@ -93,7 +93,10 @@ OCR_CONFIDENCE_THRESHOLD = float(os.getenv("OCR_CONFIDENCE_THRESHOLD", "0.75") o
 GRADING_BORDERLINE_MARGIN = float(os.getenv("GRADING_BORDERLINE_MARGIN", "0.05") or "0.05") # 5% of pass threshold
 REVIEW_ESSAY_LENGTH_THRESHOLD = int(os.getenv("REVIEW_ESSAY_LENGTH_THRESHOLD", "500") or "500")  # Words
 REVIEW_SCORE_ANOMALY_STDDEV = float(os.getenv("REVIEW_SCORE_ANOMALY_STDDEV", "2.0") or "2.0") # >2σ deviations
-BULK_PARALLEL_WORKERS = int(os.getenv("BULK_PARALLEL_WORKERS", "10") or "10")     # Max workers for bulk
+BULK_PARALLEL_WORKERS = int(os.getenv("BULK_PARALLEL_WORKERS", "10") or "10")     # Max workers for bulk (non-Cloud Run)
+# On Cloud Run, bulk used to run sequentially to avoid OpenCV thread issues; that
+# often exceeded Gunicorn/Cloud Run request limits (502). Default 2 matches Class PDF.
+BULK_CLOUD_RUN_PARALLEL = int(os.getenv("BULK_CLOUD_RUN_PARALLEL", "2") or "2")
 COST_OPTIMIZATION_ENABLED = os.getenv("COST_OPTIMIZATION_ENABLED", "1") == "1"     # Route by sheet quality
 ENABLE_PARENT_EMAILS = os.getenv("ENABLE_PARENT_EMAILS", "0") == "1"               # Send automated parent reports
 
@@ -9692,35 +9695,26 @@ def bulk_evaluate():
     eval_items = []
     _is_cloud_run_bulk = bool(os.getenv("K_SERVICE", "").strip())
     if _is_cloud_run_bulk:
-        # Cloud Run stability: avoid threaded C-extension OCR crashes in bulk mode.
-        # Process sequentially; reliability is more important than throughput here.
-        log.info(f"[BULK] Cloud Run sequential sync mode for {len(saved)} file(s)")
-        for entry in saved:
+        _bw = max(1, min(BULK_CLOUD_RUN_PARALLEL, len(saved) or 1))
+    else:
+        _bw = min(max(1, BULK_PARALLEL_WORKERS), len(saved) or 1, 4)
+    log.info(
+        f"[BULK] Sync: {len(saved)} file(s), max_workers={_bw}, cloud_run={_is_cloud_run_bulk}"
+    )
+    with ThreadPoolExecutor(max_workers=_bw) as pool:
+        futs = {pool.submit(_eval_one, entry): entry for entry in saved}
+        for fut in as_completed(futs):
             try:
-                res_p, err = _eval_one(entry)
-            except Exception as _seq_err:
-                _fn = entry[3] if len(entry) > 3 else "unknown"
-                log.exception(f"[BULK] Sequential worker crashed for {_fn}: {_seq_err}")
-                res_p, err = None, {"file": _fn, "error": str(_seq_err)}
+                res_p, err = fut.result()
+            except Exception as _fut_err:
+                _entry = futs.get(fut) or ("", "", "", "unknown")
+                _fn = _entry[3] if len(_entry) > 3 else "unknown"
+                log.exception(f"[BULK] Worker future crashed for {_fn}: {_fut_err}")
+                res_p, err = None, {"file": _fn, "error": str(_fut_err)}
             if res_p:
                 eval_items.append(res_p)
             if err:
                 failures.append(err)
-    else:
-        with ThreadPoolExecutor(max_workers=min(4, len(saved))) as pool:
-            futs = {pool.submit(_eval_one, entry): entry for entry in saved}
-            for fut in as_completed(futs):
-                try:
-                    res_p, err = fut.result()
-                except Exception as _fut_err:
-                    _entry = futs.get(fut) or ("", "", "", "unknown")
-                    _fn = _entry[3] if len(_entry) > 3 else "unknown"
-                    log.exception(f"[BULK] Worker future crashed for {_fn}: {_fut_err}")
-                    res_p, err = None, {"file": _fn, "error": str(_fut_err)}
-                if res_p:
-                    eval_items.append(res_p)
-                if err:
-                    failures.append(err)
 
     log.info(f"[BULK] Sync complete: ok={len(eval_items)}")
     return jsonify({

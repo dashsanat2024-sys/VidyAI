@@ -36,4 +36,6 @@ ENV PYTHONUNBUFFERED=1 \
 
 EXPOSE 8080
 
-CMD ["sh", "-c", "gunicorn app:app --bind 0.0.0.0:${PORT} --timeout 300 --workers 1"]
+# Bulk / class PDF can exceed 300s. Cloud Run timeout may be 3600s; keep Gunicorn
+# high enough that the worker is not SIGKILL'd before the request finishes (502).
+CMD ["sh", "-c", "gunicorn app:app --bind 0.0.0.0:${PORT} --timeout ${GUNICORN_TIMEOUT:-1800} --workers 1"]
