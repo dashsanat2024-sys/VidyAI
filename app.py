@@ -85,7 +85,7 @@ MULTI_EVAL_INTER_BATCH_DELAY = float(os.getenv("MULTI_EVAL_INTER_BATCH_DELAY", "
 MULTI_EVAL_EXTRACT_ATTEMPTS = int(os.getenv("MULTI_EVAL_EXTRACT_ATTEMPTS", "4") or "4")
 MULTI_EVAL_EVAL_ATTEMPTS = int(os.getenv("MULTI_EVAL_EVAL_ATTEMPTS", "3") or "3")
 MULTI_EVAL_MAX_WORKERS_OVERRIDE = int(os.getenv("MULTI_EVAL_MAX_WORKERS", "0") or "0")
-OCR_PIPELINE_VERSION = "2026-05-02.2"
+OCR_PIPELINE_VERSION = "2026-05-03.1"
 OCR_FAST_COST = os.getenv("OCR_FAST_COST", "0") == "1"
 
 # ── Enhanced Evaluation Configuration ──────────────────────────────────────────
@@ -3483,29 +3483,42 @@ def _file_hash(path: str) -> str:
     return h.hexdigest()
 
 def _cache_get(file_hash: str, exam_id: str) -> Optional[dict]:
-    """Return cached evaluation payload if it exists, else None."""
+    """Return cached evaluation payload if it exists and matches current pipeline version, else None."""
     if not MONGO_OK:
         return None
     try:
         doc = mongo_db["eval_cache"].find_one({"cache_key": f"{file_hash}:{exam_id}"})
         if doc:
-            doc.pop("_id", None)
+            payload = doc.get("payload", {})
+            # Invalidate cache if OCR pipeline version has changed
+            if payload.get("ocr_version") != OCR_PIPELINE_VERSION:
+                log.info(f"[CACHE MISS] version mismatch hash={file_hash[:8]} exam={exam_id} "
+                         f"cached={payload.get('ocr_version')} current={OCR_PIPELINE_VERSION}")
+                return None
             log.info(f"[CACHE HIT] hash={file_hash[:8]} exam={exam_id}")
-            return doc.get("payload")
+            return payload
     except Exception as e:
         log.warning(f"[CACHE] get error: {e}")
     return None
 
 def _cache_set(file_hash: str, exam_id: str, payload: dict):
-    """Write evaluation payload to cache."""
+    """Write evaluation payload to cache.
+    
+    MongoDB requires all dict keys to be strings. submitted_answers uses integer
+    question IDs as keys ({1: 'C', 2: 'D', ...}), so we must stringify them before
+    storing, and question_wise question_id values stay as-is (they're in values not keys).
+    """
     if not MONGO_OK:
         return
     try:
+        import json as _json
+        # Serialize then deserialize to convert any integer dict keys → string keys
+        clean_payload = _json.loads(_json.dumps(payload, default=str))
         mongo_db["eval_cache"].update_one(
             {"cache_key": f"{file_hash}:{exam_id}"},
             {"$set": {
                 "cache_key": f"{file_hash}:{exam_id}",
-                "payload":   payload,
+                "payload":   clean_payload,
                 "cached_at": _now(),
             }},
             upsert=True,
@@ -4272,7 +4285,8 @@ def _match_write_box_to_option(wr_text: str, q_options: dict) -> str:
         return ""
     # Reject leftover template text or AI error phrases
     _REJECT_PHRASES = ("OR WRITE", "OR WRIT", "OK WHAT", "OK WHIT", "OK WHI",
-                       "SORRY", "UNABLE", "CANNOT", "CAN'T", "SEE ANY")
+                       "SORRY", "UNABLE", "CANNOT", "CAN'T", "SEE ANY", "BLANK",
+                       "NO TEXT", "NO HANDWRITTEN", "NO MARK", "EMPTY", "NOTHING")
     if any(p in wr_clean for p in _REJECT_PHRASES):
         return ""
 
@@ -4283,16 +4297,21 @@ def _match_write_box_to_option(wr_text: str, q_options: dict) -> str:
     for src, dst in _VISUAL.items():
         wr_clean = wr_clean.replace(src, dst)
 
-    # 3. Short text (≤3 chars) with a direct A/B/C/D letter
+    # 3. Short text (≤3 chars) with ONLY letters (no digits) — pure letter answer like "C" or "B"
+    #    Skip this step when digits are present; they indicate a numeric value that must go
+    #    through step 4 first (e.g., "2D" should be treated as "20", not matched to "D").
     hits = [ch for ch in wr_clean if ch in "ABCD"]
-    if hits and len(wr_clean) <= 3:
+    has_digits = any(c.isdigit() for c in wr_clean)
+    if hits and len(wr_clean) <= 3 and not has_digits:
         return hits[0]
 
     # 4. Numeric value → option value matching
     if q_options:
-        # Apply common OCR letter↔digit substitutions before stripping
+        # Apply common OCR letter↔digit substitutions before stripping.
         # I/L → 1, O → 0, P/G → 6 (handwritten 6 sometimes reads as P or G)
-        _NUM_SUBS = str.maketrans("ILOGP", "11066")
+        # S → 9 (handwritten 9 with open loop can look like 'S' to OCR)
+        # Z → 2 (handwritten 2 sometimes reads as Z)
+        _NUM_SUBS = str.maketrans("ILOGPSZ", "1106692")
         wr_for_num = wr_clean.translate(_NUM_SUBS)
         wr_num = re.sub(r"[^0-9.]", "", wr_for_num)
         if wr_num:
@@ -4311,15 +4330,35 @@ def _match_write_box_to_option(wr_text: str, q_options: dict) -> str:
                 if len(suffix_hits) == 1:
                     return suffix_hits[0]
 
+        # 4c. Try additional substitution tables when the primary didn't match.
+        #     Different digits are commonly confused with letters in OCR:
+        #       D → 0 (e.g., "2D" misread from "20")
+        #       S → 8 (e.g., "S" or "8" written in cursive look identical)
+        #     We try each alternative and return the first unambiguous hit.
+        _ALT_SUBS = [
+            ("D→0",  str.maketrans("ILOGPSDZD", "110669200")),   # D→0, S→9→already tried; add D only
+            ("S→8",  str.maketrans("ILOGPSD",   "1106682")),     # S→8 (curved 8 looks like S)
+            ("D0S8", str.maketrans("ILOGPSDZ",  "11066820")),    # combined
+        ]
+        for _label, _subs in _ALT_SUBS:
+            _wr_alt = wr_clean.translate(_subs)
+            _wr_num = re.sub(r"[^0-9.]", "", _wr_alt)
+            if _wr_num and _wr_num != wr_num:
+                for letter, opt_text in q_options.items():
+                    opt_num = re.sub(r"[^0-9.]", "", str(opt_text).upper())
+                    if opt_num and _wr_num == opt_num:
+                        return letter
+
     # 5. Any A/B/C/D letter anywhere in very short text (≤5 chars to avoid false
-    #    positives from words like "WHAT" which contains 'A' by accident)
-    if hits and len(wr_clean) <= 5:
+    #    positives from words like "WHAT" which contains 'A' by accident).
+    #    Still skip if digits are present — numeric context overrides letter guessing.
+    if hits and len(wr_clean) <= 5 and not has_digits:
         return hits[0]
 
     return ""
 
 
-def _ocr_cropped_region(image_pil, box, remove_header_px=50):
+def _ocr_cropped_region(image_pil, box, remove_header_px=50, write_box=False):
     """OCR a cropped region of a page image for subjective answers.
 
     Pipeline:
@@ -4392,17 +4431,31 @@ def _ocr_cropped_region(image_pil, box, remove_header_px=50):
             import openai as _oai, base64 as _b64
             b64 = _b64.b64encode(img_bytes).decode()
             client_oai = _oai.OpenAI(api_key=OPENAI_API_KEY)
+            if write_box:
+                # Write-box: student writes a single digit, number, or letter A-D.
+                # Use a specific prompt to prevent model refusals on faint/small marks.
+                ocr_prompt = (
+                    "This image shows a small handwritten answer box from a student exam. "
+                    "The student has written a single digit (0-9), a short number, or a letter (A/B/C/D). "
+                    "Even if the writing is faint, small, or unclear, do your best to read it. "
+                    "Return ONLY the handwritten character(s) — nothing else. "
+                    "If the box is completely empty with no marks at all, return the single word: BLANK"
+                )
+                detail_level = "high"   # higher detail for small single-character images
+            else:
+                ocr_prompt = (
+                    "Transcribe ALL handwritten text visible in this image. "
+                    "Return only the transcribed text."
+                )
+                detail_level = "low"   # 'low' costs ~85 tokens vs 'high' ~765
             resp_oai = client_oai.chat.completions.create(
                 model=OCR_VISION_MODEL,
-                max_tokens=300,
+                max_tokens=50 if write_box else 300,
                 messages=[{"role": "user", "content": [
-                    {"type": "text", "text": (
-                        "Transcribe ALL handwritten text visible in this image. "
-                        "Return only the transcribed text."
-                    )},
+                    {"type": "text", "text": ocr_prompt},
                     {"type": "image_url", "image_url": {
                         "url": f"data:image/jpeg;base64,{b64}",
-                        "detail": "low",   # 'low' costs ~85 tokens vs 'high' ~765
+                        "detail": detail_level,
                     }},
                 ]}],
             )
@@ -4514,6 +4567,7 @@ def _extract_answers(path: str, exam_questions: list = None, exam: dict = None):
                     page0,
                     [OR_X1, OR_X2, max(0, yc - OR_DY), min(H0, yc + OR_DY)],
                     remove_header_px=0,
+                    write_box=True,
                 ).strip()
                 # Look up option values so numeric write-box answers can be mapped
                 q_options: dict = {}
@@ -4530,8 +4584,12 @@ def _extract_answers(path: str, exam_questions: list = None, exam: dict = None):
                     winner = matched
                     log.info(f"[OMR-WR] Q{qid}: write-box '{wr_text}' → '{winner}'")
                 else:
+                    # Both bubble AND write-box failed — do not guess by defaulting to
+                    # the OMR noise winner; mark as blank so grading gives 0 marks
+                    # without accidentally crediting the wrong option.
+                    winner = ""
                     log.warning(
-                        f"[OMR] Q{qid}: no bubble filled, write-box='{wr_text}' → fallback '{winner}'"
+                        f"[OMR] Q{qid}: no bubble and no write-box match ('{wr_text}') → blank"
                     )
 
             answers[qid] = winner
@@ -8647,6 +8705,7 @@ def evaluate_sheet():
         "extraction_mode":  mode,
         "submitted_answers":answers,
         "result":           result,
+        "ocr_version":      OCR_PIPELINE_VERSION,
     }
     evaluations_registry[eval_id] = payload
     if not IS_VERCEL:
@@ -9205,13 +9264,32 @@ def bulk_evaluate():
                 except Exception as _he:
                     log.warning(f"[BULK] Header extraction failed for {fn}: {_he}")
             if cached:
-                return {"evaluation_id": cached["evaluation_id"],
-                        "student_name": name or cached.get("student_name", ""),
-                        "roll_no": roll or cached.get("roll_no", ""),
-                        "percentage": cached["result"].get("percentage",0),
-                        "is_pass": cached["result"].get("is_pass",False),
-                        "total_awarded": cached["result"].get("total_awarded",0),
-                        "total_possible": cached["result"].get("total_possible",0)}, None
+                # Reconstruct mcq_answers / descriptive_answers from cached question_wise
+                cached_qwise = cached.get("result", {}).get("question_wise", [])
+                cached_mcq, cached_subj = [], []
+                for qw in cached_qwise:
+                    qid = qw.get("question_id")
+                    ans = str(qw.get("student_answer", "")).strip() or "—"
+                    if qw.get("type") == "objective":
+                        cached_mcq.append(f"Q{qid}={ans}")
+                    else:
+                        short = (ans[:80] + "...") if len(ans) > 80 else ans
+                        cached_subj.append(f"Q{qid}={short}")
+                cached_res = cached.get("result", {})
+                log.info(f"[BULK CACHE HIT] fn={fn} mcq={' '.join(cached_mcq)}")
+                return {
+                    "evaluation_id": cached["evaluation_id"],
+                    "student_name": name or cached.get("student_name", ""),
+                    "roll_no": roll or cached.get("roll_no", ""),
+                    "submitted_answers": cached.get("submitted_answers", {}),
+                    "result": cached_res,
+                    "mcq_answers": " ".join(cached_mcq),
+                    "descriptive_answers": " | ".join(cached_subj),
+                    "percentage": cached_res.get("percentage", 0),
+                    "is_pass": cached_res.get("is_pass", False),
+                    "total_awarded": cached_res.get("total_awarded", 0),
+                    "total_possible": cached_res.get("total_possible", 0),
+                }, None
             _openai_limiter.wait()
             answers, mode = _extract_answers(fpath, exam_questions=e.get("questions",[]), exam=e)
             if not answers:
@@ -9224,6 +9302,7 @@ def bulk_evaluate():
                 "student_name": name, "roll_no": roll, "file_name": fn,
                 "file_hash": fhash, "extraction_mode": mode,
                 "submitted_answers": answers, "result": res,
+                "ocr_version": OCR_PIPELINE_VERSION,
             }
             evaluations_registry[eid] = p
             if not IS_VERCEL:
@@ -9247,6 +9326,7 @@ def bulk_evaluate():
 
             summary_p = {
                 "evaluation_id": eid, "student_name": name, "roll_no": roll,
+                "file_name": fn,
                 "submitted_answers": answers,
                 "result": res,
                 # Fields expected by BulkEvalTab's CSV generator
