@@ -191,11 +191,16 @@ def _ensure_api_cors_headers(response):
     origin = _cors_origin_for_request()
     if not origin:
         return response
-    if response.headers.get("Access-Control-Allow-Origin"):
-        return response
-    response.headers["Access-Control-Allow-Origin"] = origin
+    
+    # Ensure Origin is set if not already
+    if not response.headers.get("Access-Control-Allow-Origin"):
+        response.headers["Access-Control-Allow-Origin"] = origin
+        
     response.headers["Access-Control-Allow-Credentials"] = "true"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, Accept, X-Requested-With"
+    response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
     response.headers["Access-Control-Expose-Headers"] = "Content-Type, Authorization"
+    
     vary = response.headers.get("Vary")
     response.headers["Vary"] = f"{vary}, Origin" if vary else "Origin"
     return response
