@@ -67,14 +67,14 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 OPENAI_API_KEY_BULK_PRIMARY = os.getenv("OPENAI_API_KEY_BULK_PRIMARY", "")
 OPENAI_API_KEY_BULK_FALLBACK = os.getenv("OPENAI_API_KEY_BULK_FALLBACK", "")
 OPENAI_API_KEY_PREMIUM = os.getenv("OPENAI_API_KEY_PREMIUM", "")
-OPENAI_MODEL   = os.getenv("OPENAI_MODEL", "gpt-4o")
+OPENAI_MODEL   = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 OPENAI_MINI    = os.getenv("OPENAI_MINI_MODEL", "gpt-4o-mini")
 OCR_VISION_MODEL        = os.getenv("OCR_VISION_MODEL", OPENAI_MINI)
 OCR_PREMIUM_VISION_MODEL = os.getenv("OCR_PREMIUM_VISION_MODEL", OPENAI_MODEL)
 SUBJECTIVE_OCR_MODEL    = os.getenv("SUBJECTIVE_OCR_MODEL", OPENAI_MINI)  # default to mini for lower cost; override in env when needed
 OCR_MAX_IMAGE_DIM = int(os.getenv("OCR_MAX_IMAGE_DIM", "2048") or "2048")
 OCR_JPEG_QUALITY = int(os.getenv("OCR_JPEG_QUALITY", "82") or "82")
-OCR_PDF_DPI = int(os.getenv("OCR_PDF_DPI", "180" if os.getenv("K_SERVICE", "").strip() else "300") or "300")
+OCR_PDF_DPI = int(os.getenv("OCR_PDF_DPI", "300") or "300")
 OCR_QUALITY_ESCALATION_THRESHOLD = float(os.getenv("OCR_QUALITY_ESCALATION_THRESHOLD", "0.75") or "0.75")
 OCR_PREPROCESS_GEOMETRY = os.getenv("OCR_PREPROCESS_GEOMETRY", "1") == "1"
 OCR_PREPROCESS_CLAHE = os.getenv("OCR_PREPROCESS_CLAHE", "1") == "1"
@@ -82,10 +82,10 @@ OCR_PREPROCESS_COMPRESSION = os.getenv("OCR_PREPROCESS_COMPRESSION", "1") == "1"
 MULTI_SPLIT_FIXED_PAGES = int(os.getenv("MULTI_SPLIT_FIXED_PAGES", "2") or "2")
 MULTI_EVAL_BATCH_SIZE = int(os.getenv("MULTI_EVAL_BATCH_SIZE", "5") or "5")
 MULTI_EVAL_INTER_BATCH_DELAY = float(os.getenv("MULTI_EVAL_INTER_BATCH_DELAY", "0.75") or "0.75")
-MULTI_EVAL_EXTRACT_ATTEMPTS = int(os.getenv("MULTI_EVAL_EXTRACT_ATTEMPTS", "4") or "4")
-MULTI_EVAL_EVAL_ATTEMPTS = int(os.getenv("MULTI_EVAL_EVAL_ATTEMPTS", "3") or "3")
+MULTI_EVAL_EXTRACT_ATTEMPTS = int(os.getenv("MULTI_EVAL_EXTRACT_ATTEMPTS", "1") or "1")
+MULTI_EVAL_EVAL_ATTEMPTS = int(os.getenv("MULTI_EVAL_EVAL_ATTEMPTS", "1") or "1")
 MULTI_EVAL_MAX_WORKERS_OVERRIDE = int(os.getenv("MULTI_EVAL_MAX_WORKERS", "0") or "0")
-OCR_PIPELINE_VERSION = "2026-05-03.2"
+OCR_PIPELINE_VERSION = "2026-05-04.1"
 OCR_FAST_COST = os.getenv("OCR_FAST_COST", "0") == "1"
 
 # ── Enhanced Evaluation Configuration ──────────────────────────────────────────
@@ -1832,18 +1832,15 @@ def _evaluate_answers(exam: dict, submitted: Dict[int, str], roll_no: str = "") 
                 e.update({"awarded_marks": 0.0, "feedback": "Grading error."})
 
     pct = round((total_awarded / total_possible) * 100, 2) if total_possible else 0.0
-    improvement = ""
-    if any(e.get("type") == "subjective" for e in evals) and pct < 90.0:
-        try:
-            fb = " | ".join(e.get("feedback", "") for e in evals if e.get("type") == "subjective")
-            improvement = _llm_text(
-                f"Based on this feedback: '{fb}', give one short encouraging sentence about what the student needs to improve.",
-                mini=True
-            ).strip()
-        except Exception:
-            improvement = "Keep practising subjective responses."
-    elif pct >= 90.0:
+    # Static improvement advice based on score band — no LLM call needed here.
+    if pct >= 90.0:
         improvement = "Excellent work! Maintain this standard."
+    elif pct >= 75.0:
+        improvement = "Good performance. Review the feedback on subjective answers and aim for more detail."
+    elif pct >= 50.0:
+        improvement = "Passing grade. Focus on the key points highlighted in each question's feedback."
+    else:
+        improvement = "Needs improvement. Revisit the topic and practise writing complete, structured answers."
 
     return {
         "roll_no": roll_no, "total_possible": total_possible, "total_awarded": total_awarded,
@@ -3738,7 +3735,8 @@ def _ocr_with_google_vision(image_pil) -> str:
     try:
         import openai as _oai
         buf = io.BytesIO()
-        image_pil.save(buf, format="PNG")
+        # JPEG at quality=85 reduces payload ~4× vs PNG with no loss in text OCR accuracy.
+        image_pil.convert("RGB").save(buf, format="JPEG", quality=85)
         b64 = base64.b64encode(buf.getvalue()).decode()
         client = _oai.OpenAI(api_key=OPENAI_API_KEY)
         resp = client.chat.completions.create(
@@ -3753,8 +3751,8 @@ def _ocr_with_google_vision(image_pil) -> str:
                         "Return only the transcribed text, nothing else."
                     )},
                     {"type": "image_url", "image_url": {
-                        "url": f"data:image/png;base64,{b64}",
-                        "detail": "high"
+                        "url": f"data:image/jpeg;base64,{b64}",
+                        "detail": "low"
                     }},
                 ],
             }],
@@ -3894,7 +3892,7 @@ def _ocr_page_parallel(images: list, exam_questions: list, exam: dict,
 
             _openai_limiter.wait()
             resp = client.chat.completions.create(
-                model=OPENAI_MODEL, temperature=0, max_tokens=4096,
+                model=OCR_VISION_MODEL, temperature=0, max_tokens=4096,
                 response_format={"type": "json_object"},
                 messages=[{"role": "user", "content": [
                     {"type": "text", "text": full_page_prompt},
@@ -4068,7 +4066,7 @@ def _ocr_page_parallel(images: list, exam_questions: list, exam: dict,
                     try:
                         _openai_limiter.wait()
                         subj_resp = client.chat.completions.create(
-                            model=OPENAI_MODEL, temperature=0, max_tokens=1000,
+                            model=SUBJECTIVE_OCR_MODEL, temperature=0, max_tokens=1000,
                             response_format={"type": "json_object"},
                             messages=[{"role": "user", "content": [
                                 {"type": "text", "text": subj_crop_prompt},
@@ -4501,24 +4499,26 @@ def _extract_answers(path: str, exam_questions: list = None, exam: dict = None):
 
     exam_questions = exam_questions or []
     mcq_ids  = sorted([int(q["id"]) for q in exam_questions if q.get("type", "objective") == "objective"])
-    subj_ids = sorted([int(q["id"]) for q in exam_questions if q.get("type", "objective") != "objective"])
 
-    # ── 1. Load both pages at 150 dpi ────────────────────────────────────────
+    # ── 1. Load pages at 150 dpi (OMR baseline) ──────────────────────────────
     try:
         ext = Path(path).suffix.lower()
         if ext == ".pdf":
             import fitz
             doc = fitz.open(path)
-            pix0 = doc[0].get_pixmap(dpi=150)
-            page0 = Image.frombytes("RGB", [pix0.width, pix0.height], pix0.samples)
-            page1 = None
-            if len(doc) > 1:
-                pix1 = doc[1].get_pixmap(dpi=150)
-                page1 = Image.frombytes("RGB", [pix1.width, pix1.height], pix1.samples)
+            all_pages = []
+            for _p in doc:
+                _pix = _p.get_pixmap(dpi=150)
+                all_pages.append(Image.frombytes("RGB", [_pix.width, _pix.height], _pix.samples))
             doc.close()
+            if not all_pages:
+                return {}, "load_failed"
+            page0 = all_pages[0]
+            page1 = all_pages[1] if len(all_pages) > 1 else None
         else:
             page0 = Image.open(path).convert("RGB")
             page1 = None
+            all_pages = [page0]
     except Exception as e:
         log.error(f"[EXTRACT] Page load failed: {e}")
         return {}, "load_failed"
@@ -4526,6 +4526,54 @@ def _extract_answers(path: str, exam_questions: list = None, exam: dict = None):
     W0, H0 = page0.width, page0.height
     gray0 = np.array(page0.convert("L"))
     answers = {}
+
+    # ── 1.5 Exam-ID guardrail (prevents cross-exam mis-evaluation) ──────────
+    # Student sheets generated by this system print a short hex Exam ID in the
+    # header on every page. If we can read a different ID than the selected
+    # exam, abort early with a clear mismatch mode so callers can report it.
+    try:
+        expected_exam_id = str((exam or {}).get("exam_id", "")).strip().lower()
+        if expected_exam_id:
+            sheet_exam_id = ""
+
+            # 1) Try text-layer extraction first (deterministic for generated PDFs).
+            if str(path).lower().endswith(".pdf"):
+                try:
+                    import pypdf as _pypdf_guard
+                    _r = _pypdf_guard.PdfReader(path)
+                    _txt = ""
+                    for _i, _pg in enumerate(_r.pages[:2]):
+                        _txt += "\n" + (_pg.extract_text() or "")
+                    _m = re.search(r"exam\s*id\s*[:\-]?\s*([a-f0-9]{10})", _txt, flags=re.IGNORECASE)
+                    if _m:
+                        sheet_exam_id = _m.group(1).lower()
+                    else:
+                        _m2 = re.search(r"\b([a-f0-9]{10})\b", _txt.lower())
+                        if _m2:
+                            sheet_exam_id = _m2.group(1).lower()
+                except Exception:
+                    pass
+
+            # 2) Fallback to OCR on header crop.
+            if not sheet_exam_id:
+                hdr_box = [0, int(W0 * 0.98), 0, int(H0 * 0.30)]
+                hdr_text = _ocr_cropped_region(page0, hdr_box, remove_header_px=0)
+                m_eid = re.search(r"exam\s*id\s*[:\-]?\s*([a-f0-9]{10})", str(hdr_text or "").lower(), flags=re.IGNORECASE)
+                if m_eid:
+                    sheet_exam_id = m_eid.group(1).lower()
+                else:
+                    m_eid2 = re.search(r"\b([a-f0-9]{10})\b", str(hdr_text or "").lower())
+                    if m_eid2:
+                        sheet_exam_id = m_eid2.group(1).lower()
+
+            if sheet_exam_id:
+                if sheet_exam_id != expected_exam_id:
+                    log.warning(
+                        f"[EXTRACT] Exam ID mismatch: sheet={sheet_exam_id} selected={expected_exam_id}"
+                    )
+                    return {}, f"exam_id_mismatch:{sheet_exam_id}:{expected_exam_id}"
+    except Exception as _eid_ex:
+        log.debug(f"[EXTRACT] Exam-ID guard skipped: {_eid_ex}")
 
     # ── 2. Template OMR — objective answers from page 1 bubble rows ──────────
     # The DNHS answer sheet has exactly 4 MCQ bubble rows (Q1-Q4).
@@ -4658,9 +4706,152 @@ def _extract_answers(path: str, exam_questions: list = None, exam: dict = None):
                 log.info(f"[OCR] Q{qid} subj: '{ocr_text[:80]}'")
                 answers[qid] = ocr_text
 
-    # Q7+ in 6-MCQ exams have no physical space on this 2-page DNHS form → not captured
+    mode = "omr+ocr_pipeline"
 
-    return answers, "omr+ocr_pipeline"
+    # ── 4. Fallback for unanswered questions (Q7+ or weak OCR crops) ─────────
+    # The deterministic OMR path is cheap and fast for DNHS templates, but some
+    # exams include additional boxes/pages. Fill missing answers via full OCR.
+    if exam_questions and all_pages:
+        q_meta = {int(q["id"]): q for q in exam_questions if str(q.get("id", "")).strip()}
+
+        def _extract_missing_with_targeted_vision(missing_qids: list[int]) -> Dict[int, str]:
+            """
+            Targeted recovery pass for stubborn missing question IDs.
+            Runs only when generic fallback still leaves gaps (typically Q7+ on
+            multi-page answer sheets). Prompts vision model to extract ONLY the
+            requested question IDs from every page.
+            """
+            if not missing_qids:
+                return {}
+            if not OPENAI_API_KEY:
+                return {}
+            try:
+                import io as _io_local
+                import base64 as _b64_local
+                import openai as _oai_local
+                from PIL import Image as _PILImage
+            except Exception as _imp_ex:
+                log.warning(f"[EXTRACT] Targeted vision import failed: {_imp_ex}")
+                return {}
+
+            subset_qs = [q_meta[qid] for qid in missing_qids if qid in q_meta]
+            if not subset_qs:
+                return {}
+
+            q_lines = []
+            for q in subset_qs:
+                qid = int(q.get("id", 0))
+                qtype = "MCQ" if q.get("type", "objective") == "objective" else "Written"
+                q_lines.append(f"Q{qid} [{qtype}]: {str(q.get('question', ''))[:120]}")
+            q_ref = "\n".join(q_lines)
+
+            client_t = _oai_local.OpenAI(api_key=OPENAI_API_KEY)
+            recovered: Dict[int, str] = {}
+
+            for page_idx, _img in enumerate(all_pages):
+                try:
+                    img = _img.convert("RGB")
+                    # Keep payload bounded while preserving readability.
+                    max_w = max(1200, min(2200, OCR_MAX_IMAGE_DIM))
+                    if img.width > max_w:
+                        _scale = max_w / float(img.width)
+                        img = img.resize((max_w, int(img.height * _scale)), _PILImage.LANCZOS)
+
+                    _buf = _io_local.BytesIO()
+                    img.save(_buf, format="JPEG", quality=max(60, min(92, OCR_JPEG_QUALITY)))
+                    _b64 = _b64_local.b64encode(_buf.getvalue()).decode()
+                    _buf.close()
+
+                    prompt = (
+                        "You are reading ONE page of a scanned student answer sheet.\n"
+                        f"Extract answers ONLY for these question IDs if visible on this page: "
+                        f"{', '.join('Q'+str(x) for x in missing_qids)}.\n\n"
+                        "Rules:\n"
+                        "- If a requested question is NOT visible on this page, omit it.\n"
+                        "- For MCQ questions, return only one uppercase letter A/B/C/D.\n"
+                        "- For written questions, return full handwritten text across all lines.\n"
+                        "- Do not guess from printed labels.\n\n"
+                        f"Question reference:\n{q_ref}\n\n"
+                        "Return strict JSON only: {\"answers\": {\"7\": \"...\", \"8\": \"...\"}}"
+                    )
+
+                    _openai_limiter.wait()
+                    _resp = client_t.chat.completions.create(
+                        model=OCR_VISION_MODEL,
+                        temperature=0,
+                        max_tokens=2000,
+                        response_format={"type": "json_object"},
+                        messages=[{
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": prompt},
+                                {"type": "image_url", "image_url": {
+                                    "url": f"data:image/jpeg;base64,{_b64}",
+                                    "detail": "high",
+                                }},
+                            ],
+                        }],
+                    )
+                    _raw = json.loads(_resp.choices[0].message.content or "{}")
+                    _page_ans = _validate_ocr_answers(_raw.get("answers", {}), subset_qs)
+                    for qid, val in _page_ans.items():
+                        # Prefer longer subjective text when multiple pages mention same qid.
+                        old = str(recovered.get(qid, "")).strip()
+                        new = str(val or "").strip()
+                        qinfo = q_meta.get(qid, {})
+                        if qinfo.get("type", "objective") == "objective":
+                            if new:
+                                recovered[qid] = new
+                        else:
+                            if len(new) > len(old):
+                                recovered[qid] = new
+                except Exception as _tv_ex:
+                    log.warning(f"[EXTRACT] Targeted vision failed on page {page_idx+1}: {_tv_ex}")
+                    continue
+
+            return recovered
+
+        def _has_meaningful_answer(qid: int, value) -> bool:
+            text = str(value or "").strip()
+            if not text:
+                return False
+            q = q_meta.get(qid, {})
+            if q.get("type", "objective") == "objective":
+                coerced = _coerce_mcq_answer(text, q.get("options", {}))
+                return bool(coerced)
+            return len(_clean_subjective_ocr(text)) >= 3
+
+        missing_qids = [qid for qid in sorted(q_meta) if not _has_meaningful_answer(qid, answers.get(qid))]
+        # Full-page vision fallback: only trigger when the primary OMR+OCR pipeline
+        # produced NO answers at all (total failure). If partial answers exist, the
+        # primary pipeline succeeded enough — the full-page fallback would make many
+        # expensive OpenAI Vision calls for marginal gain.
+        if missing_qids and not answers:
+            log.info(f"[EXTRACT] Primary pipeline returned nothing — running full-page fallback for: {missing_qids}")
+            try:
+                fallback_answers = _ocr_page_parallel(all_pages, exam_questions, exam or {})
+            except Exception as _fb_err:
+                fallback_answers = {}
+                log.warning(f"[EXTRACT] Full-page fallback failed: {_fb_err}")
+
+            filled = 0
+            for qid in missing_qids:
+                cand = fallback_answers.get(qid, fallback_answers.get(str(qid), ""))
+                if not _has_meaningful_answer(qid, cand):
+                    continue
+                q = q_meta.get(qid, {})
+                if q.get("type", "objective") == "objective":
+                    answers[qid] = _coerce_mcq_answer(str(cand), q.get("options", {}))
+                else:
+                    answers[qid] = _clean_subjective_ocr(str(cand))
+                filled += 1
+            if filled > 0:
+                mode = "omr+ocr_pipeline+full_fallback"
+
+        elif missing_qids:
+            log.info(f"[EXTRACT] Partial answers exist — skipping expensive vision fallback. Missing: {missing_qids}")
+
+    return answers, mode
 
 
 def _extract_answers_from_pages(pdf_path: str, page_indices: list, exam_questions: list = None, 
@@ -4831,6 +5022,97 @@ def _resolve_multi_eval_batch_size(student_count: int) -> int:
     if student_count >= 20:
         return min(base, 6)
     return base
+
+def _likely_exam_template_mismatch(exam_questions: list, answers: dict) -> bool:
+    """
+    Heuristic guard for wrong exam selection in bulk mode.
+    Example: evaluating a 10-question exam but extracted answers only contain
+    Q1-Q6 while Q7+ are systematically blank.
+    """
+    qids = []
+    for q in (exam_questions or []):
+        raw_id = str((q or {}).get("id", "")).strip()
+        if not raw_id:
+            continue
+        try:
+            qid = int(raw_id)
+        except Exception:
+            m = re.search(r"\d+", raw_id)
+            if not m:
+                continue
+            qid = int(m.group(0))
+        if qid > 0:
+            qids.append(qid)
+    qids = sorted(set(qids))
+    if len(qids) < 8:
+        return False
+    high_qids = [q for q in qids if q > 6]
+    if not high_qids:
+        return False
+
+    def _val(qid: int) -> str:
+        v = answers.get(qid, answers.get(str(qid), ""))
+        return str(v or "").strip()
+
+    low_present = sum(1 for q in qids[:6] if _val(q))
+    high_present = sum(1 for q in high_qids if _val(q))
+    return low_present >= 3 and high_present == 0
+
+def _normalize_two_page_sections(student_sections: list, total_pages: int, exam_questions: list) -> list:
+    """
+    For small answer-sheet templates (typically <=6 questions), each student uses
+    exactly 2 pages. OCR boundary noise can occasionally over-split into an extra
+    singleton section (e.g. 11 groups for a 20-page, 10-student file).
+    This normalizer force-pairs pages when the file fully covers an even page count.
+    """
+    try:
+        if not isinstance(student_sections, list) or not student_sections:
+            return student_sections
+        if total_pages <= 0 or total_pages % 2 != 0:
+            return student_sections
+        if len(exam_questions or []) > 6:
+            return student_sections
+
+        expected_groups = total_pages // 2
+        if len(student_sections) == expected_groups:
+            return student_sections
+
+        covered = []
+        for s in student_sections:
+            for p in (s.get("page_indices") or []):
+                if isinstance(p, int):
+                    covered.append(p)
+        covered_sorted = sorted(set(covered))
+        if covered_sorted != list(range(total_pages)):
+            return student_sections
+
+        # Build forced contiguous 2-page groups: [0,1], [2,3], ...
+        forced = []
+        for i in range(0, total_pages, 2):
+            grp = [i, i + 1]
+            name_candidates = []
+            roll_candidates = []
+            for s in student_sections:
+                pis = set(s.get("page_indices") or [])
+                if i in pis or (i + 1) in pis:
+                    name_candidates.append(str(s.get("student_name", "")).strip())
+                    roll_candidates.append(str(s.get("roll_no", "")).strip())
+            best_name = next((n for n in name_candidates if n), f"Student {len(forced)+1}")
+            best_roll = next((r for r in roll_candidates if r), str(len(forced)+1))
+            forced.append({
+                "student_name": best_name,
+                "roll_no": best_roll,
+                "page_indices": grp,
+            })
+
+        log.warning(
+            f"[MULTI-EVAL] Normalized sections to two-page template: "
+            f"detected={len(student_sections)} normalized={len(forced)} total_pages={total_pages}"
+        )
+        return forced
+    except Exception as _n2p_ex:
+        log.warning(f"[MULTI-EVAL] Two-page normalization skipped: {_n2p_ex}")
+        return student_sections
 
 def _parse_answer_text(text: str) -> Dict[int, str]:
     """
@@ -8363,13 +8645,30 @@ def _split_multi_student_pdf(pdf_path: str, exam_questions: list = None) -> list
         if _missing:
             print(f"[MULTI-SPLIT] {_tag} missing pages recovered: {_missing}")
             for _p in _missing:
-                _r = _page_role_map.get(_p, {})
-                _name, _roll = _best_student_identity(
-                    [str(_r.get("student_name", "")).replace("+", " ").strip()],
-                    [str(_r.get("roll_no", "")).strip()],
-                    len(_norm) + 1,
-                )
-                _norm.append({"student_name": _name, "roll_no": _roll, "page_indices": [_p]})
+                # Prefer attaching a stray page to a contiguous neighboring group
+                # before creating a singleton student section.
+                _attached = False
+                for _e in _norm:
+                    _pis = sorted(_e.get("page_indices", []))
+                    if not _pis:
+                        continue
+                    if _p == (_pis[-1] + 1):
+                        _e["page_indices"] = sorted(set(_pis + [_p]))
+                        _attached = True
+                        break
+                    if _p == (_pis[0] - 1):
+                        _e["page_indices"] = sorted(set([_p] + _pis))
+                        _attached = True
+                        break
+
+                if not _attached:
+                    _r = _page_role_map.get(_p, {})
+                    _name, _roll = _best_student_identity(
+                        [str(_r.get("student_name", "")).replace("+", " ").strip()],
+                        [str(_r.get("roll_no", "")).strip()],
+                        len(_norm) + 1,
+                    )
+                    _norm.append({"student_name": _name, "roll_no": _roll, "page_indices": [_p]})
 
         return _norm
 
@@ -8556,14 +8855,16 @@ def _split_multi_student_pdf(pdf_path: str, exam_questions: list = None) -> list
     )}]
     for _idx, _img in enumerate(images[:20]):
         _buf2 = _io.BytesIO()
-        _img.save(_buf2, format="PNG")
+        # JPEG at quality=75 reduces payload ~5× vs PNG with no meaningful
+        # accuracy loss for student-name/roll-number identification.
+        _img.convert("RGB").save(_buf2, format="JPEG", quality=75)
         _b64_2 = base64.b64encode(_buf2.getvalue()).decode()
         _parts.append({"type": "text", "text": f"--- Page {_idx} ---"})
-        _parts.append({"type": "image_url", "image_url": {"url": f"data:image/png;base64,{_b64_2}"}})
+        _parts.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{_b64_2}"}})
 
     try:
         _sr = client.chat.completions.create(
-            model=OPENAI_MODEL,
+            model=OCR_VISION_MODEL,
             temperature=0.1,
             messages=[{"role": "user", "content": _parts}]
         )
@@ -8643,9 +8944,9 @@ def evaluate_sheet():
     # ── Cache check (skip OCR if identical file already evaluated) ────────────
     fhash  = _file_hash(str(path))
     cached = _cache_get(fhash, exam_id)
-    # if cached:
-    #     log.info(f"[EVAL] Cache hit for {fn} — returning cached result")
-    #     return jsonify({"cached": True, **cached})
+    if cached:
+        log.info(f"[EVAL] Cache hit for {fn} — returning cached result")
+        return jsonify({"cached": True, **cached})
 
     # ── Async path (Celery available) ─────────────────────────────────────────
     if CELERY_OK:
@@ -8919,6 +9220,15 @@ def evaluate_multi_student():
         def _bg_run_multi_student(_tid, _pdf_path, _exam, _exam_id, _fname):
             try:
                 _secs = _split_multi_student_pdf(_pdf_path, exam_questions=_exam.get("questions", []))
+                _np_bg = 0
+                try:
+                    import fitz as _fitz_bg
+                    _d_bg = _fitz_bg.open(_pdf_path)
+                    _np_bg = len(_d_bg)
+                    _d_bg.close()
+                except Exception:
+                    pass
+                _secs = _normalize_two_page_sections(_secs, _np_bg, _exam.get("questions", []))
                 _all_evals: list = []
                 _failed: list = []
                 _bs = _resolve_multi_eval_batch_size(len(_secs))
@@ -9030,6 +9340,7 @@ def evaluate_multi_student():
     # ── Sync path (small class PDFs, ≤ 2 batches) ────────────────────────────
     log.info(f"[MULTI-EVAL] Sync mode: splitting PDF {fn}")
     student_sections = _split_multi_student_pdf(str(path), exam_questions=e.get("questions", []))
+    student_sections = _normalize_two_page_sections(student_sections, _np, e.get("questions", []))
     log.info(f"[MULTI-EVAL] Detected {len(student_sections)} students")
 
     all_evaluations = []
@@ -9197,7 +9508,7 @@ def evaluate_multi_student():
     })
 
 @app.post("/api/evaluate/bulk")
-@auth(roles=["tutor","teacher","institute_admin"])
+@auth(roles=["tutor","teacher","institute_admin","admin"])
 @quota('evaluate')
 def bulk_evaluate():
     """
@@ -9275,6 +9586,12 @@ def bulk_evaluate():
                 except Exception as _he:
                     log.warning(f"[BULK] Header extraction failed for {fn}: {_he}")
             if cached:
+                if _likely_exam_template_mismatch(e.get("questions", []), cached.get("submitted_answers", {})):
+                    return None, {
+                        "file": fn,
+                        "error": "exam_template_mismatch_likely",
+                        "hint": "Selected exam and uploaded sheet template likely do not match (Q7+ missing while Q1-Q6 detected).",
+                    }
                 # Reconstruct mcq_answers / descriptive_answers from cached question_wise
                 cached_qwise = cached.get("result", {}).get("question_wise", [])
                 cached_mcq, cached_subj = [], []
@@ -9292,6 +9609,7 @@ def bulk_evaluate():
                     "evaluation_id": cached["evaluation_id"],
                     "student_name": name or cached.get("student_name", ""),
                     "roll_no": roll or cached.get("roll_no", ""),
+                    "extraction_mode": cached.get("extraction_mode", ""),
                     "submitted_answers": cached.get("submitted_answers", {}),
                     "result": cached_res,
                     "mcq_answers": " ".join(cached_mcq),
@@ -9304,7 +9622,23 @@ def bulk_evaluate():
             _openai_limiter.wait()
             answers, mode = _extract_answers(fpath, exam_questions=e.get("questions",[]), exam=e)
             if not answers:
+                if isinstance(mode, str) and mode.startswith("exam_id_mismatch:"):
+                    parts = mode.split(":")
+                    sheet_id = parts[1] if len(parts) > 1 else "unknown"
+                    selected_id = parts[2] if len(parts) > 2 else exam_id
+                    return None, {
+                        "file": fn,
+                        "error": "exam_id_mismatch",
+                        "sheet_exam_id": sheet_id,
+                        "selected_exam_id": selected_id,
+                    }
                 return None, {"file": fn, "error": f"extract_failed ({mode})"}
+            if _likely_exam_template_mismatch(e.get("questions", []), answers):
+                return None, {
+                    "file": fn,
+                    "error": "exam_template_mismatch_likely",
+                    "hint": "Selected exam and uploaded sheet template likely do not match (Q7+ missing while Q1-Q6 detected).",
+                }
             _openai_limiter.wait()
             res = _evaluate_answers(e, answers, roll)
             eid = uuid.uuid4().hex[:10]
@@ -9338,6 +9672,7 @@ def bulk_evaluate():
             summary_p = {
                 "evaluation_id": eid, "student_name": name, "roll_no": roll,
                 "file_name": fn,
+                "extraction_mode": mode,
                 "submitted_answers": answers,
                 "result": res,
                 # Fields expected by BulkEvalTab's CSV generator
@@ -9354,21 +9689,38 @@ def bulk_evaluate():
             log.exception(f"[BULK] Fatal error while evaluating {fn}: {_one_err}")
             return None, {"file": fn, "error": str(_one_err)}
 
-    with ThreadPoolExecutor(max_workers=min(4, len(saved))) as pool:
-        futs = {pool.submit(_eval_one, entry): entry for entry in saved}
-        eval_items = []
-        for fut in as_completed(futs):
+    eval_items = []
+    _is_cloud_run_bulk = bool(os.getenv("K_SERVICE", "").strip())
+    if _is_cloud_run_bulk:
+        # Cloud Run stability: avoid threaded C-extension OCR crashes in bulk mode.
+        # Process sequentially; reliability is more important than throughput here.
+        log.info(f"[BULK] Cloud Run sequential sync mode for {len(saved)} file(s)")
+        for entry in saved:
             try:
-                res_p, err = fut.result()
-            except Exception as _fut_err:
-                _entry = futs.get(fut) or ("", "", "", "unknown")
-                _fn = _entry[3] if len(_entry) > 3 else "unknown"
-                log.exception(f"[BULK] Worker future crashed for {_fn}: {_fut_err}")
-                res_p, err = None, {"file": _fn, "error": str(_fut_err)}
+                res_p, err = _eval_one(entry)
+            except Exception as _seq_err:
+                _fn = entry[3] if len(entry) > 3 else "unknown"
+                log.exception(f"[BULK] Sequential worker crashed for {_fn}: {_seq_err}")
+                res_p, err = None, {"file": _fn, "error": str(_seq_err)}
             if res_p:
                 eval_items.append(res_p)
             if err:
                 failures.append(err)
+    else:
+        with ThreadPoolExecutor(max_workers=min(4, len(saved))) as pool:
+            futs = {pool.submit(_eval_one, entry): entry for entry in saved}
+            for fut in as_completed(futs):
+                try:
+                    res_p, err = fut.result()
+                except Exception as _fut_err:
+                    _entry = futs.get(fut) or ("", "", "", "unknown")
+                    _fn = _entry[3] if len(_entry) > 3 else "unknown"
+                    log.exception(f"[BULK] Worker future crashed for {_fn}: {_fut_err}")
+                    res_p, err = None, {"file": _fn, "error": str(_fut_err)}
+                if res_p:
+                    eval_items.append(res_p)
+                if err:
+                    failures.append(err)
 
     log.info(f"[BULK] Sync complete: ok={len(eval_items)}")
     return jsonify({
