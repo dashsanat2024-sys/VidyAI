@@ -140,11 +140,27 @@ for _d in [DATA_F.parent, UPL_DIR, DB_DIR, EXAMS_DIR, EVAL_DIR, BULK_DIR]:
 
 ALLOWED = {"pdf","txt","md","docx","doc","mp3","mp4","wav","m4a","ogg","jpg","jpeg","png","webp"}
 
+def _cors_allow_origins() -> list:
+    """Browser-safe list for credentialed API calls. Wildcard '*' is INVALID with supports_credentials."""
+    raw = (os.getenv("CORS_ORIGINS") or "").strip()
+    if raw:
+        return [o.strip().rstrip("/") for o in raw.split(",") if o.strip()]
+    return [
+        "https://www.arthavi.in",
+        "https://arthavi.in",
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:5001",
+        "http://127.0.0.1:5001",
+    ]
+
+CORS_ALLOW_ORIGINS = _cors_allow_origins()
+
 # ── Flask ─────────────────────────────────────────────────────────────────────
 app = Flask(__name__, static_folder="dist", static_url_path="")
 CORS(app, resources={
     r"/api/*": {
-        "origins": "*",
+        "origins": CORS_ALLOW_ORIGINS,
         "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
         "allow_headers": ["Content-Type", "Authorization"],
         "expose_headers": ["Content-Type", "Authorization"],
