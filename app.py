@@ -142,10 +142,7 @@ ALLOWED = {"pdf","txt","md","docx","doc","mp3","mp4","wav","m4a","ogg","jpg","jp
 
 def _cors_allow_origins() -> list:
     """Browser-safe list for credentialed API calls. Wildcard '*' is INVALID with supports_credentials."""
-    raw = (os.getenv("CORS_ORIGINS") or "").strip()
-    if raw:
-        return [o.strip().rstrip("/") for o in raw.split(",") if o.strip()]
-    return [
+    _defaults = [
         "https://www.arthavi.in",
         "https://arthavi.in",
         "http://localhost:5173",
@@ -153,6 +150,17 @@ def _cors_allow_origins() -> list:
         "http://localhost:5001",
         "http://127.0.0.1:5001",
     ]
+    raw = (os.getenv("CORS_ORIGINS") or "").strip()
+    if not raw:
+        return list(_defaults)
+    # Merge with defaults so a partial CORS_ORIGINS in Cloud Run cannot lock out www.arthavi.in.
+    from_env = [o.strip().rstrip("/") for o in raw.split(",") if o.strip()]
+    merged, seen = [], set()
+    for o in from_env + _defaults:
+        if o not in seen:
+            seen.add(o)
+            merged.append(o)
+    return merged
 
 CORS_ALLOW_ORIGINS = _cors_allow_origins()
 
@@ -162,12 +170,37 @@ CORS(app, resources={
     r"/api/*": {
         "origins": CORS_ALLOW_ORIGINS,
         "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-        "allow_headers": ["Content-Type", "Authorization"],
+        "allow_headers": ["Content-Type", "Authorization", "Accept", "Accept-Language"],
         "expose_headers": ["Content-Type", "Authorization"],
         "supports_credentials": True,
         "max_age": 3600
     }
 })
+
+
+def _cors_origin_for_request() -> Optional[str]:
+    o = (request.headers.get("Origin") or "").strip().rstrip("/")
+    return o if o in CORS_ALLOW_ORIGINS else None
+
+
+@app.after_request
+def _ensure_api_cors_headers(response):
+    """Safety net: some error paths / proxies omit flask-cors headers; browsers then report 'CORS failed'."""
+    if not request.path.startswith("/api/"):
+        return response
+    origin = _cors_origin_for_request()
+    if not origin:
+        return response
+    if response.headers.get("Access-Control-Allow-Origin"):
+        return response
+    response.headers["Access-Control-Allow-Origin"] = origin
+    response.headers["Access-Control-Allow-Credentials"] = "true"
+    response.headers["Access-Control-Expose-Headers"] = "Content-Type, Authorization"
+    vary = response.headers.get("Vary")
+    response.headers["Vary"] = f"{vary}, Origin" if vary else "Origin"
+    return response
+
+
 app.config["MAX_CONTENT_LENGTH"] = 200 * 1024 * 1024  # 200 MB
 
 @app.errorhandler(413)
@@ -9545,6 +9578,19 @@ def bulk_evaluate():
     Falls back to sequential sync processing.
     Includes per-file caching.
     """
+    # Cloud Run enforces ~32 MiB request bodies; over-limit requests fail at the edge (often 503)
+    # without CORS headers — reject below the cap so the browser gets JSON + CORS.
+    _max_bulk_bytes = 30 * 1024 * 1024
+    _cl = request.content_length
+    if _cl is not None and _cl > _max_bulk_bytes:
+        return jsonify({
+            "error": (
+                f"Request body too large ({round(_cl / 1024 / 1024, 1)} MB). "
+                "Maximum is 30 MB per bulk request (Cloud Run gateway limit). "
+                "Use fewer files per batch or compress scans (150–200 DPI)."
+            )
+        }), 413
+
     exam_id = request.form.get("exam_id")
     if not exam_id:
         return jsonify({"error": "exam_id required"}), 400
@@ -9717,49 +9763,59 @@ def bulk_evaluate():
             log.exception(f"[BULK] Fatal error while evaluating {fn}: {_one_err}")
             return None, {"file": fn, "error": str(_one_err)}
 
-    eval_items = []
-    _is_cloud_run_bulk = bool(os.getenv("K_SERVICE", "").strip())
-    if _is_cloud_run_bulk:
-        # Sequential on Cloud Run: avoids OpenCV/thread + ThreadPool edge cases that
-        # SIGKILL the Gunicorn worker → HTTP 502. Frontend sends 1 file/chunk by default.
-        log.info(f"[BULK] Cloud Run sequential sync: {len(saved)} file(s)")
-        for entry in saved:
-            try:
-                res_p, err = _eval_one(entry)
-            except Exception as _seq_err:
-                _fn = entry[3] if len(entry) > 3 else "unknown"
-                log.exception(f"[BULK] Sequential worker crashed for {_fn}: {_seq_err}")
-                res_p, err = None, {"file": _fn, "error": str(_seq_err)}
-            if res_p:
-                eval_items.append(res_p)
-            if err:
-                failures.append(err)
-    else:
-        _bw = min(max(1, BULK_PARALLEL_WORKERS), len(saved) or 1, 4)
-        log.info(f"[BULK] Sync: {len(saved)} file(s), max_workers={_bw}")
-        with ThreadPoolExecutor(max_workers=_bw) as pool:
-            futs = {pool.submit(_eval_one, entry): entry for entry in saved}
-            for fut in as_completed(futs):
+    try:
+        eval_items = []
+        _is_cloud_run_bulk = bool(os.getenv("K_SERVICE", "").strip())
+        if _is_cloud_run_bulk:
+            # Sequential on Cloud Run: avoids OpenCV/thread + ThreadPool edge cases that
+            # SIGKILL the Gunicorn worker → HTTP 502. Frontend sends 1 file/chunk by default.
+            log.info(f"[BULK] Cloud Run sequential sync: {len(saved)} file(s)")
+            for entry in saved:
                 try:
-                    res_p, err = fut.result()
-                except Exception as _fut_err:
-                    _entry = futs.get(fut) or ("", "", "", "unknown")
-                    _fn = _entry[3] if len(_entry) > 3 else "unknown"
-                    log.exception(f"[BULK] Worker future crashed for {_fn}: {_fut_err}")
-                    res_p, err = None, {"file": _fn, "error": str(_fut_err)}
+                    res_p, err = _eval_one(entry)
+                except Exception as _seq_err:
+                    _fn = entry[3] if len(entry) > 3 else "unknown"
+                    log.exception(f"[BULK] Sequential worker crashed for {_fn}: {_seq_err}")
+                    res_p, err = None, {"file": _fn, "error": str(_seq_err)}
                 if res_p:
                     eval_items.append(res_p)
                 if err:
                     failures.append(err)
+        else:
+            _bw = min(max(1, BULK_PARALLEL_WORKERS), len(saved) or 1, 4)
+            log.info(f"[BULK] Sync: {len(saved)} file(s), max_workers={_bw}")
+            with ThreadPoolExecutor(max_workers=_bw) as pool:
+                futs = {pool.submit(_eval_one, entry): entry for entry in saved}
+                for fut in as_completed(futs):
+                    try:
+                        res_p, err = fut.result()
+                    except Exception as _fut_err:
+                        _entry = futs.get(fut) or ("", "", "", "unknown")
+                        _fn = _entry[3] if len(_entry) > 3 else "unknown"
+                        log.exception(f"[BULK] Worker future crashed for {_fn}: {_fut_err}")
+                        res_p, err = None, {"file": _fn, "error": str(_fut_err)}
+                    if res_p:
+                        eval_items.append(res_p)
+                    if err:
+                        failures.append(err)
 
-    log.info(f"[BULK] Sync complete: ok={len(eval_items)}")
-    return jsonify({
-        "status": "completed", 
-        "evaluations": eval_items, 
-        "results": eval_items, 
-        "failures": failures,
-        "total": len(eval_items)
-    })
+        log.info(f"[BULK] Sync complete: ok={len(eval_items)}")
+        return jsonify({
+            "status": "completed", 
+            "evaluations": eval_items, 
+            "results": eval_items, 
+            "failures": failures,
+            "total": len(eval_items)
+        })
+    finally:
+        # ── Cleanup uploaded files from /tmp ──
+        for entry in saved:
+            try:
+                p = Path(entry[0])
+                if p.exists():
+                    p.unlink()
+            except Exception as _cle:
+                log.warning(f"[BULK] Cleanup failed for {entry[0]}: {_cle}")
 
 @app.get("/api/evaluations/<eval_id>")
 @auth()

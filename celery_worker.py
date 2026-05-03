@@ -208,43 +208,53 @@ def evaluate_bulk(self, saved, exam):
     fn = _get_app_fns()
     exam_id = exam.get("exam_id","")
     self.update_state(state="STARTED", meta={"step":"starting","completed":0,"total":len(saved)})
-    results, failures = [], []
-    for idx, (fpath, roll, name, file_name) in enumerate(saved):
-        self.update_state(state="STARTED",
-            meta={"step": f"file_{file_name}", "completed": idx, "total": len(saved)})
-        try:
-            fhash  = fn["file_hash"](fpath)
-            cached = fn["cache_get"](fhash, exam_id)
-            if cached:
-                results.append({"evaluation_id": cached["evaluation_id"], "roll_no": roll,
-                    "student_name": cached.get("student_name", name) or name,
-                    "percentage": cached["result"].get("percentage",0),
-                    "is_pass": cached["result"].get("is_pass",False),
-                    "total_awarded": cached["result"].get("total_awarded",0),
-                    "total_possible": cached["result"].get("total_possible",0)})
-                continue
-            answers, mode = fn["extract"](fpath, exam_questions=exam.get("questions",[]), exam=exam)
-            if not answers:
-                failures.append({"file": file_name, "error": f"extract_failed ({mode})"}); continue
-            res = fn["evaluate"](exam, answers, roll)
-            eid = uuid.uuid4().hex[:10]
-            p   = {"evaluation_id": eid, "exam_id": exam_id, "created_at": fn["now"](),
-                   "student_name": name, "roll_no": roll, "file_name": file_name,
-                   "file_hash": fhash, "extraction_mode": mode,
-                   "submitted_answers": answers, "result": res}
-            fn["evals_reg"][eid] = p
-            if not fn["is_vercel"]:
-                fn["save_json"](fn["eval_dir"] / f"{eid}.json", p)
-            fn["cache_set"](fhash, exam_id, p)
-            results.append({"evaluation_id": eid, "roll_no": roll,
-                "student_name": name,
-                "percentage": res.get("percentage",0), "is_pass": res.get("is_pass",False),
-                "total_awarded": res.get("total_awarded",0),
-                "total_possible": res.get("total_possible",0)})
-        except Exception as e:
-            log.error(f"[TASK-BULK] {file_name}: {e}")
-            failures.append({"file": file_name, "error": str(e)})
-    fn["save_evals"]()
-    return {"bulk_id": uuid.uuid4().hex[:10], "exam_id": exam_id,
-            "created_at": datetime.utcnow().isoformat(),
-            "total": len(results), "results": results, "failures": failures}
+    try:
+        results, failures = [], []
+        for idx, (fpath, roll, name, file_name) in enumerate(saved):
+            self.update_state(state="STARTED",
+                meta={"step": f"file_{file_name}", "completed": idx, "total": len(saved)})
+            try:
+                fhash  = fn["file_hash"](fpath)
+                cached = fn["cache_get"](fhash, exam_id)
+                if cached:
+                    results.append({"evaluation_id": cached["evaluation_id"], "roll_no": roll,
+                        "student_name": cached.get("student_name", name) or name,
+                        "percentage": cached["result"].get("percentage",0),
+                        "is_pass": cached["result"].get("is_pass",False),
+                        "total_awarded": cached["result"].get("total_awarded",0),
+                        "total_possible": cached["result"].get("total_possible",0)})
+                    continue
+                answers, mode = fn["extract"](fpath, exam_questions=exam.get("questions",[]), exam=exam)
+                if not answers:
+                    failures.append({"file": file_name, "error": f"extract_failed ({mode})"}); continue
+                res = fn["evaluate"](exam, answers, roll)
+                eid = uuid.uuid4().hex[:10]
+                p   = {"evaluation_id": eid, "exam_id": exam_id, "created_at": fn["now"](),
+                       "student_name": name, "roll_no": roll, "file_name": file_name,
+                       "file_hash": fhash, "extraction_mode": mode,
+                       "submitted_answers": answers, "result": res}
+                fn["evals_reg"][eid] = p
+                if not fn["is_vercel"]:
+                    fn["save_json"](fn["eval_dir"] / f"{eid}.json", p)
+                fn["cache_set"](fhash, exam_id, p)
+                results.append({"evaluation_id": eid, "roll_no": roll,
+                    "student_name": name,
+                    "percentage": res.get("percentage",0), "is_pass": res.get("is_pass",False),
+                    "total_awarded": res.get("total_awarded",0),
+                    "total_possible": res.get("total_possible",0)})
+            except Exception as e:
+                log.error(f"[TASK-BULK] {file_name}: {e}")
+                failures.append({"file": file_name, "error": str(e)})
+        fn["save_evals"]()
+        return {"bulk_id": uuid.uuid4().hex[:10], "exam_id": exam_id,
+                "created_at": datetime.utcnow().isoformat(),
+                "total": len(results), "results": results, "failures": failures}
+    finally:
+        # ── Cleanup uploaded files from /tmp ──
+        for fpath, roll, name, file_name in saved:
+            try:
+                p = Path(fpath)
+                if p.exists():
+                    p.unlink()
+            except Exception as _cle:
+                log.warning(f"[TASK-BULK] Cleanup failed for {fpath}: {_cle}")

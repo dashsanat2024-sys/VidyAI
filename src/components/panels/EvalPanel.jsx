@@ -18,13 +18,29 @@ import { useApp } from '../../context/AppContext'
 const API = import.meta.env.VITE_API_URL || ''
 
 async function apiFetch(path, opts = {}, token) {
-  const res = await fetch(`${API}/api${path}`, {
-    ...opts,
-    headers: {
-      Authorization: `Bearer ${token}`,
-      ...(opts.headers || {}),
-    },
-  })
+  let res
+  try {
+    res = await fetch(`${API}/api${path}`, {
+      ...opts,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        ...(opts.headers || {}),
+      },
+    })
+  } catch (cause) {
+    // Check if it's a TypeError (often CORS / Network Error)
+    const isNetworkError = cause instanceof TypeError || cause.name === 'TypeError'
+    const err = new Error(
+      isNetworkError
+        ? 'Connection failed. This can happen if the upload is too large (>30MB), ' +
+          'your internet is unstable, or the server is busy. Try fewer files at once.'
+        : 'Network error — the API may be busy or the upload too large for one request.'
+    )
+    err.status = 0
+    err.cause = cause
+    throw err
+  }
+
   const data = await res.json().catch(() => ({}))
   if (!res.ok) {
     const err = new Error(data.error || `HTTP ${res.status}`)
@@ -36,7 +52,8 @@ async function apiFetch(path, opts = {}, token) {
 }
 
 /** Bulk chunks: retry transient Cloud Run / gateway failures (502/503/504). */
-async function apiFetchBulkChunk(path, opts, token, { retries = 2, baseDelayMs = 2500 } = {}) {
+/** Bulk chunks: retry transient Cloud Run / gateway failures (502/503/504) or network interruptions (0). */
+async function apiFetchBulkChunk(path, opts, token, { retries = 3, baseDelayMs = 2500 } = {}) {
   let lastErr
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
@@ -44,9 +61,13 @@ async function apiFetchBulkChunk(path, opts, token, { retries = 2, baseDelayMs =
     } catch (e) {
       lastErr = e
       const st = e.status
-      const retryable = st === 502 || st === 503 || st === 504
+      // st === 0 is often a CORS-masked 503/504 on Cloud Run or a timeout.
+      const retryable = st === 0 || st === 502 || st === 503 || st === 504
       if (!retryable || attempt === retries) throw e
-      await new Promise((r) => setTimeout(r, baseDelayMs * (attempt + 1)))
+      
+      const delay = baseDelayMs * (attempt + 1)
+      console.warn(`[Bulk Retry] Attempt ${attempt + 1} failed (status ${st}). Retrying in ${delay}ms...`)
+      await new Promise((r) => setTimeout(r, delay))
     }
   }
   throw lastErr
