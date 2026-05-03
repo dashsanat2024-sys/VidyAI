@@ -94,9 +94,9 @@ GRADING_BORDERLINE_MARGIN = float(os.getenv("GRADING_BORDERLINE_MARGIN", "0.05")
 REVIEW_ESSAY_LENGTH_THRESHOLD = int(os.getenv("REVIEW_ESSAY_LENGTH_THRESHOLD", "500") or "500")  # Words
 REVIEW_SCORE_ANOMALY_STDDEV = float(os.getenv("REVIEW_SCORE_ANOMALY_STDDEV", "2.0") or "2.0") # >2σ deviations
 BULK_PARALLEL_WORKERS = int(os.getenv("BULK_PARALLEL_WORKERS", "10") or "10")     # Max workers for bulk (non-Cloud Run)
-# On Cloud Run, bulk used to run sequentially to avoid OpenCV thread issues; that
-# often exceeded Gunicorn/Cloud Run request limits (502). Default 2 matches Class PDF.
-BULK_CLOUD_RUN_PARALLEL = int(os.getenv("BULK_CLOUD_RUN_PARALLEL", "2") or "2")
+# Cloud Run: default 1 (sequential) to avoid OpenCV/thread crashes that take down the
+# worker → 502. Raise via BULK_CLOUD_RUN_PARALLEL only if stable on your instance.
+BULK_CLOUD_RUN_PARALLEL = int(os.getenv("BULK_CLOUD_RUN_PARALLEL", "1") or "1")
 COST_OPTIMIZATION_ENABLED = os.getenv("COST_OPTIMIZATION_ENABLED", "1") == "1"     # Route by sheet quality
 ENABLE_PARENT_EMAILS = os.getenv("ENABLE_PARENT_EMAILS", "0") == "1"               # Send automated parent reports
 

@@ -34,6 +34,23 @@ async function apiFetch(path, opts = {}, token) {
   return data
 }
 
+/** Poll /evaluate/status for Celery/native async bulk chunks. */
+async function pollEvaluateTask(taskId, token) {
+  const maxAttempts = 400
+  const intervalMs = 1500
+  for (let i = 0; i < maxAttempts; i++) {
+    const data = await apiFetch(`/evaluate/status/${taskId}`, {}, token)
+    if (data.status === 'completed') return data
+    if (data.status === 'failed') {
+      const err = new Error(data.error || 'Evaluation failed')
+      err.data = data
+      throw err
+    }
+    await new Promise((r) => setTimeout(r, intervalMs))
+  }
+  throw new Error('Evaluation timed out while waiting for results')
+}
+
 // ── Extraction mode badge labels ──────────────────────────────────────────────
 const MODE_LABELS = {
   image_diff_ocr: { label: 'Image-Diff OCR', color: '#16a34a', title: 'Handwriting isolated via pixel diff + GPT-4o Vision' },
@@ -1623,19 +1640,50 @@ function BulkEvalTab({ token, showToast }) {
   const handleSubmit = async () => {
     if (!examId || !files.length) return showToast('Select exam and files', 'error')
     setError(''); setResult(null); setTaskId(null); setLoading(true)
+    // Short requests avoid HTTP 502 from proxies / Gunicorn kills on Cloud Run.
+    const perReq = Math.max(1, Math.min(5, Number(import.meta.env.VITE_BULK_FILES_PER_REQUEST) || 2))
     try {
-      const fd = new FormData()
-      fd.append('exam_id', examId)
-      files.forEach(f => fd.append('answer_sheets', f))
-      const data = await apiFetch('/evaluate/bulk', { method: 'POST', body: fd }, token)
-      if (data.async && data.task_id) {
-        setTaskId(data.task_id)
-      } else {
+      const n = files.length
+      const useChunks = n > perReq
+
+      if (!useChunks) {
+        const fd = new FormData()
+        fd.append('exam_id', examId)
+        files.forEach(f => fd.append('answer_sheets', f))
+        const data = await apiFetch('/evaluate/bulk', { method: 'POST', body: fd }, token)
+        if (data.async && data.task_id) {
+          setTaskId(data.task_id)
+          return
+        }
         setResult(data)
         showToast(`${data.total} evaluated`, 'success')
+        return
       }
+
+      const merged = { status: 'completed', results: [], evaluations: [], failures: [], total: 0 }
+      const batchTotal = Math.ceil(n / perReq)
+      for (let start = 0; start < n; start += perReq) {
+        const chunk = files.slice(start, start + perReq)
+        const batchNum = Math.floor(start / perReq) + 1
+        showToast(`Batch ${batchNum} / ${batchTotal} (${chunk.length} file(s))…`, 'info')
+
+        const fd = new FormData()
+        fd.append('exam_id', examId)
+        chunk.forEach(f => fd.append('answer_sheets', f))
+        let data = await apiFetch('/evaluate/bulk', { method: 'POST', body: fd }, token)
+        if (data.async && data.task_id) {
+          data = await pollEvaluateTask(data.task_id, token)
+        }
+        const rows = data.results || data.evaluations || []
+        merged.results.push(...rows)
+        merged.evaluations.push(...rows)
+        merged.failures.push(...(data.failures || []))
+      }
+      merged.total = merged.results.length
+      setResult(merged)
+      showToast(`${merged.total} evaluated (${n} files)`, 'success')
     } catch (e) {
-      setError(e.message)
+      setError(e.message || String(e))
     } finally {
       setLoading(false)
     }
