@@ -28,7 +28,7 @@ from dotenv import load_dotenv
 
 load_dotenv(os.path.join(os.path.dirname(__file__), '.env'))
 
-from flask import Flask, request, jsonify, send_from_directory
+from flask import Flask, request, jsonify, send_from_directory, Response
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
 
@@ -6364,6 +6364,10 @@ def auth(roles=None):
     def dec(fn):
         @wraps(fn)
         def wrap(*a, **kw):
+            # CORS preflight: no Bearer token; must not hit 401/404 before flask-cors adds headers.
+            if request.method == "OPTIONS":
+                return Response(status=204)
+
             tok = request.headers.get("Authorization", "").replace("Bearer ", "").strip()
             if not tok:
                 # Fallback: check query parameters (for direct file downloads via <a href>)
@@ -9526,6 +9530,11 @@ def evaluate_multi_student():
         "evaluations": all_evaluations, "exam_id": exam_id,
     })
 
+@app.route("/api/evaluate/bulk", methods=["OPTIONS"])
+def bulk_evaluate_options():
+    """CORS preflight for multipart bulk upload (parity with multi-student)."""
+    return "", 204
+
 @app.post("/api/evaluate/bulk")
 @auth(roles=["tutor","teacher","institute_admin","admin"])
 @quota('evaluate')
@@ -12115,9 +12124,34 @@ def spa(path):
             return send_from_directory(app.static_folder, "index.html")
     return jsonify({"status": "VidyAI API running", "docs": "/api/"}), 200
 
+
+def _verify_eval_api_routes() -> None:
+    """Log that critical evaluation routes are registered (catches bad deploys early).
+
+    Manual checks after deploy:
+      curl -sI -X OPTIONS "https://<API_HOST>/api/evaluate/bulk" \\
+        -H "Origin: https://www.arthavi.in" \\
+        -H "Access-Control-Request-Method: POST" \\
+        -H "Access-Control-Request-Headers: authorization,content-type"
+      Expect: 204 or 200 with access-control-allow-origin echoing Origin (not 404 JSON).
+    """
+    try:
+        bulk_methods: set = set()
+        for r in app.url_map.iter_rules():
+            if str(r.rule) == "/api/evaluate/bulk":
+                bulk_methods |= (r.methods or set())
+        if "POST" not in bulk_methods:
+            log.error("[BOOT] /api/evaluate/bulk POST missing from url_map — bulk eval will 404")
+        else:
+            log.info("[BOOT] url_map: /api/evaluate/bulk methods=%s", sorted(bulk_methods))
+    except Exception as ex:
+        log.warning("[BOOT] url_map verify skipped: %s", ex)
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 #  STARTUP
 # ══════════════════════════════════════════════════════════════════════════════
+_verify_eval_api_routes()
 _boot_load()
 
 if __name__ == "__main__":
