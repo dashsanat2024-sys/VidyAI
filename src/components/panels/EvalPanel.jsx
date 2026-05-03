@@ -29,9 +29,27 @@ async function apiFetch(path, opts = {}, token) {
   if (!res.ok) {
     const err = new Error(data.error || `HTTP ${res.status}`)
     err.data = data   // attach full response for structured errors
+    err.status = res.status
     throw err
   }
   return data
+}
+
+/** Bulk chunks: retry transient Cloud Run / gateway failures (502/503/504). */
+async function apiFetchBulkChunk(path, opts, token, { retries = 2, baseDelayMs = 2500 } = {}) {
+  let lastErr
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      return await apiFetch(path, opts, token)
+    } catch (e) {
+      lastErr = e
+      const st = e.status
+      const retryable = st === 502 || st === 503 || st === 504
+      if (!retryable || attempt === retries) throw e
+      await new Promise((r) => setTimeout(r, baseDelayMs * (attempt + 1)))
+    }
+  }
+  throw lastErr
 }
 
 /** Poll /evaluate/status for Celery/native async bulk chunks. */
@@ -1640,8 +1658,8 @@ function BulkEvalTab({ token, showToast }) {
   const handleSubmit = async () => {
     if (!examId || !files.length) return showToast('Select exam and files', 'error')
     setError(''); setResult(null); setTaskId(null); setLoading(true)
-    // Short requests avoid HTTP 502 from proxies / Gunicorn kills on Cloud Run.
-    const perReq = Math.max(1, Math.min(5, Number(import.meta.env.VITE_BULK_FILES_PER_REQUEST) || 2))
+    // One file per request by default — shortest wall time per HTTP call (fewer 502s on Cloud Run).
+    const perReq = Math.max(1, Math.min(5, Number(import.meta.env.VITE_BULK_FILES_PER_REQUEST) || 1))
     try {
       const n = files.length
       const useChunks = n > perReq
@@ -1650,7 +1668,7 @@ function BulkEvalTab({ token, showToast }) {
         const fd = new FormData()
         fd.append('exam_id', examId)
         files.forEach(f => fd.append('answer_sheets', f))
-        const data = await apiFetch('/evaluate/bulk', { method: 'POST', body: fd }, token)
+        const data = await apiFetchBulkChunk('/evaluate/bulk', { method: 'POST', body: fd }, token)
         if (data.async && data.task_id) {
           setTaskId(data.task_id)
           return
@@ -1670,7 +1688,7 @@ function BulkEvalTab({ token, showToast }) {
         const fd = new FormData()
         fd.append('exam_id', examId)
         chunk.forEach(f => fd.append('answer_sheets', f))
-        let data = await apiFetch('/evaluate/bulk', { method: 'POST', body: fd }, token)
+        let data = await apiFetchBulkChunk('/evaluate/bulk', { method: 'POST', body: fd }, token)
         if (data.async && data.task_id) {
           data = await pollEvaluateTask(data.task_id, token)
         }
